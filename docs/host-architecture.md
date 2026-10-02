@@ -544,9 +544,9 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Time for 50k items vs per-item reads | **unverified** (spike 1) |
 | `-Embedding` start when the tray is not running; cold-start time; Run-key race | verified (testlog 2026-10-02: `Execute` 309-382 ms after COM creates the process; race emulated with a plain start, 14 runs); a right-click right after sign-in **unverified** |
 | `MultiSelectModel=Single` hides Robo-Paste for multi-folder selections; works on the background verb | first half verified; the second was false, the background key now has no `MultiSelectModel` (testlog 2026-10-02) |
-| A low-integrity process cannot activate or call the server (`icacls /setintegritylevel low` test exe) | **unverified** (security spike) |
+| A low-integrity process cannot activate or call the server (`icacls /setintegritylevel low` test exe) | verified (testlog 2026-10-02, user experience entry: `Security.Tests.ps1`, low-integrity copy exit 1, control exit 0; before 4b8b677 it crashed in `EnableVisualStyles` first) |
 | HKCU AppID `AccessPermission`/`LaunchPermission` do not break Explorer's activation | verified (testlog 2026-10-02) |
-| HKCU AppID `AccessPermission`/`LaunchPermission` are honored | **unverified** (security spike) |
+| HKCU AppID `AccessPermission`/`LaunchPermission` are honored | a low-integrity call is refused (row above); whether the AppID values or the in-process integrity check refused it **unverified** |
 | Explorer allows the tray to take foreground (conflict dialog, progress window) | **unverified** (spike 1) |
 | Remote clients are refused by the output pipe | **unverified** |
 | Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | **unverified** |
@@ -557,7 +557,7 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | `ShutdownBlockReasonCreate` on a hidden, never-shown top-level window vetoes sign-out with the reason shown | **unverified** |
 | No WER report after `TerminateProcess` while ephemeral jobs run (machine-wide LocalDumps aside) | **unverified** |
 | Rename and `CopyFileEx` on paths over 260 characters with the extended-length prefix | **unverified** |
-| Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | **unverified** |
+| Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | verified at 100% and 150%, including a live switch with windows open (testlog 2026-10-02, user experience entry); IBM Plex renders through GDI (start-up check "6 of 6"); 125%, 175% and above and a second monitor **unverified** |
 | `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | verified (testlog 2026-10-02); the planted-DLL check **unverified** |
 | Explorer ghosts icons after a Robo-Cut clipboard write | verified false: no ghosting (testlog 2026-10-02, deviation in docs/parity.md) |
 | Explorer shows each verb's `Icon` (commit e13fa37) in the classic menu | **unverified**; the 2026-10-02 builds had no icons |
@@ -566,6 +566,8 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | A killed robocopy leaves its in-flight files at full length | verified (testlog 2026-10-02, cancel entry); cleanup no longer depends on it |
 | `CopyFileEx` sets the archive bit like Explorer's copy | **unverified** |
 | Generated COM vtables match the shell's (`[GeneratedComInterface]` on these IDLs) | verified for every method the app calls: `IClassFactory`, `IExecuteCommand`, `IObjectWithSelection`, `IInitializeCommand`, `IShellItemArray.BindToHandler`/`GetCount`, `IDataObject.GetData` (testlog 2026-10-02) |
+| Install and uninstall footprint, verbs against Explorer, cut safety, cancel cleanup and ephemeral mode through every `scripts/e2e` script | verified (testlog 2026-10-02, user experience entry: `Run-All.ps1`, all seven scripts pass on the final build, Ephemeral with judged Windows noise excluded) |
+| Every Gridline surface (install offer and results, progress, Jobs, conflict, error summary, settings, tray menu and icons, toasts) | verified on screen at 100% and 150% (testlog 2026-10-02, user experience entry, `docs/evidence/2026-10-02/12-30`); the tray's four error notices **unverified** |
 | Everything else in the host | **unverified**; cross-compiles only |
 
 ## 13. Work packages (disjoint file ownership)
