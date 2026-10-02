@@ -202,8 +202,9 @@ Explorer started (same entry). `Get-Process RoboRightClick` shows whether it run
 
 **The hotkey does nothing.** The tray menu's hotkey line says whether it is on: "off"
 (turned off), "off (setting invalid)" (Settings shows the problem) or "not active" (Windows
-refused the keyboard hook; it is tried again the next time File Explorer becomes the active
-window). Check that the tray is running and that the focus is in the file list, not the
+refused a hook the hotkey needs, or the hotkey could not start). A refused keyboard hook is
+tried again the next time File Explorer becomes the active window; if the line still says
+"not active", exit the tray from its menu and start it again. Check that the tray is running and that the focus is in the file list, not the
 navigation pane or a text field. In a File Explorer window running as administrator the
 hotkey is not expected to work, because Windows keeps its keys from a normal app (not yet
 verified).

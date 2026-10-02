@@ -105,6 +105,10 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _hotkeyItem;
     private readonly PasteHotkey _pasteHotkey;
     private readonly ExplorerFolderLocator _hotkeyLocator;
+
+    // The hotkey threads did not start (StartHotkey). The hook thread never reports this
+    // itself, so without it the tray line would name a hotkey that does nothing.
+    private bool _hotkeyStartFailed;
     private readonly JobsWindow _jobsWindow;
     private readonly ProgressWindowHost _progressWindows;
     private readonly SessionEndWindow _sessionWindow;
@@ -393,7 +397,7 @@ internal sealed class TrayApplication : ApplicationContext
         }
         // A raised maxConcurrentJobs starts waiting jobs now, not at the next state change.
         _jobs.SettingsChanged();
-        _pasteHotkey.Apply(_settings.Current.PasteHotkey);
+        _pasteHotkey.Apply(_hotkeyStartFailed ? null : _settings.Current.PasteHotkey);
         RefreshTray();
         ToastSettingsProblemsIfNew();
     }
@@ -457,7 +461,7 @@ internal sealed class TrayApplication : ApplicationContext
 
         var hotkey = _settings.Current.PasteHotkey;
         _hotkeyItem.Text = ToastText.HotkeyTrayLine(
-            HotkeyStatusRules.Derive(hotkey, _settings.LoadProblems, _pasteHotkey.HookFailed), hotkey);
+            HotkeyStatusRules.Derive(hotkey, _settings.LoadProblems, _pasteHotkey.HookFailed || _hotkeyStartFailed), hotkey);
 
         var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive, _jobs.Snapshots());
         _pauseAllItem.Checked = state.PauseAllChecked;
@@ -513,7 +517,7 @@ internal sealed class TrayApplication : ApplicationContext
 
     /// <summary>
     /// The hotkey threads. A failure leaves the tray running without the hotkey; the tray
-    /// line then says "not active".
+    /// line then says "not active" until the tray is started again.
     /// </summary>
     private void StartHotkey()
     {
@@ -524,7 +528,10 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex) when (ex is InvalidOperationException or ThreadStateException or OutOfMemoryException)
         {
-            // Nothing else depends on the hotkey.
+            // Nothing else depends on the hotkey. A hook thread that did start must not take
+            // the key with no locator to paste it, so it is told to drop its hooks.
+            _hotkeyStartFailed = true;
+            _pasteHotkey.Apply(null);
         }
     }
 
