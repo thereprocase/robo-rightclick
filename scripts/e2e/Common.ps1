@@ -205,7 +205,8 @@ function Get-StreamNames([string]$Path) {
     # the \\?\ prefix together with -Stream.
     if ($Path.StartsWith('\\?\')) { $Path = $Path.Substring(4) }
     try {
-        $names = Get-Item -LiteralPath $Path -Stream * -ErrorAction Stop |
+        # -Force: without it Get-Item does not see hidden files and reports them as missing.
+        $names = Get-Item -LiteralPath $Path -Stream * -Force -ErrorAction Stop |
             Where-Object { $_.Stream -ne ':$DATA' } | ForEach-Object { $_.Stream + '=' + $_.Length }
         return (@($names) | Sort-Object) -join ','
     }

@@ -14,7 +14,10 @@ param(
     [string]$Root = (Join-Path $env:TEMP 'rrc-e2e'),
     [string]$SecondVolume,
     # A folder on a nearly full volume, for CutSafety's full-destination scenario.
-    [string]$SmallVolume
+    [string]$SmallVolume,
+    # Passed to Ephemeral.Tests.ps1: path substrings a person has judged to be unrelated noise.
+    # Joined with '|' (never part of a Windows path), because -File passes one string.
+    [string[]]$AllowPath = @()
 )
 $ErrorActionPreference = 'Stop'
 
@@ -26,7 +29,7 @@ $plan = @(
     @{ Name = 'Verbs';      Args = @('-Root', $Root) },
     @{ Name = 'CutSafety';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($SmallVolume) { @('-SmallVolume', $SmallVolume) } else { @() }) },
     @{ Name = 'Cancel';     Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
-    @{ Name = 'Ephemeral';  Args = @('-Root', $Root) },
+    @{ Name = 'Ephemeral';  Args = @('-Root', $Root) + $(if ($AllowPath) { @('-AllowPath', ($AllowPath -join '|')) } else { @() }) },
     @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) },
     @{ Name = 'Uninstall';  Args = @('-Root', $Root) }
 )

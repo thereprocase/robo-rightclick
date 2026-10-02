@@ -23,5 +23,5 @@ foreach ($folder in $folders) { Assert-That (-not (Test-Path -LiteralPath $folde
 
 Assert-RegistryRemoved
 Assert-SharedParentsKept
-Assert-That ((Get-RoboProcesses).Count -eq 0) 'no RoboRightClick process is running'
+Assert-That (@(Get-RoboProcesses).Count -eq 0) 'no RoboRightClick process is running'
 Write-Host 'PASS: Uninstall'

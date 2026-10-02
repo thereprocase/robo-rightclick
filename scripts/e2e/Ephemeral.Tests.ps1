@@ -23,6 +23,8 @@ param(
     [int]$HashLimitMB = 16
 )
 $ErrorActionPreference = 'Stop'
+# Run-All passes the list as one '|'-separated string ('|' cannot appear in a Windows path).
+$AllowPath = @($AllowPath | ForEach-Object { $_ -split '\|' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Initialize-E2E -Root $Root
 Assert-Installed
@@ -38,11 +40,23 @@ $scanRoots = @($candidates | Where-Object {
         $inner = $_
         -not ($candidates | Where-Object { $_ -ne $inner -and $inner.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) })
     })
-$excluded = @($script:E2E.Root) + @(Join-Path $env:TEMP '.net')
-$searchedOnly = @(Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications')
+# PowerShell itself rewrites StartupProfileData-NonInteractive whenever the test starts a
+# PowerShell process; it is the harness, not the app.
+$excluded = @($script:E2E.Root) + @(Join-Path $env:TEMP '.net') +
+    @(Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\PowerShell\StartupProfileData-NonInteractive')
+# Explorer writes the tray icon's image to ActionCenterCache (and briefly to %TEMP%) for each
+# toast. Like the notification database it may change, and it is searched for the marker.
+$searchedOnly = @(
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications'),
+    (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\ActionCenterCache')
+)
 
+# For a balloon with an Info, Warning or Error icon, Windows writes that stock icon to
+# %TEMP%\{GUID}.png while the toast shows (seen on build 26200: the blue "i", 306 x 306).
+$tempRoot = $env:TEMP.TrimEnd('\')
 function Test-SearchedOnly([string]$Path) {
     foreach ($e in $searchedOnly) { if ($Path.StartsWith($e, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+    if ((Split-Path -Parent $Path) -ieq $tempRoot -and (Split-Path -Leaf $Path) -match '^\{[0-9a-fA-F-]{36}\}\.png$') { return $true }
     return $false
 }
 

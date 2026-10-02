@@ -20,6 +20,12 @@ Write-Host 'Security.Tests'
 $work = Join-Path $script:E2E.Root 'security'
 Remove-TreeIfPresent $work
 New-Item -ItemType Directory -Path (Join-Path $work 'normal'), (Join-Path $work 'low') | Out-Null
+# Lowering a file's integrity label needs WRITE_OWNER on it. Under a -Root where the user has
+# only Modify (for example a folder an administrator created at the root of C:), icacls fails
+# with "Access is denied", so the user grants itself full control of its own work folder first.
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$grant = & icacls.exe $work /grant ('*' + $me + ':(OI)(CI)F') 2>&1
+if ($LASTEXITCODE -ne 0) { throw "icacls could not grant full control of ${work}: $grant" }
 
 $sample = Join-Path $work 'sample.txt'
 Set-Content -LiteralPath $sample -Value 'sample'
