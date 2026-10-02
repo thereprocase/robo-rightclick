@@ -137,6 +137,7 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
             }
 
             SelectionPaths selection;
+            var readTimer = Stopwatch.StartNew();
             try
             {
                 selection = ShellSelection.ReadPaths(array);
@@ -146,7 +147,9 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
                 // Read once, then released: the array is a cross-process proxy.
                 ReleaseSelection();
             }
+            readTimer.Stop();
 
+            TraceExecute(selection, readTimer.Elapsed);
             Handler.Invoke(Verb, selection.Paths, selection.SkippedItems);
             return HResult.S_OK;
         }
@@ -156,6 +159,21 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
             // exception message would reach a log that ephemeral mode forbids.
             return HResult.E_FAIL;
         }
+    }
+
+    /// <summary>
+    /// One debug-output line per Execute (OutputDebugString through the default trace
+    /// listener; nothing reaches a file): verb, item counts, how long the selection read
+    /// took and how long after process start the call arrived. It is how a test sees that a
+    /// whole selection arrived in one call and how long a COM cold start took. Counts and
+    /// times only, never a path, so it is allowed in ephemeral mode.
+    /// </summary>
+    private void TraceExecute(SelectionPaths selection, TimeSpan read)
+    {
+        var uptime = DateTime.Now - Process.GetCurrentProcess().StartTime;
+        Trace.WriteLine(string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"RoboRightClick: Execute verb={Verb} items={selection.Paths.Count} skipped={selection.SkippedItems} readMs={read.TotalMilliseconds:F1} uptimeMs={uptime.TotalMilliseconds:F0}"));
     }
 
     private void ReleaseSelection()
