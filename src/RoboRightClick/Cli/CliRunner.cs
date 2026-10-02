@@ -50,6 +50,12 @@ internal static class CliRunner
         {
             return Fail($"A path is not valid: {ex.Message}");
         }
+        catch (Exception ex)
+        {
+            // A script depends on the documented exit codes: anything unexpected (a proxy
+            // cast the server refuses, for example) is a failure, not a crash dialog.
+            return Fail($"The command failed: {ex.Message}");
+        }
     }
 
     /// <summary>Prints <see cref="CommandLine.Usage"/>, preceded by the error if there is one.</summary>

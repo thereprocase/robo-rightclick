@@ -18,6 +18,15 @@ internal static class Installer
     /// <summary>How long a running tray gets to exit before install or uninstall gives up.</summary>
     private static readonly TimeSpan TrayExitTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// How long replacing or deleting the installed exe is retried. The tray releases its
+    /// mutex before its process has ended, and Windows refuses to replace or delete an exe
+    /// whose image is still mapped by a running process.
+    /// </summary>
+    private static readonly TimeSpan ExeInUseTimeout = TimeSpan.FromSeconds(5);
+
+    private static readonly TimeSpan ExeInUseRetryInterval = TimeSpan.FromMilliseconds(100);
+
     private const string BusyMessage =
         "RoboRightClick is still running and has jobs in progress. Finish or cancel them, then try again.";
 
@@ -49,6 +58,12 @@ internal static class Installer
 
             RegistryWriter.Write(Registration.InstallValues(new InstallTarget(
                 paths.InstalledExe, startWithWindows, HostEnvironment.UserSid, HostEnvironment.Version)));
+            if (!startWithWindows)
+            {
+                // InstallValues only adds the Run value; a reinstall that resolves autostart
+                // off must also remove the one an earlier install or Settings wrote.
+                RegistryWriter.SetStartWithWindows(false, paths.InstalledExe);
+            }
 
             WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
@@ -68,13 +83,32 @@ internal static class Installer
     /// </summary>
     public static int OfferInstall(AppPaths paths)
     {
+        const string heading = "RoboRightClick isn't installed for this user.";
+        const string text = "Installing adds Robo-Copy, Robo-Cut and Robo-Paste to the right-click menu. "
+            + "It needs no administrator rights.";
+
+        // TaskDialog throws unless visual styles are on. This runs before any window exists,
+        // which is when enabling them is allowed; if they still are not available, a plain
+        // message box asks the same question.
+        if (!Application.UseVisualStyles)
+        {
+            Application.EnableVisualStyles();
+        }
+        if (!Application.UseVisualStyles)
+        {
+            var answer = MessageBox.Show(
+                heading + "\n\n" + text, AppInfo.Name, MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            return answer == DialogResult.OK
+                ? Install(new CliInstall(StartWithWindows: null), paths)
+                : CliExitCodes.Ok;
+        }
+
         var install = new TaskDialogButton("Install");
         var page = new TaskDialogPage
         {
             Caption = AppInfo.Name,
-            Heading = "RoboRightClick isn't installed for this user.",
-            Text = "Installing adds Robo-Copy, Robo-Cut and Robo-Paste to the right-click menu. "
-                + "It needs no administrator rights.",
+            Heading = heading,
+            Text = text,
             Buttons = { install, TaskDialogButton.Cancel },
             DefaultButton = install,
         };
@@ -94,29 +128,32 @@ internal static class Installer
     /// and it is not a reparse point (a link is removed as a link, its target untouched).
     /// 4. The install folder: when running from it, start
     /// %SystemRoot%\System32\cmd.exe by absolute path with the command line from
-    /// UninstallPlan.SelfDeleteCommand, which waits for this process to exit and deletes the
+    /// UninstallPlan.SelfDeleteArguments, which waits for this process to exit and deletes the
     /// exe and the folder. Removes nothing outside <see cref="AppPaths"/> and the registry list.
     /// </summary>
     public static int Uninstall(AppPaths paths)
     {
         try
         {
+            var runningFromInstall = WinPath.AreSame(HostEnvironment.ExecutablePath, paths.InstalledExe);
+
+            // Validated before the tray is stopped and before anything is removed: a path the
+            // plan refuses leaves the installation exactly as it was, tray included.
+            _ = UninstallPlan.For(paths, [], runningFromInstall);
+            var selfDelete = runningFromInstall
+                ? UninstallPlan.SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory)
+                : null;
+
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
                 return Fail(BusyMessage);
             }
 
-            var runningFromInstall = WinPath.AreSame(HostEnvironment.ExecutablePath, paths.InstalledExe);
-
-            // Planned before anything is removed: a path the plan refuses must leave the
-            // installation as it was, not half-removed.
+            // Job folders are listed once the tray has stopped, so none appears afterwards.
             var plan = UninstallPlan.For(paths, ListJobFolderNames(paths), runningFromInstall);
-            var selfDelete = runningFromInstall
-                ? UninstallPlan.SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory)
-                : null;
 
             RegistryWriter.Remove(Registration.UninstallRemovals());
-            var leftBehind = RemovePlanned(plan);
+            var leftBehind = RemovePlanned(plan, paths.InstalledExe);
 
             // The message comes before the cleanup process starts: it waits only about 30
             // seconds for this process to exit, and a message box can stay open longer.
@@ -152,7 +189,7 @@ internal static class Installer
         try
         {
             File.Copy(source, temp, overwrite: false);
-            File.Move(temp, paths.InstalledExe, overwrite: true);
+            RetryWhileExeInUse(() => File.Move(temp, paths.InstalledExe, overwrite: true));
         }
         finally
         {
@@ -257,7 +294,7 @@ internal static class Installer
     /// many planned items could not be removed (or were left because they sit behind a
     /// link); a missing item is not a failure.
     /// </summary>
-    private static int RemovePlanned(UninstallPlan plan)
+    private static int RemovePlanned(UninstallPlan plan, string installedExe)
     {
         var failures = 0;
 
@@ -274,7 +311,14 @@ internal static class Installer
             }
             try
             {
-                File.Delete(file);
+                if (WinPath.AreSame(file, installedExe))
+                {
+                    RetryWhileExeInUse(() => File.Delete(file));
+                }
+                else
+                {
+                    File.Delete(file);
+                }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -322,6 +366,27 @@ internal static class Installer
         {
             // Cannot tell: treat as a link, so nothing inside it is deleted.
             return true;
+        }
+    }
+
+    /// <summary>Runs an operation on the installed exe, retrying while a just-exited tray still maps it.</summary>
+    private static void RetryWhileExeInUse(Action operation)
+    {
+        var deadline = DateTime.UtcNow + ExeInUseTimeout;
+        while (true)
+        {
+            try
+            {
+                operation();
+                return;
+            }
+            catch (Exception ex) when (
+                ex is (IOException or UnauthorizedAccessException)
+                    and not (FileNotFoundException or DirectoryNotFoundException)
+                && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(ExeInUseRetryInterval);
+            }
         }
     }
 

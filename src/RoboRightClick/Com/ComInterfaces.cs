@@ -8,6 +8,11 @@ namespace RoboRightClick.Com;
 // Learn method tables. IIDs and order checked against shobjidl_core.h as mirrored in
 // Wine's and ReactOS's shobjidl.idl. Methods the app never calls are still declared,
 // with pointer-sized placeholders, because they occupy vtable slots.
+//
+// Interface parameters the app releases itself use UniqueComInterfaceMarshaller. The
+// default ComInterfaceMarshaller returns a cached, shared wrapper, and
+// ComObject.FinalRelease does nothing on one of those (it acts only on unique
+// instances), which would leave Explorer's proxies to the finalizer thread.
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct NativePoint
@@ -129,7 +134,7 @@ internal partial interface IExecuteCommand
 internal partial interface IObjectWithSelection
 {
     [PreserveSig]
-    int SetSelection(IShellItemArray? psia);
+    int SetSelection([MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItemArray>))] IShellItemArray? psia);
 
     [PreserveSig]
     int GetSelection(in Guid riid, out nint ppv);
@@ -166,7 +171,7 @@ internal partial interface IShellItemArray
     int GetCount(out uint pdwNumItems);
 
     [PreserveSig]
-    int GetItemAt(uint dwIndex, out IShellItem? ppsi);
+    int GetItemAt(uint dwIndex, [MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItem>))] out IShellItem? ppsi);
 
     [PreserveSig]
     int EnumItems(out nint ppenumShellItems);
@@ -181,7 +186,7 @@ internal partial interface IShellItem
     int BindToHandler(nint pbc, in Guid bhid, in Guid riid, out nint ppv);
 
     [PreserveSig]
-    int GetParent(out IShellItem? ppsi);
+    int GetParent([MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItem>))] out IShellItem? ppsi);
 
     [PreserveSig]
     int GetDisplayName(uint sigdnName, out nint ppszName);

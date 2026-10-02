@@ -67,6 +67,12 @@ internal sealed class SingleInstance : IDisposable
             readyEvent = EventWaitHandleAcl.Create(
                 false, EventResetMode.ManualReset, ReadyEventName, out _, EventSecurityForCurrentUser());
 
+            // The event survives a previous tray while a waiting -Embedding process still has
+            // it open, and then it is still set from that tray. Create ignores the initial
+            // state of an existing event, so clear it: ready must mean this tray's class
+            // objects are registered.
+            readyEvent.Reset();
+
             var instance = new SingleInstance(mutex, exitEvent, readyEvent);
             mutex = null;
             exitEvent = null;
@@ -123,8 +129,10 @@ internal sealed class SingleInstance : IDisposable
     /// </summary>
     public static bool RequestExitAndWait(TimeSpan timeout)
     {
-        // No mutex, no tray: nothing to stop.
-        if (!MutexAcl.TryOpenExisting(MutexName, MutexRights.Synchronize, out var running))
+        // No mutex, no tray: nothing to stop. Modify is the right ReleaseMutex needs: with
+        // Synchronize alone the wait below would acquire the mutex and the release would
+        // fail, leaving this thread its owner while the new tray starts.
+        if (!MutexAcl.TryOpenExisting(MutexName, MutexRights.Synchronize | MutexRights.Modify, out var running))
         {
             return true;
         }
@@ -208,8 +216,9 @@ internal sealed class SingleInstance : IDisposable
     private void OnExitRequested() => _exitRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>
-    /// ReleaseMutex throws when the calling thread does not own the mutex. At shutdown that
-    /// is not worth failing over: closing the handle ends the process's ownership anyway.
+    /// ReleaseMutex throws when the calling thread does not own the mutex (or the handle
+    /// lacks MutexRights.Modify). At shutdown that is not worth failing over: the process
+    /// is about to exit, and its threads' ownership ends with it (as an abandoned mutex).
     /// </summary>
     private static void TryRelease(Mutex mutex)
     {

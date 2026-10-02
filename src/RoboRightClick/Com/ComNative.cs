@@ -125,8 +125,11 @@ internal static partial class ComNative
 
     /// <summary>
     /// Releases a proxy now, on this thread. A no-op for objects that are not proxies of a
-    /// foreign COM object. Proxies are never left to the finalizer, which would release a
-    /// cross-process reference from the wrong apartment at an unpredictable time.
+    /// foreign COM object, and also for proxies that are not unique instances: every proxy
+    /// this must release is therefore created with CreateObjectFlags.UniqueInstance or
+    /// marshalled with UniqueComInterfaceMarshaller. Proxies are never left to the
+    /// finalizer, which would release a cross-process reference from the wrong apartment at
+    /// an unpredictable time.
     /// </summary>
     public static void FinalRelease(object? proxy)
     {
