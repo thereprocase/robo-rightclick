@@ -1135,6 +1135,15 @@ internal static class Gridline
             base.OnRenderItemText(e);
         }
 
+        /// <summary>The Gridline check box instead of the professional renderer's, which framed it in the system's light blue.</summary>
+        protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+        {
+            var size = Gridline.Scale(e.ToolStrip?.DeviceDpi ?? 96, 13);
+            var r = e.ImageRectangle;
+            var box = new Rectangle(r.X + (r.Width - size) / 2, r.Y + (r.Height - size) / 2, size, size);
+            DrawCheckBox(e.Graphics, box, isChecked: true, e.Item.Enabled);
+        }
+
         private sealed class MenuColors : ProfessionalColorTable
         {
             public override Color MenuItemSelected => Blue;
