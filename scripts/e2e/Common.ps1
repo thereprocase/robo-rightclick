@@ -596,11 +596,11 @@ function Restore-RoboConfig([string]$OriginalText) {
 # If one of them changes, change this table in the same commit.
 $script:AppId = '{B708F29C-8ED8-40BD-832E-F05180F1B285}'
 $script:Verbs = @(
-    @{ Key = 'RoboCopy'; Label = 'Robo-Copy'; Icon = 'robo-copy.ico'; Clsid = '{BD15DC6A-FBC1-4949-B61D-3B8FC390062F}'; Multi = 'Player'
+    @{ Key = 'RoboCopy'; Label = 'Robo-Copy'; MenuLabel = 'Robo-Cop&y'; Icon = 'robo-copy.ico'; Clsid = '{BD15DC6A-FBC1-4949-B61D-3B8FC390062F}'; Multi = 'Player'
         Associations = @('AllFilesystemObjects') },
-    @{ Key = 'RoboCut'; Label = 'Robo-Cut'; Icon = 'robo-cut.ico'; Clsid = '{1A061376-A3F7-41BF-A516-E635ED91ACDF}'; Multi = 'Player'
+    @{ Key = 'RoboCut'; Label = 'Robo-Cut'; MenuLabel = 'Robo-C&ut'; Icon = 'robo-cut.ico'; Clsid = '{1A061376-A3F7-41BF-A516-E635ED91ACDF}'; Multi = 'Player'
         Associations = @('AllFilesystemObjects') },
-    @{ Key = 'RoboPaste'; Label = 'Robo-Paste'; Icon = 'robo-paste.ico'; Clsid = '{9D1BAE79-13C3-427F-A7E6-34150D5C49AB}'; Multi = 'Single'
+    @{ Key = 'RoboPaste'; Label = 'Robo-Paste'; MenuLabel = 'Ro&bo-Paste'; Icon = 'robo-paste.ico'; Clsid = '{9D1BAE79-13C3-427F-A7E6-34150D5C49AB}'; Multi = 'Single'
         Associations = @('Directory\Background', 'Directory', 'Drive') }
 )
 $script:RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -623,7 +623,8 @@ function Get-ExpectedRegistry([string]$ExePath, [string]$Version) {
         Add-Row "$clsidKey\LocalServer32" '' 'String' $quoted
         foreach ($assoc in $v.Associations) {
             $verbKey = "Software\Classes\$assoc\shell\$($v.Key)"
-            Add-Row $verbKey 'MUIVerb' 'String' $v.Label
+            # The menu text carries the access key ("&"); the class name above does not.
+            Add-Row $verbKey 'MUIVerb' 'String' $v.MenuLabel
             Add-Row $verbKey 'Icon' 'String' (Join-Path (Split-Path -Parent $ExePath) $v.Icon)
             # A background click selects nothing; Explorer hides a background verb marked Single.
             if ($assoc -ne 'Directory\Background') {

@@ -72,12 +72,81 @@ public class RegistrationTests
                 {
                     Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", verb.MultiSelectModel), values);
                 }
-                Assert.Contains(new RegistryValue(verbKey, "MUIVerb", verb.Label), values);
+                Assert.Contains(new RegistryValue(verbKey, "MUIVerb", verb.MenuLabel), values);
                 Assert.Contains(new RegistryValue(verbKey, "Icon", Registration.IconPath(Exe, verb)), values);
             }
             Assert.Contains(new RegistryValue(Registration.ClsidKey(verb.Clsid) + @"\LocalServer32", "", "\"" + Exe + "\""), values);
         }
         Assert.Equal(3, ShellVerbs.All.Select(v => v.Clsid).Distinct().Count());
+    }
+
+    [Fact]
+    public void Menu_labels_have_exactly_one_access_key_and_the_class_names_none()
+    {
+        var values = Install(startWithWindows: false);
+        foreach (var verb in ShellVerbs.All)
+        {
+            Assert.Equal(1, verb.MenuLabel.Count(c => c == '&'));
+            Assert.Equal(verb.Label, verb.MenuLabel.Replace("&", string.Empty, StringComparison.Ordinal));
+            Assert.DoesNotContain('&', verb.Label);
+            Assert.True(char.IsAsciiLetter(verb.AccessKey), verb.MenuLabel);
+
+            var clsidName = values.Single(v => v.Key == Registration.ClsidKey(verb.Clsid) && v.Name.Length == 0);
+            Assert.Equal($"{AppInfo.Name} {verb.Label}", clsidName.Data);
+            Assert.DoesNotContain('&', clsidName.Data);
+            foreach (var muiVerb in values.Where(v => v.Name == "MUIVerb" && v.Key.EndsWith(@"" + verb.KeyName, StringComparison.Ordinal)))
+            {
+                Assert.Equal(1, muiVerb.Data.Count(c => c == '&'));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The classic-menu letters Explorer itself uses, per kind of right-click, as named in the
+    /// design review. Not measured yet: the release gate measures them on Windows and replaces
+    /// this table with what it finds (docs/decisions/0001-paste-hotkey.md).
+    /// </summary>
+    private static readonly Dictionary<string, string> ExplorerLettersByMenu = new()
+    {
+        ["file"] = "OTCAREPD",
+        ["folder"] = "OTCAREPD",
+        ["drive"] = "OCPRE",
+        ["background"] = "PREU",
+    };
+
+    private static IEnumerable<ShellVerbInfo> VerbsOnMenu(string menu) => ShellVerbs.All.Where(v => v.Associations.Any(a => menu switch
+    {
+        "file" => a == "AllFilesystemObjects",
+        "folder" => a is "AllFilesystemObjects" or "Directory",
+        "drive" => a == "Drive",
+        "background" => a == ShellVerbs.BackgroundAssociation,
+        _ => false,
+    }));
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("folder")]
+    [InlineData("drive")]
+    [InlineData("background")]
+    public void Access_keys_are_unique_and_clear_of_explorers_letters_on_each_menu(string menu)
+    {
+        var letters = VerbsOnMenu(menu).Select(v => v.AccessKey).ToList();
+        Assert.NotEmpty(letters);
+        Assert.Equal(letters.Count, letters.Distinct().Count());
+        foreach (var letter in letters)
+        {
+            Assert.DoesNotContain(letter, ExplorerLettersByMenu[menu]);
+        }
+    }
+
+    [Fact]
+    public void Access_keys_are_the_documented_letters()
+    {
+        Assert.Equal('Y', ShellVerbs.RoboCopy.AccessKey);
+        Assert.Equal('U', ShellVerbs.RoboCut.AccessKey);
+        Assert.Equal('B', ShellVerbs.RoboPaste.AccessKey);
+        // U is Undo on the background menu only, where Robo-Cut does not appear.
+        Assert.DoesNotContain(ShellVerbs.RoboCut, VerbsOnMenu("background"));
     }
 
     [Fact]

@@ -100,6 +100,13 @@ on files and folders. **Robo-Paste** appears on a folder, a drive and the empty 
 a folder window, but not when several folders are selected. Each item has its own icon since
 commit e13fa37; that Explorer shows it is not yet verified on Windows.
 
+With the classic menu open, one letter runs an item, as with Explorer's own: **Y** for
+Robo-Cop**y**, **U** for Robo-C**u**t, **B** for Ro**b**o-Paste. Explorer already uses C, T and
+P for its Copy, Cut and Paste. If another menu item uses the same letter, pressing it moves
+between the two and Enter runs the selected one. An install from before this change gets the
+letters when it is installed again. That the letters work as described is not yet verified on
+Windows.
+
 ## Uninstall
 
 Settings, Apps, Installed apps, **RoboRightClick**, Uninstall. Or run

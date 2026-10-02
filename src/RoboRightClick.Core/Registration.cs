@@ -85,6 +85,7 @@ public static class Registration
         foreach (var verb in ShellVerbs.All)
         {
             var clsidKey = ClsidKey(verb.Clsid);
+            // The class name has no access key: it shows in COM tools and error messages.
             values.Add(new(clsidKey, string.Empty, $"{AppInfo.Name} {verb.Label}"));
             values.Add(new(clsidKey, "AppID", FormatGuid(ShellVerbs.AppId)));
             values.Add(new(clsidKey + @"\LocalServer32", string.Empty, LocalServerCommand(exe)));
@@ -92,7 +93,7 @@ public static class Registration
             foreach (var association in verb.Associations)
             {
                 var verbKey = VerbKey(association, verb);
-                values.Add(new(verbKey, "MUIVerb", verb.Label));
+                values.Add(new(verbKey, "MUIVerb", verb.MenuLabel));
                 values.Add(new(verbKey, "Icon", IconPath(exe, verb)));
                 if (ShellVerbs.MultiSelectModelFor(verb, association) is { } model)
                 {

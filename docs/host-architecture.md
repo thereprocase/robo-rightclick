@@ -95,7 +95,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `ClipboardPayload.cs` | `DROPFILES` and drop-effect bytes, decode limits, exclusion formats. | implemented, tested, sabotage-checked |
 | `ComSecurity.cs` | COM access and launch descriptors (SDDL). | implemented, tested, sabotage-checked |
 | `Registration.cs` | HKCU footprint as typed data; Installed-apps entry; autostart resolver. | implemented, tested |
-| `ShellVerbs.cs` | Verb table: CLSIDs, labels, associations, `MultiSelectModel`. | implemented, tested |
+| `ShellVerbs.cs` | Verb table: CLSIDs, labels, menu labels with access keys, associations, `MultiSelectModel`. | implemented, tested, sabotage-checked (access keys) |
 | `CommandLine.cs` | CLI grammar → `CliCommand`; exit codes. | implemented, tested |
 | `TrayStatus.cs` | `JobSnapshot` (incl. refusals, damage, failure, wait, cancel); tray state, tooltip. | implemented, tested |
 | `ToastText.cs` | Job toasts (path-free in ephemeral), refusal and settings toasts. | implemented, tested |
@@ -226,7 +226,7 @@ key and the app's own Uninstall key.
 | ⌫ `Software\Classes\AppID\{B708F29C-…}` | (default) / `AccessPermission` / `LaunchPermission` | `RoboRightClick` / SD / SD (REG_BINARY from SDDL) |
 | ⌫ `Software\Classes\CLSID\{verb clsid}` | (default) / `AppID` | `RoboRightClick Robo-Copy` / `{B708F29C-…}` |
 | `…\CLSID\{verb clsid}\LocalServer32` | (default) | `"<install dir>\RoboRightClick.exe"` |
-| ⌫ `Software\Classes\<assoc>\shell\<Verb>` | `MUIVerb` / `MultiSelectModel` | `Robo-Copy` / `Player` (copy, cut) or `Single` (paste) |
+| ⌫ `Software\Classes\<assoc>\shell\<Verb>` | `MUIVerb` / `MultiSelectModel` | `Robo-Cop&y` (`Robo-C&ut`, `Ro&bo-Paste`: `ShellVerbInfo.MenuLabel`, one access key each; the CLSID name keeps the plain `Label`) / `Player` (copy, cut) or `Single` (paste) |
 | (same key) | `Icon` | `<install dir>\robo-copy.ico` (`robo-cut.ico`, `robo-paste.ico`): written by install beside the exe, deleted by uninstall; one pixel-fitted frame per display scale, 16–48 px |
 | `…\shell\<Verb>\command` | `DelegateExecute` | `{verb clsid}` |
 | ⌫ `Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboRightClick` | `DisplayName`, `DisplayVersion`, `DisplayIcon`, `InstallLocation`, `UninstallString`, `NoModify`=1, `NoRepair`=1 | Settings → Apps → Installed apps entry |
