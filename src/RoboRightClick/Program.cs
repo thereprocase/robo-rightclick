@@ -17,6 +17,13 @@ internal static class Program
     // exists and may run on any thread. Null outside the tray's lifetime.
     private static JobManager? s_jobs;
 
+    // The last job manager the tray published, kept after teardown: whether crash.log may be
+    // written depends on the session (any ephemeral job since the start), which outlives it.
+    private static JobManager? s_sessionJobs;
+
+    // Set once this process runs as the tray rather than install, uninstall or the CLI.
+    private static volatile bool s_isTray;
+
     /// <summary>
     /// STA is required twice over: WinForms, and the COM class objects registered on this
     /// thread, whose calls are delivered through its message loop.
@@ -33,7 +40,8 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         CrashPolicy.Install(
             ephemeralJobsActive: () => Volatile.Read(ref s_jobs)?.EphemeralJobsActive ?? false,
-            killChildren: () => Volatile.Read(ref s_jobs)?.KillRunningProcesses());
+            killChildren: () => Volatile.Read(ref s_jobs)?.KillRunningProcesses(),
+            crashLogAllowed: CrashLogAllowed);
 
         return CommandLine.Parse(args) switch
         {
@@ -47,11 +55,57 @@ internal static class Program
         };
     }
 
-    private static int RunTray(CliRunTray tray) =>
-        StartupRules.Decide(tray, HostEnvironment.RunningFromInstallLocation) switch
+    private static int RunTray(CliRunTray tray)
+    {
+        switch (StartupRules.Decide(tray, HostEnvironment.RunningFromInstallLocation))
         {
-            StartupAction.RunTray => TrayApplication.Run(tray, jobs => Volatile.Write(ref s_jobs, jobs)),
-            StartupAction.OfferInstall => Installer.OfferInstall(HostEnvironment.Paths),
-            var other => throw new InvalidOperationException($"Unhandled startup action {other}."),
-        };
+            case StartupAction.RunTray:
+                s_isTray = true;
+                return TrayApplication.Run(tray, PublishJobs);
+            case StartupAction.OfferInstall:
+                return Installer.OfferInstall(HostEnvironment.Paths);
+            case var other:
+                throw new InvalidOperationException($"Unhandled startup action {other}.");
+        }
+    }
+
+    private static void PublishJobs(JobManager? jobs)
+    {
+        if (jobs is not null)
+        {
+            Volatile.Write(ref s_sessionJobs, jobs);
+        }
+        Volatile.Write(ref s_jobs, jobs);
+    }
+
+    /// <summary>
+    /// crash.log is written only by the tray; install, uninstall and the CLI write none. Once
+    /// the job manager exists, its current settings and session decide. Before it does (a
+    /// start that fails, such as CoInitializeSecurity refusing), no job can exist yet and
+    /// config.json decides (<see cref="CrashLog.ModeFromConfig"/>). Asked at crash time.
+    /// </summary>
+    private static bool CrashLogAllowed()
+    {
+        if (Volatile.Read(ref s_sessionJobs) is { } jobs)
+        {
+            return CrashLog.MayWrite(jobs.CurrentSettings().Logging, jobs.EphemeralJobsThisSession);
+        }
+        return s_isTray && CrashLog.MayWrite(LoggingModeFromConfigFile(), ephemeralJobsThisSession: false);
+    }
+
+    private static LoggingMode? LoggingModeFromConfigFile()
+    {
+        try
+        {
+            return CrashLog.ModeFromConfig(File.ReadAllText(HostEnvironment.Paths.ConfigFile), configReadFailed: false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return CrashLog.ModeFromConfig(null, configReadFailed: false);
+        }
+        catch (Exception)
+        {
+            return CrashLog.ModeFromConfig(null, configReadFailed: true);
+        }
+    }
 }

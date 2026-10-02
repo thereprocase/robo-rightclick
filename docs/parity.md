@@ -36,7 +36,7 @@ real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
 | Situation | Explorer (measured) | Robo (measured) | Match |
 |---|---|---|---|
 | Where the items appear | classic Cut/Copy/Paste under "Show more options"; Shift+F10 opens the new menu, whose "Show more options" (W) opens the classic one | same place, same route | yes |
-| Menu icons | none on the classic Cut, Copy, Paste | none | yes |
+| Menu icons | none on the classic Cut, Copy, Paste | none on the builds measured; an icon per item since commit e13fa37, not yet observed | **no** (from e13fa37): see deviations |
 | Preferred DropEffect of a copy | 5 (copy and link) | 1 (copy) | equivalent: both paste as a copy, in both directions |
 | Copy, then Explorer's Ctrl+V into the folder it came from | "name - Copy" | "name - Copy" (Robo-Copy writes the Shell IDList Array beside CF_HDROP) | yes |
 | Cut, then Explorer's Ctrl+V | moves; clipboard emptied | moves; the cut stays on the clipboard | **no**: see deviations |
@@ -68,6 +68,10 @@ real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
   ("Paste Succeeded"), and Robo-Cut writes plain clipboard data with no object behind it to
   receive that report. Pasting the stale cut a second time finds the
   sources gone. Robo-Paste of a cut does empty the clipboard, as Explorer does.
+- **The Robo items have menu icons.** Explorer's classic Cut, Copy and Paste have none
+  (measured). Since commit e13fa37 each Robo item's registry key has an `Icon` value, so the
+  items stand out from Explorer's own Cut, Copy and Paste beside them. Whether Explorer
+  displays them is not yet verified on Windows.
 - **No Robo-Paste on a selection of several folders.** Explorer offers Paste there and pastes
   into the folder that was right-clicked. The shell does not tell a DelegateExecute verb which
   item was clicked, so the item is hidden (`MultiSelectModel=Single`) rather than guessing.
@@ -88,6 +92,10 @@ Design deviations (decided, not yet measured against Explorer):
   message pointing to Explorer's Paste. Explorer's own behavior here is not yet measured.
 - **Files that appear at the destination after the scan are skipped, not overwritten.**
   Explorer would ask about them; Robo-Paste reports them in the job summary.
+- **At most 250,000 items per click.** Robo-Copy, Robo-Cut and Robo-Paste refuse a larger
+  selection (or one whose paths add up to more than 64 MiB) with a toast that states the
+  limit, so Robo-Copy never writes more to the clipboard than Robo-Paste reads back. Explorer's
+  own Copy has no such limit. Selecting the parent folder copies the same files.
 - **"Keep newer" also keeps a destination with the same time but a different size.**
   (`/XC /XO`). Explorer has no such option; it exists only as a configured default.
 - **A retried cut can leave empty source folders.** After "Try again" moves the files that

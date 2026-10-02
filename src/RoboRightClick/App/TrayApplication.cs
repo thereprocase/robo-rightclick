@@ -26,7 +26,9 @@ namespace RoboRightClick.App;
 /// <para>Unhandled exceptions (<see cref="CrashPolicy"/>): Application.ThreadException and
 /// AppDomain.UnhandledException are handled. While any ephemeral job is active the process
 /// kills its robocopy children and ends with TerminateProcess, so Windows Error Reporting
-/// never snapshots memory holding job paths (Environment.FailFast would report to WER).</para>
+/// never snapshots memory holding job paths (Environment.FailFast would report to WER).
+/// Otherwise, in normal mode with no ephemeral job this session, the exception is appended
+/// to crash.log first.</para>
 /// <para>Session end: on WM_QUERYENDSESSION with active jobs, ShutdownBlockReasonCreate
 /// ("Copying files…") and veto, so Windows shows its standard "an app is preventing
 /// shutdown" screen. On WM_ENDSESSION(true), JobManager.CancelAllAndWaitAsync with a 5 s
@@ -68,6 +70,12 @@ internal sealed class TrayApplication : ApplicationContext
 
     private readonly SingleInstance _instance;
     private readonly bool _afterInstall;
+
+    /// <summary>
+    /// Read before the COM class objects are registered, so every job of this run is created
+    /// at or after it; the interrupted-jobs check leaves those alone.
+    /// </summary>
+    private readonly DateTimeOffset _startedAt = TimeProvider.System.GetUtcNow();
     private readonly Action<JobManager?> _publishJobs;
 
     // Everything the tray creates, in creation order; teardown disposes it in reverse, so
@@ -206,6 +214,8 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex)
         {
+            // The failure a beta tester is most likely to report, so it goes to crash.log too.
+            CrashPolicy.LogHandled(ex);
             MessageBox.Show(
                 $"{AppInfo.Name} could not start.\n\n{ex.Message}",
                 AppInfo.Name,
@@ -315,7 +325,11 @@ internal sealed class TrayApplication : ApplicationContext
         int interrupted;
         try
         {
-            interrupted = mode == LoggingMode.Normal ? await Task.Run(_logStore.CountInterrupted) : 0;
+            // Ephemeral mode writes nothing about jobs, so the check, which rewrites the job
+            // logs it reports, runs in normal mode only.
+            interrupted = mode == LoggingMode.Normal
+                ? await Task.Run(() => _logStore.MarkInterrupted(_startedAt, _jobs.ActiveLogFolders, TimeProvider.System))
+                : 0;
         }
         catch (Exception)
         {
@@ -380,7 +394,7 @@ internal sealed class TrayApplication : ApplicationContext
             return false;
         }
         _toastedProblems = problems;
-        _notifier.Show(ToastText.ForSettingsProblems(problems), ToastTarget.Settings);
+        _notifier.Show(ToastText.ForSettingsProblems(problems, _settings.SavesRefused), ToastTarget.Settings);
         return true;
     }
 

@@ -27,7 +27,7 @@ The Windows host's components, threading, COM contracts and work split are in do
 - `AllFilesystemObjects\shell\RoboCopy` and `…\RoboCut`
 - `Directory\Background\shell\RoboPaste`, `Directory\shell\RoboPaste`, `Drive\shell\RoboPaste`
 
-Each item is registered with `DelegateExecute={its own CLSID}` and a display label; Robo-Copy and Robo-Cut with `MultiSelectModel=Player`, Robo-Paste with `Single` on folders and drives and with none on the folder background, where nothing is selected (Explorer passes that folder through `IExecuteCommand::SetDirectory`). A menu icon is an open question (host-architecture.md section 14). With DelegateExecute, Explorer hands over the **entire selection in one call** through `IObjectWithSelection` → `IShellItemArray`, giving real filesystem paths rather than display names. That removes the per-item process spawn, the 15-item cap, and the dependence on whether file extensions are shown. COM interfaces use .NET's `[GeneratedComInterface]`/`[GeneratedComClass]` source generators, with no NuGet dependency. `Execute()` only enqueues the job and returns, so Explorer never waits on a copy.
+Each item is registered with `DelegateExecute={its own CLSID}` and a display label; Robo-Copy and Robo-Cut with `MultiSelectModel=Player`, Robo-Paste with `Single` on folders and drives and with none on the folder background, where nothing is selected (Explorer passes that folder through `IExecuteCommand::SetDirectory`). Each item also has an `Icon` value pointing at an `.ico` that install writes beside the exe (since commit e13fa37; that Explorer shows it is unverified on Windows, and Explorer's own classic items have none, a deviation listed in docs/parity.md). With DelegateExecute, Explorer hands over the **entire selection in one call** through `IObjectWithSelection` → `IShellItemArray`, giving real filesystem paths rather than display names. That removes the per-item process spawn, the 15-item cap, and the dependence on whether file extensions are shown. COM interfaces use .NET's `[GeneratedComInterface]`/`[GeneratedComClass]` source generators, with no NuGet dependency. `Execute()` only enqueues the job and returns, so Explorer never waits on a copy.
 
 **Clipboard is the real Windows clipboard.** Robo-Copy and Robo-Cut write `CF_HDROP` plus `Preferred DropEffect` (copy or move) and the selection's `Shell IDList Array`, the formats Explorer's own paste reads. So both of these work in either direction:
 - Robo-Copy, then a plain Ctrl+V.
@@ -62,6 +62,7 @@ Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /N
 
 ```json
 {
+  "version": 1,                      // format version; a newer or unreadable one is read, never saved over
   "threads": "auto",               // per drive: 32 SSD/network, 8 spinning disk, 4 within one; or a fixed 1-128
   "retries": 0, "retryWaitSeconds": 0,
   "conflictDefault": "ask",          // ask | replace | skip | keepNewer
@@ -106,6 +107,10 @@ All job output goes through one `IJobSink` interface:
   - `robocopy.log`: a copy of the pipe output, written by us, not by robocopy.
 
   It also appends to `history.jsonl`. Retention prunes to the last `logRetentionJobs` jobs.
+  An unhandled exception in the tray appends to `%LOCALAPPDATA%\RoboRightClick\crash.log`
+  (exception types, path-scrubbed messages, stack traces; rotated at 256 KB), in normal mode
+  only and never once an ephemeral job has existed in the session (host-architecture.md
+  section 11).
 - **Ephemeral mode** composes a `NullJobSink` and keeps history in memory only, cleared on exit. Guarantees:
   - Nothing about a job is written to disk: no job files, no history, and no temp files (none are needed at all). Robocopy's own log goes only into the in-memory pipe.
   - Completion toasts are generic ("Job finished") and contain **no paths**, because Windows keeps toast text in the notification center.

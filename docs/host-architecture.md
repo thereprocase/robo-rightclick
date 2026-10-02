@@ -38,7 +38,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 |---|---|
 | `Program.cs` | `[STAThread]` entry; DLL search hardening; `CommandLine.Parse` and dispatch. |
 | `App/TrayApplication.cs` | Composition root, tray icon and menu, start/exit/session-end order (doc comment is the spec). |
-| `App/CrashPolicy.cs` | Unhandled-exception handling; no WER report while ephemeral jobs run. |
+| `App/CrashPolicy.cs` | Unhandled-exception handling; crash.log in normal mode; no WER report while ephemeral jobs run. |
 | `App/SingleInstance.cs` | Session mutex, exit-request and ready events, all with a current-user DACL. |
 | `App/SettingsStore.cs` | config.json load (per-field fallback), watch, atomic save, `.bad` copy, change event. |
 | `App/TrayIcons.cs` | GDI+-drawn icons per `TrayIconState` × ephemeral tint. |
@@ -104,7 +104,8 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `ConflictDecisions.cs` | `ExecutionPlan`; `ExecutionPlanner.Apply` (exclusion by construction); the one command-line chunking rule. | implemented, tested, sabotage-checked |
 | `StepLedger.cs` | Planned vs reported reconciliation for progress, cancel, retry, summary; in-process completed / re-planned / refused. | implemented, tested, sabotage-checked |
 | `JobOutcome.cs` | `StepOutcome`, `FinalState`, `FailureText`, `RetryPlanner`. | implemented, tested, sabotage-checked |
-| `JobRecords.cs` | job.json and history.jsonl formats; `LastState`. | implemented, tested |
+| `JobRecords.cs` | job.json and history.jsonl formats (with a format version); `LastState`; the interrupted-job check and marker. | implemented, tested, sabotage-checked |
+| `CrashLog.cs`, `PathHeuristic.cs` | crash.log entries, when they may be written, rotation; the path heuristic shared with `FailureText`. | implemented, tested, sabotage-checked |
 | `Utf16Lines.cs` | Incremental UTF-16LE line splitter for the pipe (`MaxLineChars`, shared with `RobocopyPipe`). | implemented, tested |
 | `JobScheduler.cs` | Which queued jobs start, in click order (`JobQueuePolicy` over the manager's states). | implemented, tested |
 | `VerbRules.cs` | Selection, paste-destination and clipboard refusals; bounded ANSI `DROPFILES` splitter. | implemented, tested |
@@ -120,7 +121,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | **UI (main, STA)** | WinForms message loop; COM class objects (registered here, so activations and every `VerbCommand` call arrive here through the loop); clipboard (owner window lives here); all forms, NotifyIcon, toasts. | Never blocks and never touches the file system: a stat on a dead SMB share would freeze the tray and every right-click. `VerbCommand.Execute` reads the selection, calls `IVerbHandler.Invoke`, returns. `VerbDispatcher` runs verbs one at a time in click order; clipboard retries are awaited delays, so the loop keeps pumping. |
 | **Scan** | One dedicated thread per scanning job (`TaskCreationOptions.LongRunning`), at most `JobQueuePolicy.MaxConcurrentScans` (4). | Lazy enumeration; checks cancellation per directory and every 1,000 entries; reports `ScanProgress`. |
 | **Job workers** | `Job.RunAsync` continuations on the thread pool; steps sequential inside a job, jobs parallel. | Never touch UI objects. Ask the user only through `IJobPrompts`. Clipboard clear goes through `JobServices.ClearClipboardIfUnchanged`, which posts to the UI thread. Never call the sink, an event or the UI while holding the job lock. |
-| **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches, and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The pipe is always drained, so a slow sink or antivirus on robocopy.log never stalls robocopy. |
+| **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches (64), and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The channel absorbs bursts: a sink that is briefly slow (antivirus scanning robocopy.log) does not hold up the pipe, and a sink or parser that throws never stops the drain. It is bounded on purpose, so memory stays bounded: a sink that stays slower than robocopy's output, or blocks, fills the channel, the reader then waits, and robocopy waits on its next log write until the consumer catches up. |
 | **Progress sampler** | One `PeriodicTimer` loop for the app (333 ms). | Skips runs whose gate is closed. Disposing a run's tracking blocks until its in-flight callback returns. |
 
 Shared state: each `Job` guards lifecycle, ledger, progress and errors with one private lock;
@@ -240,8 +241,11 @@ docs/parity.md). The `Directory\Background` key has no `MultiSelectModel`
 (`ShellVerbs.MultiSelectModelFor`): a background click selects nothing, and with `Single`
 Explorer hid the item (testlog 2026-10-02). Autostart on
 reinstall comes from `Registration.ResolveStartWithWindows`: an explicit `--autostart` /
-`--no-autostart` wins (and is written to config.json), otherwise the existing config's choice
-is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
+`--no-autostart` wins (and is written to config.json, unless a newer version wrote that file
+or its version cannot be read: `SettingsSerializer.MayOverwrite`),
+otherwise the existing config's choice is kept. Each verb key carries the `Icon` value in the
+table above since commit e13fa37. Whether Explorer shows those icons is unverified on Windows:
+the 2026-10-02 session ran earlier builds, which wrote no `Icon` value, and saw none.
 
 ## 5. Verbs and clipboard
 
@@ -272,16 +276,21 @@ is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
   Verb = `ClipboardPayload.VerbForPaste` (move only for a pure move marker). A move where every source's parent is the destination is Explorer's
   no-op and does nothing. Otherwise `JobManager.Enqueue(PasteOrder, cut ? sequence : null)`;
   everything that touches the disk happens later, in Scanning, on a worker thread.
-- **Refusals** (`VerbRefusal`): empty clipboard, virtual items, too large, busy, no
+- **Refusals** (`VerbRefusal`): empty clipboard, virtual items, clipboard too large, busy, no
   file-system destination, several destinations, non-file selection, same cut already being
-  pasted, and `Failed` (a verb threw; the dispatcher logs the exception type only). Each has
-  one fixed, path-free sentence in `ToastText.ForRefusal`.
+  pasted, selection too large, and `Failed` (a verb threw; the dispatcher logs the exception
+  type only). Each has one fixed, path-free sentence in `ToastText.ForRefusal`.
 - **After a cut-paste ends `Done` with at least one item moved:** `ClearIfUnchangedAsync(sequence)`
   compares the sequence number, opens the clipboard (retried with awaited delays for about a
   second), compares again, then empties. A newer clipboard write by anyone is left alone.
   `DoneWithErrors` keeps the clipboard (its sources still exist).
-- Robo-Copy writes any number of paths, as Explorer's Ctrl+C does; Robo-Paste refuses more
-  than `ClipboardPayload.MaxDropFilesPaths`. Refusing at copy time is a product decision left open.
+- **Selection size.** `ShellSelection.ReadPaths` checks Core's `SelectionLimits` (250,000
+  items, a 64 MiB `CF_HDROP` block, 32,767 characters per path and 32 Mi characters in all,
+  the clipboard's own limits) before it copies anything, for every verb and for the CLI. Over
+  a limit, `Execute` hands `VerbRefusal.SelectionTooLarge` to `IVerbHandler.RefuseSelection`,
+  which queues the toast behind earlier clicks, and returns `E_FAIL` at once (the CLI exits 1).
+  So Robo-Copy never puts more on the clipboard than Robo-Paste reads back. Explorer's own
+  Ctrl+C has no such limit (deviation in docs/parity.md).
 
 ## 6. Job engine contracts
 
@@ -430,6 +439,14 @@ Step execution:
   truncation line), `history.jsonl` (rotated past 10,000 lines). After a normal-mode job
   finishes, the manager prunes off the UI thread to `logRetentionJobs`, never touching folders
   of running jobs. Log write failures never fail a job.
+- Interrupted jobs (normal mode): at start, `JobLogStore.MarkInterrupted` reads each job.json;
+  one whose last state is not terminal (`JobRecords.CheckInterrupted`) was left by a run that
+  ended mid-paste. It is counted for the one startup toast and rewritten, through the same
+  temp-file-then-replace writer, with a final `"interrupted"` state, so the next start does
+  not report it again. Jobs created at or after this process started, and folders of active
+  jobs, are skipped; a record of a newer or unreadable format version is reported but never
+  rewritten, so it is reported at every start, as is one whose rewrite failed. The counting
+  and the skips are host code, untested.
 - Ephemeral: `NullJobSink`, in-memory history only (`JobManager.InMemoryHistoryLimit`),
   path-free toasts, clipboard exclusion formats, no temp files. The one write is config.json.
 - Turning ephemeral on while job logs exist asks whether to delete them; Settings also has
@@ -458,13 +475,16 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 
 ## 10. Install and uninstall
 
-- `--install`: stop a running tray (exit request; refused while jobs run) → copy exe to
+- `--install`: refuse (message, exit code 1, nothing changed) when uninstall would later
+  refuse the locations (`UninstallPlan.InstallRefusal`: the same checks uninstall runs, e.g. a
+  profile path holding `&`, `%` or `!`) → stop a running tray (exit request; refused while jobs run) → copy exe to
   `%LOCALAPPDATA%\Programs\RoboRightClick\` → write `Registration.InstallValues` → write the
   default config.json only if absent (or apply an explicit autostart flag to the existing one)
   → start the installed tray → message.
 - `--uninstall`: stop the tray → remove `Registration.UninstallRemovals()` → delete exactly the
   known files (`UninstallPlan`: config.json and its `.bad` and `.tmp`, history and its rotated
-  file, each job folder's job.json, robocopy.log and a leftover job.json.tmp), then
+  file, crash.log and crash.1.log, each job folder's job.json, robocopy.log and a leftover
+  job.json.tmp), then
   `RemoveDirectory` on each folder after checking its leaf name and that it is not a reparse
   point → the install folder via `%SystemRoot%\System32\cmd.exe` (absolute path, validated
   arguments, its one-second sleep `PING.EXE` also by absolute path) when running from it.
@@ -486,11 +506,29 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
    sizes (Core decoders), pipe client PID, COM caller integrity, config fields (per-field
    fallback), extraArgs (allow-list), CLI arguments.
 5. Logging and toasts are best-effort and never change a job's outcome.
-6. No crash log in the beta. While ephemeral jobs run, a crash ends the process without a WER
-   report (`CrashPolicy`).
+6. Crash log in normal mode only. An unhandled exception, on the UI thread
+   (`Application.ThreadException`) or any other (`AppDomain.UnhandledException`), appends one
+   entry to `%LOCALAPPDATA%\RoboRightClick\crash.log` (`AppPaths.CrashLogFile`): exception
+   types outermost first, messages with path-looking parts replaced by `[path]` (Core
+   `PathHeuristic.Scrub`, the heuristic `FailureText` uses; an unquoted path-looking word takes
+   the rest of its line, since a path with spaces has no other end), stack traces, app version,
+   UTC time, Windows build. No job data is added; a stack trace is written as the runtime
+   reports it. The file is rotated to `crash.1.log` (one kept) before it would pass 256 KB, an
+   entry is at most 32K characters, and one run writes at most 20 entries. Nothing is written
+   in ephemeral mode, once any ephemeral job has existed in this session, or outside the tray
+   (install, uninstall, CLI) (`CrashLog.MayWrite`). A tray that fails before its job manager
+   exists (the caught "could not start" error included, `CrashPolicy.LogHandled`) has no job
+   yet, so config.json's `logging` decides, and an unreadable file means no log
+   (`CrashLog.ModeFromConfig`). After teardown the last session's manager still decides. While
+   ephemeral jobs run, a crash ends the process without a WER report, as before
+   (`CrashPolicy`). Uninstall deletes both files. This reverses the beta's original "no crash
+   log" rule, with the owner's approval: without one, a beta bug report depends on the tester
+   remembering a message box, which is not enough to find a fault. Cross-compiles; unverified
+   on Windows.
 7. Sign-out with active jobs: shutdown is vetoed with a reason; if Windows ends the session
    anyway, jobs are canceled with cleanup within 5 s. A job.json left non-terminal is reported
-   once at the next start (normal mode).
+   at the next start and marked so it is not reported again (normal mode; the exceptions are
+   under "Interrupted jobs" in section 8).
 
 ## 12. Verified vs unverified on Windows
 
@@ -522,6 +560,8 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | **unverified** |
 | `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | verified (testlog 2026-10-02); the planted-DLL check **unverified** |
 | Explorer ghosts icons after a Robo-Cut clipboard write | verified false: no ghosting (testlog 2026-10-02, deviation in docs/parity.md) |
+| Explorer shows each verb's `Icon` (commit e13fa37) in the classic menu | **unverified**; the 2026-10-02 builds had no icons |
+| crash.log written and rotated; an interrupted job reported once; the oversized-selection toast; install refusing an unsafe profile path | **unverified**; Core decisions tested on Linux |
 | Robocopy `/MOV` deletes the source of a "same" file it skipped | **unverified**; the design no longer depends on it either way |
 | A killed robocopy leaves its in-flight files at full length | verified (testlog 2026-10-02, cancel entry); cleanup no longer depends on it |
 | `CopyFileEx` sets the archive bit like Explorer's copy | **unverified** |
@@ -559,9 +599,11 @@ and asks rather than editing a file it does not own.
 2. **Preferred DropEffect for copy:** the design fixes 1. Explorer's own Ctrl+C writes 5
    (copy | link), measured 2026-10-02. Both values paste as a copy, in both directions
    (testlog 2026-10-02); 1 stays.
-3. **Menu icon:** without an `.ico` the verbs have no icon. Adding one means a binary asset and
-   an `Icon` registry value. Explorer's own classic Cut, Copy and Paste show no icon either
-   (measured 2026-10-02).
+3. **Menu icon:** settled in commit e13fa37. Each verb has an `.ico` written beside the
+   installed exe and an `Icon` registry value pointing at it (section 4); uninstall deletes
+   both. Explorer's own classic Cut, Copy and Paste show no icon (measured 2026-10-02), so this
+   is a deviation, listed in docs/parity.md. That Explorer displays the icons is unverified
+   on Windows.
 4. **Uninstall deletes config and logs** (the privacy-preserving choice). A `--keep-data` flag is
    possible if users want settings to survive reinstall.
 5. **CLI `--wait`** (block until the paste finishes) would make VM automation simpler. It needs a
@@ -645,8 +687,8 @@ Known gaps carried into the Windows phase:
   the same killed run (section 6). Resolved after the merge: cleanup deletes only files robocopy
   held open at the kill (section 6, testlog 2026-10-02 cancel entry).
 - `CF_HDROP` size is not capped on Robo-Copy; Robo-Paste refuses past its limit.
-- An oversized selection makes `Execute` return `E_FAIL` without a toast; no COM call timeout
-  guards against a hostile in-process `IShellItemArray` that blocks.
+- No COM call timeout guards against a hostile `IShellItemArray` that blocks. (An oversized
+  selection is now refused with a toast, section 5; unverified on Windows.)
 - The first-run install offer (`Installer.OfferInstall`) uses the native TaskDialog, before any
   Gridline font is loaded.
 - Hand edits of `startWithWindows` reload the setting but do not rewrite the Run value; only a

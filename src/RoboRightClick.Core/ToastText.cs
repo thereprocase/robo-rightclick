@@ -37,6 +37,12 @@ public enum VerbRefusal
     AlreadyBeingMoved,
 
     /// <summary>
+    /// The selection handed to the verb is over <see cref="SelectionLimits"/>: more items, or
+    /// more path text, than one click accepts. Refused whole, never truncated.
+    /// </summary>
+    SelectionTooLarge,
+
+    /// <summary>
     /// Something unexpected stopped the verb before it could hand anything on. Without this,
     /// an exception inside the dispatcher would leave the click with no visible result.
     /// </summary>
@@ -166,6 +172,11 @@ public static class ToastText
             "Only files and folders on a drive or network share can be Robo-copied or Robo-cut.",
             ToastKind.Warning),
         VerbRefusal.AlreadyBeingMoved => new("Already moving", "These items are already being moved.", ToastKind.Info),
+        VerbRefusal.SelectionTooLarge => new(
+            "Too many items selected",
+            $"Robo-Copy, Robo-Cut and Robo-Paste take up to {SelectionLimits.MaxItems:N0} selected items at once, "
+                + "fewer when their paths are very long. Select the folder that holds them instead.",
+            ToastKind.Warning),
         VerbRefusal.Failed => new("Something went wrong", "Robo-Copy, Robo-Cut or Robo-Paste could not finish. Try again.", ToastKind.Warning),
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };
@@ -196,9 +207,11 @@ public static class ToastText
 
     /// <summary>
     /// Path-free in every mode: setting names only. Shows the first problem so the user
-    /// knows what to fix; Settings lists the rest.
+    /// knows what to fix; Settings lists the rest. When this version may not save over the
+    /// file (<paramref name="savesRefused"/>, <see cref="SettingsLoadResult.SavesRefused"/>),
+    /// Settings cannot fix it, so the toast names the steps that can instead.
     /// </summary>
-    public static Toast ForSettingsProblems(IReadOnlyList<string> problems)
+    public static Toast ForSettingsProblems(IReadOnlyList<string> problems, bool savesRefused = false)
     {
         var first = problems.Count > 0 ? problems[0] : "a setting was invalid";
         var more = problems.Count switch
@@ -207,6 +220,9 @@ public static class ToastText
             2 => " (and 1 more)",
             _ => $" (and {problems.Count - 1} more)",
         };
-        return new Toast("Settings problem", $"config.json: {first}{more}. Open Settings to fix.", ToastKind.Warning);
+        var next = savesRefused
+            ? "Settings cannot save over this file; install the newer version, or delete config.json to start from the defaults."
+            : "Open Settings to fix.";
+        return new Toast("Settings problem", $"config.json: {first}{more}. {next}", ToastKind.Warning);
     }
 }

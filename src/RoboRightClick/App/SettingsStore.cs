@@ -15,7 +15,10 @@ namespace RoboRightClick.App;
 /// config folder, debounced by about 500 ms, and reloaded. If the last load found the file
 /// unreadable as JSON, the first save copies it to config.json.bad first, so a typo never
 /// silently costs the user their whole file. The config folder is the only place ephemeral
-/// mode writes.
+/// mode writes. A file written by a newer version, or one whose version cannot be read
+/// (<see cref="SettingsLoadResult.SavesRefused"/>), is loaded for the settings this version
+/// knows and never saved over: every save first re-reads the file and refuses with
+/// <see cref="NewerConfigException"/> (<see cref="SettingsSerializer.MaySave"/>).
 /// </remarks>
 internal sealed class SettingsStore : IDisposable
 {
@@ -46,6 +49,7 @@ internal sealed class SettingsStore : IDisposable
     // of overwriting the newer settings in memory.
     private int _generation;
     private bool _lastLoadUnreadable;
+    private bool _lastLoadRefusesSaves;
     private int _readAttempts;
 
     private SynchronizationContext? _ui;
@@ -64,6 +68,18 @@ internal sealed class SettingsStore : IDisposable
 
     /// <summary>Problems from the last load.</summary>
     public IReadOnlyList<string> LoadProblems => _loadProblems;
+
+    /// <summary>The last load found a file this version must not save over (<see cref="SettingsLoadResult.SavesRefused"/>).</summary>
+    public bool SavesRefused
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _lastLoadRefusesSaves;
+            }
+        }
+    }
 
     /// <summary>Raised on the UI thread after <see cref="Current"/> changes (save or external edit).</summary>
     public event EventHandler<Settings>? Changed;
@@ -104,6 +120,11 @@ internal sealed class SettingsStore : IDisposable
     /// <see cref="Install.RegistryWriter.SetStartWithWindows"/>. The watcher ignores the
     /// app's own write.
     /// </summary>
+    /// <exception cref="NewerConfigException">
+    /// config.json was written by a newer version or its version cannot be read (known from
+    /// the last load, or found on disk now): nothing is written and <see cref="Current"/> is unchanged. It is an IOException,
+    /// so every caller's existing save-failure message shows it.
+    /// </exception>
     /// <exception cref="IOException">The file could not be written; <see cref="Current"/> is unchanged.</exception>
     /// <exception cref="UnauthorizedAccessException">As above.</exception>
     public void Save(Settings settings)
@@ -112,6 +133,12 @@ internal sealed class SettingsStore : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
+            var onDisk = TryReadConfigText(out var readFailed);
+            if (!SettingsSerializer.MaySave(onDisk, readFailed, _lastLoadRefusesSaves))
+            {
+                throw new NewerConfigException();
+            }
             Directory.CreateDirectory(Paths.ConfigDirectory);
             if (_lastLoadUnreadable && File.Exists(Paths.ConfigFile))
             {
@@ -122,6 +149,7 @@ internal sealed class SettingsStore : IDisposable
             _generation++;
             _lastKnownText = text;
             _lastLoadUnreadable = false;
+            _lastLoadRefusesSaves = false;
             _current = settings;
             _loadProblems = [];
 
@@ -180,12 +208,14 @@ internal sealed class SettingsStore : IDisposable
         if (text is null)
         {
             _lastLoadUnreadable = false;
+            _lastLoadRefusesSaves = false;
             _current = Settings.Default;
             _loadProblems = [];
             return;
         }
         var result = SettingsSerializer.Parse(text);
         _lastLoadUnreadable = result.Unreadable;
+        _lastLoadRefusesSaves = result.SavesRefused;
         _current = result.Settings;
         _loadProblems = result.Problems;
     }
@@ -335,5 +365,18 @@ internal sealed class SettingsStore : IDisposable
             readFailed = true;
             return null;
         }
+    }
+}
+
+/// <summary>
+/// A save refused because config.json comes from a newer version, or its version cannot be
+/// read (<see cref="SettingsLoadResult.SavesRefused"/>). Derived from IOException
+/// so the tray's and the Settings window's save-failure handling show its message as is.
+/// </summary>
+internal sealed class NewerConfigException : IOException
+{
+    public NewerConfigException()
+        : base(SettingsSerializer.NewerVersionSaveRefusal)
+    {
     }
 }

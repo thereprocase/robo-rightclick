@@ -30,7 +30,14 @@ internal static class Installer
     private const string BusyMessage =
         "RoboRightClick is still running and has jobs in progress. Finish or cancel them, then try again.";
 
+    private const string NewerConfigKeptMessage =
+        "config.json was written by a newer version of RoboRightClick, or its \"version\" field is damaged, "
+        + "so it was left unchanged; "
+        + "the start-with-Windows choice applies to the registry only.";
+
     /// <summary>
+    /// 0. <see cref="UninstallPlan.InstallRefusal"/>: a location uninstall would refuse fails
+    /// the install (exit code 1, message) before anything changes.
     /// 1. If a tray is running, SingleInstance.RequestExitAndWait (fails with a message if
     /// it will not exit because jobs are active). 2. Copy the running exe to
     /// AppPaths.InstalledExe unless it already runs from there (copy to a temp name in the
@@ -38,7 +45,8 @@ internal static class Installer
     /// RegistryWriter.Write(Registration.InstallValues(new InstallTarget(installedExe,
     /// Registration.ResolveStartWithWindows(command.StartWithWindows, existing), userSid,
     /// version))). 5. Write the default config.json only if none exists, or write back the
-    /// existing one with an explicit --autostart/--no-autostart applied. 6. Start the
+    /// existing one with an explicit --autostart/--no-autostart applied, unless a newer
+    /// version wrote it (then it is left as it is, and the message says so). 6. Start the
     /// installed exe (tray) with <see cref="CommandLine.AfterInstallSwitch"/>, so it shows the
     /// first-run hint once. 7. Message: "Installed. Right-click files → Show more options
     /// → Robo-Copy / Robo-Cut / Robo-Paste." (none with --quiet; the exit code is the result).
@@ -48,6 +56,13 @@ internal static class Installer
         var quiet = command.Quiet;
         try
         {
+            // First, before the tray is stopped or anything is written: an install uninstall
+            // would later refuse to remove must not happen at all.
+            if (UninstallPlan.InstallRefusal(paths, Environment.GetFolderPath(Environment.SpecialFolder.System)) is { } refusal)
+            {
+                return Fail(refusal, quiet);
+            }
+
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
                 return Fail(BusyMessage, quiet);
@@ -68,10 +83,13 @@ internal static class Installer
                 RegistryWriter.SetStartWithWindows(false, paths.InstalledExe);
             }
 
-            WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
+            var configKept = !WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
             StartTray(paths);
-            return Succeed("Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste.", quiet);
+            return Succeed(
+                "Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste."
+                    + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty),
+                quiet);
         }
         catch (Exception ex)
         {
@@ -124,7 +142,7 @@ internal static class Installer
     /// <summary>
     /// 1. Stop the running tray as in install (refuse while jobs run). 2.
     /// RegistryWriter.Remove(Registration.UninstallRemovals()). 3. Delete exactly the files
-    /// <see cref="UninstallPlan"/> lists (config.json, config.json.bad, history.jsonl, each
+    /// <see cref="UninstallPlan"/> lists (config.json, config.json.bad, history.jsonl, crash.log, each
     /// job folder's job.json and robocopy.log) and then remove those folders with
     /// RemoveDirectory, which fails on anything unexpected left inside: never a blind
     /// recursive delete. Every folder is checked first: its leaf name is the expected one
@@ -253,7 +271,13 @@ internal static class Installer
         return result.Settings;
     }
 
-    private static void WriteConfig(
+    /// <summary>
+    /// Writes config.json as described on <see cref="Install"/>. Returns false when an
+    /// explicit autostart choice was not written because the file comes from a newer version
+    /// or its version cannot be read (<see cref="SettingsSerializer.MayOverwrite"/>): the Run value still follows the
+    /// choice, the file stays exactly as the newer version left it.
+    /// </summary>
+    private static bool WriteConfig(
         AppPaths paths, bool? explicitChoice, bool startWithWindows,
         Settings? existing, string? existingText, bool existingHadProblems)
     {
@@ -261,13 +285,18 @@ internal static class Installer
         {
             Directory.CreateDirectory(paths.ConfigDirectory);
             WriteAtomically(paths.ConfigFile, SettingsSerializer.Serialize(Settings.Default with { StartWithWindows = startWithWindows }));
-            return;
+            return true;
         }
 
         // A plain reinstall leaves the user's file, comments and all, exactly as it is.
         if (explicitChoice is null)
         {
-            return;
+            return true;
+        }
+
+        if (!SettingsSerializer.MayOverwrite(existingText))
+        {
+            return false;
         }
 
         if (existingHadProblems && existingText is not null)
@@ -276,6 +305,7 @@ internal static class Installer
             File.WriteAllText(paths.ConfigFile + UninstallPlan.BackupSuffix, existingText);
         }
         WriteAtomically(paths.ConfigFile, SettingsSerializer.Serialize(existing with { StartWithWindows = startWithWindows }));
+        return true;
     }
 
     private static void WriteAtomically(string path, string contents)

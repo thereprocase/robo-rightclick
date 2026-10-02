@@ -102,9 +102,6 @@ public static class FailureText
 
     private const string CouldNotStart = "The transfer could not be started.";
 
-    /// <summary>Longest free text passed through; longer text is more likely to embed a name.</summary>
-    private const int MaxPassedThroughLength = 300;
-
     private static string ForError(ErrorReported error)
     {
         var known = error.Code switch
@@ -154,37 +151,11 @@ public static class FailureText
     }
 
     /// <summary>
-    /// False for anything that could carry a path or a file name: separators, a drive
-    /// designator, double quotes, a pair of single quotes (how .NET and Windows quote names),
-    /// control characters, or overlong text.
+    /// False for anything that could carry a path or a file name
+    /// (<see cref="PathHeuristic.IsPathFree"/>), or for text longer than
+    /// <see cref="PathHeuristic.MaxPassedThroughLength"/>.
     /// </summary>
-    private static bool IsPathFree(string text)
-    {
-        if (text.Length > MaxPassedThroughLength)
-        {
-            return false;
-        }
-        var singleQuotes = 0;
-        for (var i = 0; i < text.Length; i++)
-        {
-            var c = text[i];
-            switch (c)
-            {
-                case '\\' or '/' or '"' or '“' or '”' or '<' or '>' or '|':
-                    return false;
-                case '\'' or '‘' or '’':
-                    singleQuotes++;
-                    break;
-                case ':' when i > 0 && char.IsAsciiLetter(text[i - 1]) && (i == 1 || !char.IsLetterOrDigit(text[i - 2])):
-                    return false;
-            }
-            if (char.IsControl(c))
-            {
-                return false;
-            }
-        }
-        return singleQuotes < 2;
-    }
+    private static bool IsPathFree(string text) => PathHeuristic.IsPathFree(text);
 
     private static string AsSentence(string text) => text[^1] is '.' or '!' or '?' ? text : text + ".";
 }

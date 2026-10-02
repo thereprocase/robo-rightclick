@@ -14,7 +14,7 @@ public static class AppInfo
 /// </summary>
 /// <param name="InstallDirectory">%LOCALAPPDATA%\Programs\RoboRightClick (per-user, no admin).</param>
 /// <param name="ConfigFile">%APPDATA%\RoboRightClick\config.json: the only file ephemeral mode may write.</param>
-/// <param name="DataDirectory">%LOCALAPPDATA%\RoboRightClick: job logs and history, normal mode only.</param>
+/// <param name="DataDirectory">%LOCALAPPDATA%\RoboRightClick: job logs, history and the crash log, normal mode only.</param>
 public sealed record AppPaths(
     string InstallDirectory,
     string InstalledExe,
@@ -50,6 +50,12 @@ public sealed record AppPaths(
             JobsDirectory: WinPath.Combine(data, JobsFolderName),
             HistoryFile: WinPath.Combine(data, HistoryFileName));
     }
+
+    /// <summary>%LOCALAPPDATA%\RoboRightClick\crash.log (<see cref="CrashLog"/>): normal mode only. Derived, so it cannot leave <see cref="DataDirectory"/>.</summary>
+    public string CrashLogFile => WinPath.Combine(DataDirectory, CrashLog.FileName);
+
+    /// <summary>crash.1.log, the one rotated crash log kept beside <see cref="CrashLogFile"/>.</summary>
+    public string RotatedCrashLogFile => WinPath.Combine(DataDirectory, CrashLog.RotatedFileName);
 
     /// <summary>The folder for one job's job.json and robocopy.log.</summary>
     public string JobFolder(DateTimeOffset createdAt, Guid jobId) =>
