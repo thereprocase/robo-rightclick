@@ -24,14 +24,19 @@ public static class ProgressWindowPolicy
     public static readonly TimeSpan OpenDelay = TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Whether to open the window once <see cref="OpenDelay"/> has passed. A job that is
-    /// gone or already finished gets no window: its outcome reaches the user through the
-    /// toast (errors always notify) and the tray icon's attention state.
+    /// Whether to open the window once <see cref="OpenDelay"/> has passed: for a job still
+    /// going, and for one that already ended in an outcome needing the user (the window
+    /// opens straight into the summary), the way Explorer shows its error dialog however
+    /// quickly a copy fails. The toast alone is not enough there: Windows' Do Not Disturb
+    /// files it away unseen and the tray icon sits in the overflow by default. A job that is
+    /// gone, ended cleanly, or whose outcome the user has already acknowledged gets none.
     /// </summary>
     /// <param name="atDelay">The job's snapshot when the delay ran out; null if the job no longer exists.</param>
     /// <param name="showProgressWindow">The showProgressWindow setting at that moment.</param>
     public static bool ShouldOpen(JobSnapshot? atDelay, bool showProgressWindow) =>
-        showProgressWindow && atDelay is not null && !JobStates.IsTerminal(atDelay.State);
+        showProgressWindow && atDelay is not null
+        && (!JobStates.IsTerminal(atDelay.State)
+            || (OnTerminal(atDelay) == ProgressWindowAction.ShowSummary && !atDelay.Acknowledged));
 
     /// <summary>
     /// Done, a no-op and a plain cancel close the window. DoneWithErrors, Failed and a cancel

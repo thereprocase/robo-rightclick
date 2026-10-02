@@ -28,13 +28,33 @@ public class ProgressWindowPolicyTests
         Assert.False(ProgressWindowPolicy.ShouldOpen(Job(state), showProgressWindow: false));
     }
 
-    [Theory]
-    [InlineData(JobState.Done)]
-    [InlineData(JobState.DoneWithErrors)]
-    [InlineData(JobState.Failed)]
-    [InlineData(JobState.Canceled)]
-    public void Does_not_open_for_a_job_that_already_ended(JobState state) =>
-        Assert.False(ProgressWindowPolicy.ShouldOpen(Job(state), showProgressWindow: true));
+    [Fact]
+    public void Does_not_open_for_a_job_that_already_ended_cleanly()
+    {
+        Assert.False(ProgressWindowPolicy.ShouldOpen(Job(JobState.Done), showProgressWindow: true));
+        Assert.False(ProgressWindowPolicy.ShouldOpen(Job(JobState.Done) with { NoOp = true }, showProgressWindow: true));
+        Assert.False(ProgressWindowPolicy.ShouldOpen(Job(JobState.Canceled), showProgressWindow: true));
+    }
+
+    // Explorer shows its error dialog however fast a copy fails; a toast alone can be filed
+    // away unseen by Do Not Disturb.
+    [Fact]
+    public void A_job_that_failed_before_the_delay_opens_straight_into_its_summary()
+    {
+        var outcomes = new[]
+        {
+            Job(JobState.DoneWithErrors),
+            Job(JobState.Failed),
+            Job(JobState.Canceled) with { DamagedOnCancel = 1 },
+        };
+        foreach (var job in outcomes)
+        {
+            Assert.True(ProgressWindowPolicy.ShouldOpen(job, showProgressWindow: true));
+            Assert.Equal(ProgressWindowAction.ShowSummary, ProgressWindowPolicy.OnTerminal(job));
+            Assert.False(ProgressWindowPolicy.ShouldOpen(job, showProgressWindow: false));
+            Assert.False(ProgressWindowPolicy.ShouldOpen(job with { Acknowledged = true }, showProgressWindow: true));
+        }
+    }
 
     [Fact]
     public void Does_not_open_for_a_job_that_no_longer_exists() =>
@@ -147,8 +167,22 @@ public class ToastBatchTests
     [InlineData(ToastKind.Warning, ToastKind.Error, true)]
     [InlineData(ToastKind.Error, ToastKind.Warning, true)]
     [InlineData(ToastKind.Error, ToastKind.Error, true)]
-    public void A_warning_or_error_is_never_replaced_by_an_info(ToastKind showing, ToastKind incoming, bool replace) =>
+    public void A_warning_or_error_is_never_replaced_by_an_info(ToastKind showing, ToastKind incoming, bool replace)
+    {
         Assert.Equal(replace, ToastBatch.ShouldReplace(showing, incoming));
+        Assert.Equal(replace, ToastBatch.ShouldReplace(showing, TimeSpan.FromSeconds(5), incoming));
+    }
+
+    [Fact]
+    public void A_toast_never_reported_closed_stops_blocking_after_the_assumed_time_on_screen()
+    {
+        var justBefore = ToastBatch.AssumedOnScreen - TimeSpan.FromMilliseconds(1);
+        Assert.False(ToastBatch.ShouldReplace(ToastKind.Error, justBefore, ToastKind.Info));
+        Assert.False(ToastBatch.ShouldReplace(ToastKind.Warning, justBefore, ToastKind.Info));
+        Assert.True(ToastBatch.ShouldReplace(ToastKind.Error, ToastBatch.AssumedOnScreen, ToastKind.Info));
+        Assert.True(ToastBatch.ShouldReplace(ToastKind.Warning, TimeSpan.FromMinutes(10), ToastKind.Info));
+        Assert.InRange(ToastBatch.AssumedOnScreen, ToastBatch.Window, TimeSpan.FromMinutes(1));
+    }
 
     [Fact]
     public void Fit_trims_to_what_a_balloon_holds()

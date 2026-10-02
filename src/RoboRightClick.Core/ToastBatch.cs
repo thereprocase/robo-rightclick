@@ -70,11 +70,27 @@ public static class ToastBatch
     }
 
     /// <summary>
+    /// How long a shown toast is assumed to stay on screen when Windows never reports that it
+    /// closed. The close report (NIN_BALLOONTIMEOUT / NIN_BALLOONHIDE) is not guaranteed, for
+    /// example when Do Not Disturb files the toast away unseen; without a bound, one warning
+    /// would silence every later info toast for the rest of the session.
+    /// </summary>
+    public static readonly TimeSpan AssumedOnScreen = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// Whether an incoming toast may replace the one showing. A warning or error is never
     /// replaced by an info: a later success must not hide a failure the user has not seen.
     /// </summary>
     public static bool ShouldReplace(ToastKind showing, ToastKind incoming) =>
         !(incoming == ToastKind.Info && showing != ToastKind.Info);
+
+    /// <summary>
+    /// <see cref="ShouldReplace(ToastKind, ToastKind)"/> for a toast shown
+    /// <paramref name="shownFor"/> ago: once that is <see cref="AssumedOnScreen"/> or more,
+    /// the toast is taken to be gone and anything may show.
+    /// </summary>
+    public static bool ShouldReplace(ToastKind showing, TimeSpan shownFor, ToastKind incoming) =>
+        shownFor >= AssumedOnScreen || ShouldReplace(showing, incoming);
 
     /// <summary>Trims title and body to what a balloon can hold, marking a cut with an ellipsis.</summary>
     public static Toast Fit(Toast toast) => toast with
