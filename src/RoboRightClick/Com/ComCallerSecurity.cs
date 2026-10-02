@@ -37,22 +37,69 @@ internal static class ComCallerSecurity
                 HResult.E_FAIL);
         }
 
+        nint absolute;
         try
         {
-            // cAuthSvc = -1 lets COM pick its authentication services; the descriptor is the
-            // part that matters. The call fails if COM security was already initialized,
-            // which is the point: it must be the first COM call of the process.
-            var hr = ComNative.CoInitializeSecurity(
-                descriptor, -1, 0, 0,
-                ComNative.RPC_C_AUTHN_LEVEL_PKT_PRIVACY, ComNative.RPC_C_IMP_LEVEL_IDENTIFY,
-                0, ComNative.EOAC_NONE, 0);
-            ComNative.ThrowIfFailed(hr, "CoInitializeSecurity");
+            absolute = ToAbsolute(descriptor);
         }
         finally
         {
             ComNative.LocalFree(descriptor);
         }
+
+        // cAuthSvc = -1 lets COM pick its authentication services; the descriptor is the
+        // part that matters. The call fails if COM security was already initialized,
+        // which is the point: it must be the first COM call of the process.
+        var hr = ComNative.CoInitializeSecurity(
+            absolute, -1, 0, 0,
+            ComNative.RPC_C_AUTHN_LEVEL_PKT_PRIVACY, ComNative.RPC_C_IMP_LEVEL_IDENTIFY,
+            0, ComNative.EOAC_NONE, 0);
+        ComNative.ThrowIfFailed(hr, "CoInitializeSecurity");
     }
+
+    /// <summary>
+    /// CoInitializeSecurity accepts only an absolute-format descriptor; the SDDL converter
+    /// produces a self-relative one, which COM rejects with ERROR_INVALID_SECURITY_DESCR
+    /// (0x80070551, observed on Windows 11 build 26200, docs/testlog.md 2026-10-02).
+    /// The returned buffers are never freed: COM documents no point after which it stops
+    /// reading the descriptor, and they are a few hundred bytes allocated once per process.
+    /// </summary>
+    private static nint ToAbsolute(nint selfRelative)
+    {
+        uint sdSize = 0, daclSize = 0, saclSize = 0, ownerSize = 0, groupSize = 0;
+        // Sizing call: expected to fail with ERROR_INSUFFICIENT_BUFFER and fill the sizes.
+        ComNative.MakeAbsoluteSD(
+            selfRelative, 0, ref sdSize, 0, ref daclSize, 0, ref saclSize, 0, ref ownerSize, 0, ref groupSize);
+        if (sdSize == 0)
+        {
+            throw new COMException(
+                $"The COM access descriptor could not be sized (Win32 error {Marshal.GetLastPInvokeError()}).",
+                HResult.E_FAIL);
+        }
+
+        var sd = Allocate(sdSize);
+        var dacl = Allocate(daclSize);
+        var sacl = Allocate(saclSize);
+        var owner = Allocate(ownerSize);
+        var group = Allocate(groupSize);
+        var buffers = new[] { sd, dacl, sacl, owner, group };
+        if (!ComNative.MakeAbsoluteSD(
+                selfRelative, sd, ref sdSize, dacl, ref daclSize, sacl, ref saclSize, owner, ref ownerSize, group, ref groupSize))
+        {
+            var error = Marshal.GetLastPInvokeError();
+            foreach (var buffer in buffers)
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+            throw new COMException(
+                $"The COM access descriptor could not be made absolute (Win32 error {error}).",
+                HResult.E_FAIL);
+        }
+        return sd;
+    }
+
+    /// <summary>Zero bytes (an absent DACL, SACL, owner or group) is a null pointer, which MakeAbsoluteSD accepts.</summary>
+    private static nint Allocate(uint size) => size == 0 ? 0 : Marshal.AllocHGlobal((int)size);
 
     /// <summary>
     /// Inside an incoming call: CoImpersonateClient, OpenThreadToken, GetTokenInformation

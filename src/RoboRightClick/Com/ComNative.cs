@@ -57,6 +57,21 @@ internal static partial class ComNative
     public static partial bool ConvertStringSecurityDescriptorToSecurityDescriptor(
         string stringSecurityDescriptor, uint stringSdRevision, out nint securityDescriptor, out uint securityDescriptorSize);
 
+    /// <summary>
+    /// Copies a self-relative security descriptor into absolute form: the descriptor and
+    /// its DACL, SACL, owner and group each in a caller-supplied buffer. Called once with
+    /// zero sizes to learn them (fails with ERROR_INSUFFICIENT_BUFFER), then with buffers.
+    /// </summary>
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool MakeAbsoluteSD(
+        nint pSelfRelativeSd,
+        nint pAbsoluteSd, ref uint lpdwAbsoluteSdSize,
+        nint pDacl, ref uint lpdwDaclSize,
+        nint pSacl, ref uint lpdwSaclSize,
+        nint pOwner, ref uint lpdwOwnerSize,
+        nint pPrimaryGroup, ref uint lpdwPrimaryGroupSize);
+
     /// <summary>Frees what ConvertStringSecurityDescriptorToSecurityDescriptor allocated. Returns 0 on success.</summary>
     [LibraryImport("kernel32.dll")]
     public static partial nint LocalFree(nint hMem);
