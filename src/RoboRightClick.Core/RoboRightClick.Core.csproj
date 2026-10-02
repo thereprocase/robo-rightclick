@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure logic only: no file system, no clock, no Win32. Everything here is
+       verifiable on Linux; keep as much behavior in this project as possible. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="RoboRightClick.Core.Tests" />
+  </ItemGroup>
+
+</Project>

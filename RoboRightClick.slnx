@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RoboRightClick.Core/RoboRightClick.Core.csproj" />
+    <Project Path="src/RoboRightClick/RoboRightClick.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RoboRightClick.Core.Tests/RoboRightClick.Core.Tests.csproj" />
+  </Folder>
+</Solution>
