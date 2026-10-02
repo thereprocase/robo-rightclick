@@ -37,7 +37,7 @@ internal static class Program
         // suspect. A failure leaves the default search order, which the attribute still narrows.
         AppNative.SetDefaultDllDirectories(AppNative.LOAD_LIBRARY_SEARCH_SYSTEM32);
 
-        ApplicationConfiguration.Initialize();
+        InitializeWinForms();
         CrashPolicy.Install(
             ephemeralJobsActive: () => Volatile.Read(ref s_jobs)?.EphemeralJobsActive ?? false,
             killChildren: () => Volatile.Read(ref s_jobs)?.KillRunningProcesses(),
@@ -53,6 +53,27 @@ internal static class Program
             CliError error => CliRunner.PrintUsage(error.Message),
             var other => throw new InvalidOperationException($"Unhandled command {other.GetType().Name}."),
         };
+    }
+
+    /// <summary>
+    /// ApplicationConfiguration.Initialize, except that visual styles are optional. Enabling
+    /// them writes a manifest to %TEMP%; a process started at low integrity may not write
+    /// there, and the UnauthorizedAccessException ended the process before it could even ask
+    /// the tray, so a refused call crashed (0xE0434352) instead of exiting 1. Every Gridline
+    /// control draws itself, so the app looks the same without them.
+    /// </summary>
+    private static void InitializeWinForms()
+    {
+        try
+        {
+            Application.EnableVisualStyles();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            // Carry on with classic styles.
+        }
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
     }
 
     private static int RunTray(CliRunTray tray)
