@@ -576,9 +576,7 @@ internal sealed class SettingsWindow : Gridline.Window
             _loadNotice.Visible = false;
             return;
         }
-        _loadNotice.Text = "config.json has problems, so these settings are using their defaults: "
-            + string.Join("; ", problems)
-            + ". Save writes the values shown here and fixes the file.";
+        _loadNotice.Text = SettingsLoadNotice.Compose(problems);
         _loadNotice.Visible = true;
         foreach (var field in _fields)
         {

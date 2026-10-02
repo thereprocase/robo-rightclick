@@ -278,6 +278,44 @@ public class HotkeySpecTests
         Assert.DoesNotContain(result.Problems, SettingsSerializer.IsPasteHotkeyProblem);
     }
 
+    // ---- Settings load notice -------------------------------------------------------
+
+    [Fact]
+    public void A_hotkey_problem_alone_says_off_and_never_default()
+    {
+        var notice = SettingsLoadNotice.Compose(Load("\"Ctrl+V\"").Problems);
+
+        Assert.StartsWith("config.json has a problem, so the hotkey is off: 'pasteHotkey' ", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("default", notice, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, CountOf("is off", notice));
+        Assert.EndsWith("Save writes the values shown here and fixes the file.", notice, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Hotkey_and_other_problems_get_a_sentence_each()
+    {
+        var result = SettingsSerializer.Parse("""{ "threads": 500, "pasteHotkey": "Ctrl+Alt+V" }""");
+        var notice = SettingsLoadNotice.Compose(result.Problems);
+
+        var defaults = notice.IndexOf("using their defaults: 'threads'", StringComparison.Ordinal);
+        var off = notice.IndexOf("The hotkey is off: 'pasteHotkey'", StringComparison.Ordinal);
+        Assert.True(defaults >= 0 && off > defaults, notice);
+        Assert.DoesNotContain("pasteHotkey", notice[..off], StringComparison.Ordinal);
+        Assert.Equal(1, CountOf("is off", notice));
+    }
+
+    [Fact]
+    public void Other_problems_keep_the_defaults_wording_and_no_problems_say_nothing()
+    {
+        var notice = SettingsLoadNotice.Compose(SettingsSerializer.Parse("""{ "threads": 500 }""").Problems);
+        Assert.StartsWith("config.json has problems, so these settings are using their defaults: 'threads' ", notice, StringComparison.Ordinal);
+        Assert.DoesNotContain("hotkey", notice, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(string.Empty, SettingsLoadNotice.Compose([]));
+    }
+
+    private static int CountOf(string part, string text) =>
+        (text.Length - text.Replace(part, string.Empty, StringComparison.Ordinal).Length) / part.Length;
+
     // ---- tray line ------------------------------------------------------------------
 
     [Fact]
