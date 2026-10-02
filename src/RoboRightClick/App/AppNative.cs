@@ -56,4 +56,30 @@ internal static partial class AppNative
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShutdownBlockReasonDestroy(nint hWnd);
+
+    /// <summary>
+    /// Makes a font in memory available to GDI in this process only. GDI+'s
+    /// PrivateFontCollection does not: TextRenderer and every standard control draw with GDI,
+    /// which would otherwise substitute another font. Returns 0 on failure.
+    /// </summary>
+    [LibraryImport("gdi32.dll")]
+    public static partial nint AddFontMemResourceEx(nint pFileView, uint cjSize, nint pvReserved, ref uint pNumFonts);
+
+    [LibraryImport("gdi32.dll")]
+    public static partial nint CreateCompatibleDC(nint hdc);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DeleteDC(nint hdc);
+
+    [LibraryImport("gdi32.dll")]
+    public static partial nint SelectObject(nint hdc, nint h);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool DeleteObject(nint ho);
+
+    /// <summary>The face name of the font GDI actually selected, which differs from the one asked for when it substituted.</summary>
+    [LibraryImport("gdi32.dll", EntryPoint = "GetTextFaceW")]
+    public static unsafe partial int GetTextFace(nint hdc, int c, char* lpName);
 }

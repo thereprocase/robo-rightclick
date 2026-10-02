@@ -72,13 +72,14 @@ internal static class Gridline
 
     private static readonly PrivateFontCollection Collection = new();
     private static readonly List<IntPtr> FontMemory = [];
-    private static FontFamily? _sans;
-    private static FontFamily? _mono;
+    private static readonly HashSet<FontCut> Resolved = [];
     private static bool _loaded;
 
     /// <summary>
-    /// Loads the embedded IBM Plex faces once. If anything fails, the app falls back to
-    /// Segoe UI and Consolas rather than refusing to start over a font.
+    /// Loads the embedded IBM Plex faces once, for GDI+ (Font objects) and for GDI (TextRenderer
+    /// and standard controls, which never see a PrivateFontCollection). Each cut is then checked
+    /// through GDI; a cut GDI does not resolve to its own face falls back to Segoe UI or Consolas,
+    /// so a loading problem shows the documented fallback rather than an arbitrary substitute.
     /// </summary>
     public static void LoadFonts()
     {
@@ -99,49 +100,83 @@ internal static class Gridline
                 }
                 var bytes = new byte[stream.Length];
                 stream.ReadExactly(bytes);
-                // AddMemoryFont keeps a pointer to the data, so the memory lives for the process.
+                // Both APIs keep using the data, so the memory lives for the process.
                 var memory = Marshal.AllocCoTaskMem(bytes.Length);
                 Marshal.Copy(bytes, 0, memory, bytes.Length);
-                Collection.AddMemoryFont(memory, bytes.Length);
                 FontMemory.Add(memory);
+                Collection.AddMemoryFont(memory, bytes.Length);
+                uint count = 0;
+                _ = App.AppNative.AddFontMemResourceEx(memory, (uint)bytes.Length, 0, ref count);
             }
             catch (Exception ex) when (ex is IOException or ArgumentException or ExternalException)
             {
-                // Fall through to the system fallbacks below.
+                // That cut fails the check below and uses its fallback.
             }
         }
-        _sans = Collection.Families.FirstOrDefault(f => f.Name == "IBM Plex Sans");
-        _mono = Collection.Families.FirstOrDefault(f => f.Name == "IBM Plex Mono");
+        foreach (var cut in GridlineFonts.All)
+        {
+            if (Family(GridlineFonts.FamilyName(cut)) is { } family && GdiResolves(family))
+            {
+                Resolved.Add(cut);
+            }
+        }
+        // Path-free, like the app's other debug lines; read with a debug-output viewer.
+        System.Diagnostics.Trace.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+            $"RoboRightClick fonts: {Resolved.Count} of {GridlineFonts.All.Count} Plex cuts resolved by GDI; fallback for: {string.Join(",", GridlineFonts.All.Except(Resolved))}; loaded families: {string.Join(",", Collection.Families.Select(f => f.Name))}"));
     }
 
-    /// <summary>
-    /// GDI+ only exposes the regular and bold styles of a family, so the medium and semibold
-    /// Plex cuts load as their own families ("IBM Plex Sans Medium", "IBM Plex Sans SemiBold").
-    /// </summary>
     private static FontFamily? Family(string name) => Collection.Families.FirstOrDefault(f => f.Name == name);
 
-    public static Font Sans(float pixelSize, FontStyle style = FontStyle.Regular) =>
-        Make(_sans, "Segoe UI", pixelSize, style);
+    /// <summary>True when GDI, asked for this family, selects a face of that name and not a substitute.</summary>
+    private static unsafe bool GdiResolves(FontFamily family)
+    {
+        try
+        {
+            using var font = new Font(family, 13f, FontStyle.Regular, GraphicsUnit.Pixel);
+            var hfont = font.ToHfont();
+            var dc = App.AppNative.CreateCompatibleDC(0);
+            try
+            {
+                var previous = App.AppNative.SelectObject(dc, hfont);
+                var buffer = stackalloc char[64];
+                var length = App.AppNative.GetTextFace(dc, 64, buffer);
+                App.AppNative.SelectObject(dc, previous);
+                return length > 0 && new string(buffer, 0, length - 1) == family.Name;
+            }
+            finally
+            {
+                App.AppNative.DeleteDC(dc);
+                App.AppNative.DeleteObject(hfont);
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or ExternalException)
+        {
+            return false;
+        }
+    }
 
-    public static Font SansMedium(float pixelSize) =>
-        Make(Family("IBM Plex Sans Medium") ?? _sans, "Segoe UI", pixelSize, FontStyle.Regular);
+    private static FontCut CutOf(Face face) => face switch
+    {
+        Face.SansMedium => FontCut.SansMedium,
+        Face.SansSemiBold => FontCut.SansSemiBold,
+        Face.Mono => FontCut.Mono,
+        Face.MonoMedium => FontCut.MonoMedium,
+        Face.MonoSemiBold => FontCut.MonoSemiBold,
+        _ => FontCut.Sans,
+    };
 
-    public static Font SansSemiBold(float pixelSize) =>
-        Make(Family("IBM Plex Sans SemiBold") ?? _sans, "Segoe UI Semibold", pixelSize, FontStyle.Regular);
-
-    public static Font Mono(float pixelSize, FontStyle style = FontStyle.Regular) =>
-        Make(_mono, "Consolas", pixelSize, style);
-
-    public static Font MonoMedium(float pixelSize) =>
-        Make(Family("IBM Plex Mono Medium") ?? _mono, "Consolas", pixelSize, FontStyle.Regular);
-
-    public static Font MonoSemiBold(float pixelSize) =>
-        Make(Family("IBM Plex Mono SemiBold") ?? _mono, "Consolas", pixelSize, FontStyle.Bold);
-
-    private static Font Make(FontFamily? family, string fallback, float pixelSize, FontStyle style) =>
-        family is not null
-            ? new Font(family, pixelSize, style, GraphicsUnit.Pixel)
-            : new Font(fallback, pixelSize, style, GraphicsUnit.Pixel);
+    /// <summary>A new font of the cut at <paramref name="pixelSize"/>; the caller owns it. Prefer the cached <see cref="FontAt"/>.</summary>
+    public static Font Create(Face face, float pixelSize)
+    {
+        LoadFonts();
+        var cut = CutOf(face);
+        // Every Plex cut is its own family with one Regular style; asking for Bold would make
+        // GDI embolden an already heavy face.
+        return Resolved.Contains(cut) && Family(GridlineFonts.FamilyName(cut)) is { } family
+            ? new Font(family, pixelSize, FontStyle.Regular, GraphicsUnit.Pixel)
+            : new Font(GridlineFonts.FallbackFamily(cut), pixelSize,
+                GridlineFonts.FallbackBold(cut) ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
+    }
 
     /// <summary>Raised 1 px bevel (button face) inside <paramref name="r"/>.</summary>
     public static void DrawRaised(Graphics g, Rectangle r)
@@ -198,16 +233,7 @@ internal static class Gridline
         var key = (face, logicalPixels, dpi);
         if (!FontCache.TryGetValue(key, out var font))
         {
-            var pixels = logicalPixels * dpi / 96f;
-            font = face switch
-            {
-                Face.SansMedium => SansMedium(pixels),
-                Face.SansSemiBold => SansSemiBold(pixels),
-                Face.Mono => Mono(pixels),
-                Face.MonoMedium => MonoMedium(pixels),
-                Face.MonoSemiBold => MonoSemiBold(pixels),
-                _ => Sans(pixels),
-            };
+            font = Create(face, logicalPixels * dpi / 96f);
             FontCache[key] = font;
         }
         return font;

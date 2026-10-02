@@ -431,7 +431,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             // Pixel-sized, so it is rebuilt for the DPI of the monitor the menu opens on.
             var previous = _menuFont;
-            _menuFont = Gridline.Sans(Gridline.Scale(_menu, (int)Gridline.SizeUi));
+            _menuFont = Gridline.Create(Gridline.Face.Sans, Gridline.Scale(_menu, (int)Gridline.SizeUi));
             _menuFontDpi = dpi;
             _menu.Font = _menuFont;
             previous?.Dispose();
