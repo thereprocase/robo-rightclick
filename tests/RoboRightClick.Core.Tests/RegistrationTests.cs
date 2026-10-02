@@ -73,10 +73,27 @@ public class RegistrationTests
                     Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", verb.MultiSelectModel), values);
                 }
                 Assert.Contains(new RegistryValue(verbKey, "MUIVerb", verb.Label), values);
+                Assert.Contains(new RegistryValue(verbKey, "Icon", Registration.IconPath(Exe, verb)), values);
             }
             Assert.Contains(new RegistryValue(Registration.ClsidKey(verb.Clsid) + @"\LocalServer32", "", "\"" + Exe + "\""), values);
         }
         Assert.Equal(3, ShellVerbs.All.Select(v => v.Clsid).Distinct().Count());
+    }
+
+    [Fact]
+    public void Menu_icons_are_plain_ico_paths_beside_the_installed_exe()
+    {
+        var installDir = WinPath.GetParent(Exe);
+        var names = ShellVerbs.All.Select(ShellVerbs.IconFileName).ToList();
+        Assert.Equal(names.Count, names.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        foreach (var verb in ShellVerbs.All)
+        {
+            var path = Registration.IconPath(Exe, verb);
+            // A bare .ico path, no ",index": the shell then reads every DPI frame in the file.
+            Assert.EndsWith(".ico", path, StringComparison.Ordinal);
+            Assert.DoesNotContain(",", path);
+            Assert.True(WinPath.AreSame(WinPath.GetParent(path), installDir), path);
+        }
     }
 
     [Fact]

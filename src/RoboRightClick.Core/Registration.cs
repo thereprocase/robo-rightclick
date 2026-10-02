@@ -63,6 +63,13 @@ public static class Registration
     /// </summary>
     public static string LocalServerCommand(string exePath) => "\"" + exePath + "\"";
 
+    /// <summary>
+    /// The verb's menu icon: a plain path to an .ico beside the exe (no ",index"), so the
+    /// shell loads the frame that matches the menu's DPI from the file itself.
+    /// </summary>
+    public static string IconPath(string exePath, ShellVerbInfo verb) =>
+        WinPath.Combine(WinPath.GetParent(exePath), ShellVerbs.IconFileName(verb));
+
     public static string UninstallCommand(string exePath) => LocalServerCommand(exePath) + " --uninstall";
 
     public static IReadOnlyList<RegistryValue> InstallValues(InstallTarget target)
@@ -86,6 +93,7 @@ public static class Registration
             {
                 var verbKey = VerbKey(association, verb);
                 values.Add(new(verbKey, "MUIVerb", verb.Label));
+                values.Add(new(verbKey, "Icon", IconPath(exe, verb)));
                 if (ShellVerbs.MultiSelectModelFor(verb, association) is { } model)
                 {
                     values.Add(new(verbKey, "MultiSelectModel", model));

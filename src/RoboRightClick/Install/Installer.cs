@@ -54,6 +54,7 @@ internal static class Installer
             }
 
             CopyExecutable(HostEnvironment.ExecutablePath, paths);
+            WriteMenuIcons(paths);
 
             var existing = ReadExistingConfig(paths, out var existingText, out var existingHadProblems);
             var startWithWindows = Registration.ResolveStartWithWindows(command.StartWithWindows, existing);
@@ -200,6 +201,39 @@ internal static class Installer
             if (File.Exists(temp))
             {
                 File.Delete(temp);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Writes each verb's .ico beside the installed exe, where its registry Icon value points.
+    /// Rewritten on every install so a reinstall also refreshes the art. Each file goes to a
+    /// temp name first, so the shell never reads a half-written icon.
+    /// </summary>
+    private static void WriteMenuIcons(AppPaths paths)
+    {
+        var assembly = typeof(Installer).Assembly;
+        foreach (var verb in ShellVerbs.All)
+        {
+            var name = ShellVerbs.IconFileName(verb);
+            using var source = assembly.GetManifestResourceStream("RoboRightClick.Icons." + name)
+                ?? throw new InvalidOperationException($"The {verb.Label} menu icon is missing from this build.");
+            var target = WinPath.Combine(paths.InstallDirectory, name);
+            var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var file = File.Create(temp))
+                {
+                    source.CopyTo(file);
+                }
+                File.Move(temp, target, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
             }
         }
     }

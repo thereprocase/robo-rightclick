@@ -80,10 +80,18 @@ public sealed record UninstallPlan(
         files.Add(paths.ConfigFile + AppPaths.TempSuffix);
         AddDirectory(paths.ConfigDirectory, AppInfo.Name);
 
+        // The menu icons are never in use by the running process, so they are deleted here
+        // in both cases; leaving them would make the install folder's removal fail.
+        foreach (var verb in ShellVerbs.All)
+        {
+            files.Add(WinPath.Combine(paths.InstallDirectory, ShellVerbs.IconFileName(verb)));
+        }
+
         if (!runningFromInstallDir)
         {
-            // The installed exe is the only file the installer put there. Anything else in
-            // the folder makes RemoveDirectory fail, which leaves it for the user.
+            // The installed exe and the menu icons are the only files the installer put
+            // there. Anything else in the folder makes RemoveDirectory fail, which leaves it
+            // for the user.
             files.Add(paths.InstalledExe);
             AddDirectory(paths.InstallDirectory, AppInfo.Name);
         }

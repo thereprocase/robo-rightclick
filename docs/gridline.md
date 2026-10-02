@@ -119,6 +119,7 @@ list.
 | `tray-{idle,running,paused,attention}` | The app tile with the title strip in the state color: blue, cyan, amber (plus a pause mark), red. |
 | `tray-*-ephemeral` | The same tile inverted to ink, so ephemeral mode is never mistaken for normal mode. |
 
-ICO files hold 16, 20, 24, 32, 48, 64 and 256 px images (tray icons up to 32). Sizes below
+ICO files hold one hand-fitted frame per common display scale: 16, 20, 24, 28, 32, 36, 40 and
+48 px (100–300%), plus 64 and 256 px (tray icons 16–32). Sizes below
 256 are stored as classic 32-bit DIBs and 256 is stored as PNG. Every Windows icon consumer
 (shell, LoadImage, System.Drawing) accepts that layout.
