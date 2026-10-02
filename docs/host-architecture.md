@@ -475,27 +475,29 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | `GetProcessIoCounters` tracks progress; destination size does not | verified (testlog 2026-10-02) |
 | `NtSuspendProcess`/`NtResumeProcess` pause and resume `/MT:32` cleanly | verified (testlog 2026-10-02) |
 | Metadata flags vs Explorer | verified, deviations in docs/parity.md |
-| Out-of-process DelegateExecute with `REGCLS_MULTIPLEUSE`: 500 items in one call to a running instance | **unverified** (M0 spike 1) |
-| `BHID_DataObject` on Explorer's selection yields `CF_HDROP`; time for 50k items vs per-item reads | **unverified** (spike 1) |
-| `-Embedding` start when the tray is not running; cold-start time; Run-key race | **unverified** (spike 1) |
-| `MultiSelectModel=Single` hides Robo-Paste for multi-folder selections; works on the background verb | **unverified** (spike 1) |
+| Out-of-process DelegateExecute with `REGCLS_MULTIPLEUSE`: 500 items in one call to a running instance | verified (testlog 2026-10-02) |
+| `BHID_DataObject` on Explorer's selection yields `CF_HDROP` | verified (testlog 2026-10-02: 500 items read in 1.6-14 ms, the data-object path, which alone also yields the ID list) |
+| Time for 50k items vs per-item reads | **unverified** (spike 1) |
+| `-Embedding` start when the tray is not running; cold-start time; Run-key race | verified (testlog 2026-10-02: `Execute` 309-382 ms after COM creates the process; race emulated with a plain start, 14 runs); a right-click right after sign-in **unverified** |
+| `MultiSelectModel=Single` hides Robo-Paste for multi-folder selections; works on the background verb | first half verified; the second was false, the background key now has no `MultiSelectModel` (testlog 2026-10-02) |
 | A low-integrity process cannot activate or call the server (`icacls /setintegritylevel low` test exe) | **unverified** (security spike) |
-| HKCU AppID `AccessPermission`/`LaunchPermission` are honored, and do not break Explorer's activation | **unverified** (security spike) |
+| HKCU AppID `AccessPermission`/`LaunchPermission` do not break Explorer's activation | verified (testlog 2026-10-02) |
+| HKCU AppID `AccessPermission`/`LaunchPermission` are honored | **unverified** (security spike) |
 | Explorer allows the tray to take foreground (conflict dialog, progress window) | **unverified** (spike 1) |
 | Remote clients are refused by the output pipe | **unverified** |
 | Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | **unverified** |
 | `DeleteFileIfNotReparsePoint` (handle-based delete, read-only cleared first) deletes partial files and refuses links and folders | **unverified** |
-| A losing `-Embedding` start takes over from a tray that is shutting down (`WaitForReadyOrAcquire`) | **unverified** |
+| A losing `-Embedding` start takes over from a tray that is shutting down (`WaitForReadyOrAcquire`) | outcome verified (testlog 2026-10-02: 5 runs, the call served by the new tray); which branch ran **unverified** |
 | `ShutdownBlockReasonCreate` on a hidden, never-shown top-level window vetoes sign-out with the reason shown | **unverified** |
 | No WER report after `TerminateProcess` while ephemeral jobs run (machine-wide LocalDumps aside) | **unverified** |
 | Rename and `CopyFileEx` on paths over 260 characters with the extended-length prefix | **unverified** |
 | Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | **unverified** |
-| `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | **unverified** |
-| Explorer ghosts icons after a Robo-Cut clipboard write | **unverified** (M0 spike 5) |
+| `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | verified (testlog 2026-10-02); the planted-DLL check **unverified** |
+| Explorer ghosts icons after a Robo-Cut clipboard write | verified false: no ghosting (testlog 2026-10-02, deviation in docs/parity.md) |
 | Robocopy `/MOV` deletes the source of a "same" file it skipped | **unverified**; the design no longer depends on it either way |
 | A killed robocopy leaves its in-flight files at full length (cancel cleanup's premise) | **unverified** |
 | `CopyFileEx` sets the archive bit like Explorer's copy | **unverified** |
-| Generated COM vtables match the shell's (`[GeneratedComInterface]` on these IDLs) | **unverified**; compile-time only |
+| Generated COM vtables match the shell's (`[GeneratedComInterface]` on these IDLs) | verified for every method the app calls: `IClassFactory`, `IExecuteCommand`, `IObjectWithSelection`, `IInitializeCommand`, `IShellItemArray.BindToHandler`/`GetCount`, `IDataObject.GetData` (testlog 2026-10-02) |
 | Everything else in the host | **unverified**; cross-compiles only |
 
 ## 13. Work packages (disjoint file ownership)
