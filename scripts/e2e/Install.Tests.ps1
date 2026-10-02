@@ -22,7 +22,7 @@ New-Item -ItemType Directory -Force -Path $dist | Out-Null
 $downloaded = Join-Path $dist 'RoboRightClick.exe'
 Copy-Item -LiteralPath $Exe -Destination $downloaded -Force
 
-$code = Invoke-RoboCommand -ExePath $downloaded -Arguments @('--install')
+$code = Invoke-RoboCommand -ExePath $downloaded -Arguments @('--install', '--quiet')
 Assert-That ($code -eq 0) "--install exits 0 (got $code)"
 Assert-That (Test-Path -LiteralPath $script:E2E.InstalledExe) 'the exe was copied to the install folder'
 

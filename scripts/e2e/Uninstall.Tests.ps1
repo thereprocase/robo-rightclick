@@ -12,7 +12,7 @@ Initialize-E2E -Root $Root
 Assert-Installed
 
 Write-Host 'Uninstall.Tests'
-$code = Invoke-RoboCommand -ExePath $script:E2E.InstalledExe -Arguments @('--uninstall')
+$code = Invoke-RoboCommand -ExePath $script:E2E.InstalledExe -Arguments @('--uninstall', '--quiet')
 Assert-That ($code -eq 0) "--uninstall exits 0 (got $code)"
 
 # The install folder is deleted by a helper process after this one exits, so poll for it.

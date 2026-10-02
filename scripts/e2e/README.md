@@ -63,8 +63,9 @@ names a machine, an address or a user.
 
 ## Things the scripts assume
 
-- Install and uninstall report in a message box; the scripts press its OK button through UI
-  Automation. If the app's dialog changes, `Invoke-RoboCommand` in `Common.ps1` needs the new button name.
+- Install and uninstall run with `--quiet` and report only through the exit code. As a
+  fallback, `Invoke-RoboCommand` in `Common.ps1` presses a message box's `OK` button through UI
+  Automation if one still appears.
 - The progress window's Cancel button has the accessible name `Cancel`.
 - The expected registry table in `Common.ps1` mirrors `Registration.InstallValues`. When that
   changes, change the table in the same commit.

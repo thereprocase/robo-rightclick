@@ -291,8 +291,9 @@ function Invoke-UiaButton($Element) {
     $pattern.Invoke()
 }
 
-# Install and uninstall report through a message box. Press OK so a script is not left
-# waiting on it. Returns the exit code.
+# Install and uninstall are run with --quiet, which shows no message box; the exit code is the
+# result. Pressing OK on any box that still appears is kept as a fallback, so a build without
+# --quiet cannot leave the script waiting. Returns the exit code.
 function Invoke-RoboCommand {
     param([Parameter(Mandatory)][string]$ExePath, [string[]]$Arguments = @(), [int]$TimeoutSec = 90)
     $argText = ($Arguments | ForEach-Object { if ($_ -match '^--?[A-Za-z]') { $_ } else { Quote-Arg $_ } }) -join ' '

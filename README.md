@@ -35,8 +35,9 @@ same SHA256.
 Per user. No administrator rights, and no Explorer settings are changed.
 
 - Double-click `RoboRightClick.exe` outside the install folder. It offers to install.
-- Or from a terminal: `RoboRightClick.exe --install [--autostart | --no-autostart]`.
+- Or from a terminal: `RoboRightClick.exe --install [--autostart | --no-autostart] [--quiet]`.
   Without a flag, a first install starts with Windows and a reinstall keeps your setting.
+  `--quiet` skips the result message box; the exit code (0 ok, 1 failed) is the result.
 
 Install copies the exe to `%LOCALAPPDATA%\Programs\RoboRightClick\`, writes the registry
 keys listed in [docs/host-architecture.md](docs/host-architecture.md) (section 4) under
@@ -51,7 +52,7 @@ Shift+F10 with the item selected. **Robo-Copy** and **Robo-Cut** appear on files
 ## Uninstall
 
 Settings, Apps, Installed apps, **RoboRightClick**, Uninstall. Or run
-`RoboRightClick.exe --uninstall`. It removes the registry keys install wrote, the Run entry,
+`RoboRightClick.exe --uninstall [--quiet]`. It removes the registry keys install wrote, the Run entry,
 the config, history and job logs, and the install folder. Nothing else is touched.
 
 ## Scripting
