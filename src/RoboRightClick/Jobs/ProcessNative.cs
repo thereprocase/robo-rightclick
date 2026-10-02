@@ -56,6 +56,35 @@ internal static unsafe partial class ProcessNative
     public const uint OPEN_EXISTING = 3;
     public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
 
+    /// <summary>
+    /// The form of <paramref name="path"/> to hand to the raw path APIs in this class. The
+    /// app has no longPathAware manifest, so without the extended-length prefix they stop at
+    /// MAX_PATH, while PathPolicy accepts paths up to 32,767 characters and the .NET file
+    /// APIs add the prefix themselves. Shorter paths are passed unchanged. Paths reaching
+    /// here have passed PathPolicy (fully qualified, no "." or ".." segments, no '/'), so the
+    /// prefix switches off no normalization they need.
+    /// </summary>
+    public static string ExtendedLengthPath(string path)
+    {
+        // 248, not 260: directory operations stop at MAX_PATH minus room for an 8.3 name.
+        const int ShortPathLimit = 248;
+        if (path.Length < ShortPathLimit
+            || path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        if (path.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return @"\\?\UNC\" + path[2..];
+        }
+
+        return path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == '\\'
+            ? @"\\?\" + path
+            : path;
+    }
+
     public const int ERROR_NOT_SAME_DEVICE = 17;
     public const int ERROR_ALREADY_EXISTS = 183;
     public const int ERROR_REQUEST_ABORTED = 1235;

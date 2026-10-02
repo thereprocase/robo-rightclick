@@ -25,7 +25,7 @@ internal static unsafe class InProcessCopier
     /// </summary>
     public static StepOutcome Rename(string source, string destination)
     {
-        if (ProcessNative.MoveFileEx(source, destination, 0))
+        if (ProcessNative.MoveFileEx(ProcessNative.ExtendedLengthPath(source), ProcessNative.ExtendedLengthPath(destination), 0))
         {
             return new StepOutcome([source], [], null, null);
         }
@@ -90,8 +90,8 @@ internal static unsafe class InProcessCopier
         {
             var routine = (nint)(delegate* unmanaged[Stdcall]<long, long, long, long, uint, uint, nint, nint, nint, uint>)&ProgressRoutine;
             var copied = ProcessNative.CopyFileEx(
-                source,
-                destination,
+                ProcessNative.ExtendedLengthPath(source),
+                ProcessNative.ExtendedLengthPath(destination),
                 routine,
                 GCHandle.ToIntPtr(handle),
                 0,
@@ -120,7 +120,8 @@ internal static unsafe class InProcessCopier
 
     /// <summary>
     /// LPPROGRESS_ROUTINE. Runs on the copying thread, so blocking here pauses the copy. It
-    /// must not throw into native code: any failure cancels the copy instead.
+    /// must not throw into native code: a failure of the pause gate or the state cancels
+    /// the copy instead; a failure of the progress observer is ignored.
     /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static uint ProgressRoutine(
@@ -142,7 +143,16 @@ internal static unsafe class InProcessCopier
                 return ProcessNative.PROGRESS_CANCEL;
             }
 
-            state.OnBytes(totalBytesTransferred);
+            try
+            {
+                state.OnBytes(totalBytesTransferred);
+            }
+            catch (Exception)
+            {
+                // Progress is display only; a faulty observer must not abort a good copy
+                // and surface as error 1235 the user never caused.
+            }
+
             state.Pause.WaitWhilePaused(state.Cancellation);
             return state.Cancellation.IsCancellationRequested ? ProcessNative.PROGRESS_CANCEL : ProcessNative.PROGRESS_CONTINUE;
         }

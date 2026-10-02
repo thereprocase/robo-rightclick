@@ -101,9 +101,11 @@ internal sealed class ProgressSampler : IDisposable
         {
             // Sampler disposed.
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
         {
-            // Timer disposed between the cancel and the wait.
+            // Timer disposed between the cancel and the wait. Only then: an
+            // ObjectDisposedException from a run is handled inside Sample, because leaving
+            // this loop would end sampling for every job in the app.
         }
     }
 
@@ -125,23 +127,25 @@ internal sealed class ProgressSampler : IDisposable
         {
             lock (_runLock)
             {
-                if (_stopped || pause.IsPaused)
+                if (_stopped)
                 {
                     return;
                 }
 
-                if (!ProcessNative.GetProcessIoCounters(process, out var counters))
-                {
-                    return;
-                }
-
+                // One loop serves every run: nothing from this run (its gate, a handle closed
+                // early, its observer) may throw into the loop and end sampling for the others.
                 try
                 {
+                    if (pause.IsPaused || !ProcessNative.GetProcessIoCounters(process, out var counters))
+                    {
+                        return;
+                    }
+
                     callback((long)counters.ReadTransferCount, owner.Time.GetUtcNow());
                 }
                 catch (Exception)
                 {
-                    // A faulty observer must not end sampling for every other run.
+                    // Skipped this tick; the run's own code reports real failures.
                 }
             }
         }

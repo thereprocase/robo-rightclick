@@ -39,7 +39,8 @@ internal sealed class RobocopyPipe : IDisposable
     /// <summary>
     /// NamedPipeServerStreamAcl.Create: inbound, byte mode, maxNumberOfServerInstances 1,
     /// PipeOptions.Asynchronous | PipeOptions.FirstPipeInstance, PipeSecurity with one rule
-    /// granting the current user ReadWrite, and PipeAccessRule denying NETWORK (S-1-5-2).
+    /// granting the current user ReadWrite plus CreateNewInstance (see the comment in the
+    /// body), and PipeAccessRule denying NETWORK (S-1-5-2).
     /// Fails if the name already exists, which means someone is squatting: the step fails.
     /// </summary>
     public static RobocopyPipe Create(string pipeName)
@@ -55,7 +56,15 @@ internal sealed class RobocopyPipe : IDisposable
             new SecurityIdentifier(WellKnownSidType.NetworkSid, null),
             PipeAccessRights.FullControl,
             AccessControlType.Deny));
-        security.AddAccessRule(new PipeAccessRule(user, PipeAccessRights.ReadWrite, AccessControlType.Allow));
+        // For a pipe, FILE_APPEND_DATA and FILE_CREATE_PIPE_INSTANCE are the same bit, and
+        // GENERIC_WRITE (how a log target is normally opened) maps to FILE_GENERIC_WRITE,
+        // which includes it. ReadWrite alone leaves that bit out, so a GENERIC_WRITE open by
+        // robocopy would be refused. Granting it cannot add a second server instance:
+        // maxNumberOfServerInstances is 1 and this process holds the only one.
+        security.AddAccessRule(new PipeAccessRule(
+            user,
+            PipeAccessRights.ReadWrite | PipeAccessRights.CreateNewInstance,
+            AccessControlType.Allow));
 
         var stream = NamedPipeServerStreamAcl.Create(
             pipeName,
@@ -76,15 +85,23 @@ internal sealed class RobocopyPipe : IDisposable
     /// the right client connects or the token fires. The caller links the token to
     /// robocopy's exit so a robocopy that dies before connecting does not hang the step.
     /// </summary>
-    public async Task WaitForRobocopyAsync(int expectedPid, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The PID is a task so the caller can start this wait before robocopy starts. A
+    /// connect wait that is already pending when robocopy opens the pipe completes at once;
+    /// one that is started late finds a short run already connected and closed, and
+    /// ConnectNamedPipe then fails with ERROR_NO_DATA instead of returning the output.
+    /// A client that connects before the PID is known is held until it is.
+    /// </remarks>
+    public async Task WaitForRobocopyAsync(Task<int> expectedPid, CancellationToken cancellationToken)
     {
         while (true)
         {
             await Stream.WaitForConnectionAsync(cancellationToken).ConfigureAwait(false);
+            var pid = await expectedPid.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             // Fail closed: a client whose identity cannot be read is treated as the wrong one.
             if (ProcessNative.GetNamedPipeClientProcessId(Stream.SafePipeHandle, out var clientPid)
-                && clientPid == (uint)expectedPid)
+                && clientPid == (uint)pid)
             {
                 return;
             }

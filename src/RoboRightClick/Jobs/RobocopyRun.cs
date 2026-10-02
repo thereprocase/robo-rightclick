@@ -34,9 +34,14 @@ internal sealed class RobocopyRun : IDisposable
     private const int ChannelCapacity = 64;
 
     private readonly object _pauseLock = new();
+
+    // Guards _process against Kill: a kill asked for before the process exists is latched
+    // in _killRequested and carried out as soon as it does.
+    private readonly object _processLock = new();
     private int _used;
     private int _disposed;
     private volatile bool _killed;
+    private bool _killRequested;
     private bool _suspended;
     private bool _pauseClosed;
     private Process? _process;
@@ -65,7 +70,8 @@ internal sealed class RobocopyRun : IDisposable
     /// and drained (it carries only a short header). 4. Put it in a kill-on-close job object
     /// so it cannot outlive the app. 5. Subscribe to <see cref="PauseGate.Changed"/>, then
     /// read <see cref="PauseGate.IsPaused"/> and suspend at once if closed, so no pause is
-    /// lost. 6. <see cref="RobocopyPipe.WaitForRobocopyAsync"/>. 7. A reader loop moves line
+    /// lost. 6. <see cref="RobocopyPipe.WaitForRobocopyAsync"/>, already started before
+    /// step 3 so the connect is pending when robocopy opens the pipe. 7. A reader loop moves line
     /// batches into a bounded channel; a consumer parses them and raises the observer
     /// callbacks, so a slow sink never stalls the pipe and robocopy behind it. Track the
     /// process with the sampler. 8. On <paramref name="cancellationToken"/>: kill, wait for
@@ -108,43 +114,45 @@ internal sealed class RobocopyRun : IDisposable
             return Failed("Robocopy could not be started inside a job object.");
         }
 
-        var process = new Process
+        var parser = new RobocopyOutputParser();
+        var completed = new List<string>();
+        var errors = new List<ErrorReported>();
+        var channel = Channel.CreateBounded<IReadOnlyList<string>>(new BoundedChannelOptions(ChannelCapacity)
         {
-            StartInfo = new ProcessStartInfo(RobocopyPath, Arguments)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System),
-            },
-        };
-        // Stdout carries only a short header, but an undrained pipe would stall robocopy.
-        process.OutputDataReceived += static (_, _) => { };
+            FullMode = BoundedChannelFullMode.Wait,
+            SingleReader = true,
+            SingleWriter = true,
+        });
+        var robocopyPid = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var killOnCancel = cancellationToken.Register(Kill);
 
-        try
+        // Both tasks start before robocopy, so the connect wait is already pending when it
+        // opens the pipe (see RobocopyPipe.WaitForRobocopyAsync). From here on every path
+        // awaits both before returning, so Dispose never closes the pipe under the reader.
+        var consumer = Task.Run(() => ConsumeAsync(channel.Reader, parser, completed, errors));
+        var reader = Task.Run(() => ReadAsync(channel.Writer, robocopyPid.Task, waitCts.Token));
+
+        var (process, launchError) = StartProcess();
+        if (process is null)
         {
-            process.Start();
+            robocopyPid.TrySetCanceled();
+            await waitCts.CancelAsync().ConfigureAwait(false);
+            await reader.ConfigureAwait(false);
+            await consumer.ConfigureAwait(false);
+            return Failed($"Robocopy could not be started (error {launchError}).");
         }
-        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
-        {
-            process.Dispose();
-            var code = ex is Win32Exception w ? w.NativeErrorCode : 0;
-            return Failed($"Robocopy could not be started (error {code}).");
-        }
 
-        _process = process;
-        process.BeginOutputReadLine();
-
-        if (!ProcessNative.AssignProcessToJobObject(_job, process.SafeHandle))
+        var jobAssigned = ProcessNative.AssignProcessToJobObject(_job, process.SafeHandle);
+        if (!jobAssigned)
         {
             // Without the job the app could not guarantee robocopy dies with it; stop now.
+            // Its output is still drained below so the kill cannot block on a full pipe.
             Kill();
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            return Failed("Robocopy could not be started inside a job object.");
         }
 
-        using var killOnCancel = cancellationToken.Register(Kill);
-        using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        robocopyPid.SetResult(process.Id);
+
         var exited = process.WaitForExitAsync();
         _ = exited.ContinueWith(
             _ =>
@@ -160,26 +168,25 @@ internal sealed class RobocopyRun : IDisposable
             },
             TaskScheduler.Default);
 
-        // Subscribe, then read the flag: a pause between the two cannot be lost.
-        Pause.Changed += OnPauseChanged;
-        if (Pause.IsPaused)
+        IDisposable? tracking = null;
+        if (jobAssigned)
         {
-            ApplyPause(true);
+            // Subscribe, then read the flag: a pause between the two cannot be lost.
+            Pause.Changed += OnPauseChanged;
+            if (Pause.IsPaused)
+            {
+                ApplyPause(true);
+            }
+
+            try
+            {
+                tracking = Sampler.Track(process.SafeHandle, Pause, Observer.OnBytesRead);
+            }
+            catch (ObjectDisposedException)
+            {
+                // The app is shutting down; the run still ends normally, only without live bytes.
+            }
         }
-
-        var parser = new RobocopyOutputParser();
-        var completed = new List<string>();
-        var errors = new List<ErrorReported>();
-        var channel = Channel.CreateBounded<IReadOnlyList<string>>(new BoundedChannelOptions(ChannelCapacity)
-        {
-            FullMode = BoundedChannelFullMode.Wait,
-            SingleReader = true,
-            SingleWriter = true,
-        });
-
-        var consumer = Task.Run(() => ConsumeAsync(channel.Reader, parser, completed, errors));
-        var reader = Task.Run(() => ReadAsync(channel.Writer, process.Id, waitCts.Token));
-        var tracking = Sampler.Track(process.SafeHandle, Pause, Observer.OnBytesRead);
 
         try
         {
@@ -188,19 +195,26 @@ internal sealed class RobocopyRun : IDisposable
         finally
         {
             // Stop sampling before the job moves on, so no sample from this run arrives late.
-            tracking.Dispose();
+            tracking?.Dispose();
             Pause.Changed -= OnPauseChanged;
         }
 
         var readerFault = await reader.ConfigureAwait(false);
-        await consumer.ConfigureAwait(false);
+        var parseFault = await consumer.ConfigureAwait(false);
 
         var exitCode = process.ExitCode;
-        var finalEvents = parser.Complete(processEndedNormally: !_killed && exitCode >= 0);
-        Collect(finalEvents, completed, errors);
-        RaiseEvents(finalEvents);
+        if (!parseFault)
+        {
+            var finalEvents = parser.Complete(processEndedNormally: !_killed && exitCode >= 0);
+            Collect(finalEvents, completed, errors);
+            RaiseEvents(finalEvents);
+        }
 
-        var failure = readerFault ? "The output from robocopy could not be read." : null;
+        // Even a run that failed keeps what robocopy reported: an unassigned robocopy may
+        // have moved files before the kill landed, and the ledger must know which.
+        var failure = !jobAssigned ? "Robocopy could not be started inside a job object."
+            : readerFault || parseFault ? "The output from robocopy could not be read."
+            : null;
         return new StepOutcome(completed, errors, new RobocopyExitCode(exitCode), failure);
     }
 
@@ -225,7 +239,7 @@ internal sealed class RobocopyRun : IDisposable
     }
 
     /// <summary>Drains the pipe into the channel. Returns true when the pipe could not be read (robocopy is then killed).</summary>
-    private async Task<bool> ReadAsync(ChannelWriter<IReadOnlyList<string>> writer, int robocopyPid, CancellationToken waitToken)
+    private async Task<bool> ReadAsync(ChannelWriter<IReadOnlyList<string>> writer, Task<int> robocopyPid, CancellationToken waitToken)
     {
         var pipe = _pipe!;
         try
@@ -243,9 +257,10 @@ internal sealed class RobocopyRun : IDisposable
             // Robocopy exited or was canceled before a trusted client connected: the exit code decides.
             return false;
         }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException or UnauthorizedAccessException)
+        catch (Exception)
         {
-            // Nobody is reading the pipe any more, and robocopy would block on it: stop it.
+            // Whatever the fault, nobody is reading the pipe any more and robocopy would
+            // block on it: stop it. Kill is latched if robocopy has not started yet.
             Kill();
             return true;
         }
@@ -255,18 +270,37 @@ internal sealed class RobocopyRun : IDisposable
         }
     }
 
-    private async Task ConsumeAsync(
+    /// <summary>
+    /// Parses each batch and raises the observer callbacks. Returns true when the parser
+    /// failed: from then on the batch lines still reach the sink and the channel is still
+    /// drained (a stopped consumer would fill the channel, then the pipe, and stall
+    /// robocopy for good), but no more events are produced from output that can no longer
+    /// be interpreted.
+    /// </summary>
+    private async Task<bool> ConsumeAsync(
         ChannelReader<IReadOnlyList<string>> reader,
         RobocopyOutputParser parser,
         List<string> completed,
         List<ErrorReported> errors)
     {
+        var parseFault = false;
         await foreach (var batch in reader.ReadAllAsync().ConfigureAwait(false))
         {
             var events = new List<RobocopyEvent>();
-            foreach (var line in batch)
+            if (!parseFault)
             {
-                events.AddRange(parser.Feed(line));
+                try
+                {
+                    foreach (var line in batch)
+                    {
+                        events.AddRange(parser.Feed(line));
+                    }
+                }
+                catch (Exception)
+                {
+                    // Events from lines before the fault are kept; they were parsed in a good state.
+                    parseFault = true;
+                }
             }
 
             // Collected before the observer runs: the outcome must not depend on the observer behaving.
@@ -281,6 +315,8 @@ internal sealed class RobocopyRun : IDisposable
                 // A faulty sink must not stop the drain: a full pipe would stall robocopy for good.
             }
         }
+
+        return parseFault;
     }
 
     private void RaiseEvents(IReadOnlyList<RobocopyEvent> events)
@@ -316,12 +352,63 @@ internal sealed class RobocopyRun : IDisposable
         }
     }
 
+    /// <summary>
+    /// Starts robocopy and publishes it to <see cref="Kill"/>; a kill requested earlier is
+    /// carried out at once. Returns the Win32 error code when it could not be started.
+    /// </summary>
+    private (Process? Process, int Error) StartProcess()
+    {
+        var process = new Process
+        {
+            StartInfo = new ProcessStartInfo(RobocopyPath, Arguments)
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                WorkingDirectory = Environment.GetFolderPath(Environment.SpecialFolder.System),
+            },
+        };
+        // Stdout carries only a short header, but an undrained pipe would stall robocopy.
+        process.OutputDataReceived += static (_, _) => { };
+
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex) when (ex is Win32Exception or InvalidOperationException)
+        {
+            process.Dispose();
+            return (null, ex is Win32Exception w ? w.NativeErrorCode : 0);
+        }
+
+        process.BeginOutputReadLine();
+
+        bool killNow;
+        lock (_processLock)
+        {
+            _process = process;
+            killNow = _killRequested;
+        }
+
+        if (killNow)
+        {
+            Kill();
+        }
+
+        return (process, 0);
+    }
+
     private void Kill()
     {
-        var process = _process;
-        if (process is null)
+        Process? process;
+        lock (_processLock)
         {
-            return;
+            process = _process;
+            if (process is null)
+            {
+                _killRequested = true;
+                return;
+            }
         }
 
         try

@@ -224,7 +224,7 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
     private static string? ResolveExisting(string path)
     {
         using var handle = ProcessNative.CreateFile(
-            path,
+            ProcessNative.ExtendedLengthPath(path),
             0,
             ProcessNative.FILE_SHARE_ALL,
             0,
@@ -257,14 +257,15 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
         var buffer = new char[InitialPathBuffer];
         fixed (char* p = buffer)
         {
-            if (!ProcessNative.GetVolumePathName(path, p, (uint)buffer.Length))
+            if (!ProcessNative.GetVolumePathName(ProcessNative.ExtendedLengthPath(path), p, (uint)buffer.Length))
             {
                 return null;
             }
         }
 
+        // A prefixed query answers with a prefixed root; strip it so roots compare alike.
         var end = Array.IndexOf(buffer, '\0');
-        return end > 0 ? new string(buffer, 0, end) : null;
+        return end > 0 ? StripVerbatimPrefix(new string(buffer, 0, end)) : null;
     }
 
     private static uint FinalPathName(SafeFileHandle handle, char[] buffer)
