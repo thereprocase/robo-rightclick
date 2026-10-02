@@ -106,6 +106,42 @@ public sealed record UninstallPlan(
     }
 
     /// <summary>
+    /// What install shows instead of installing when <see cref="InstallRefusal"/> finds a
+    /// path uninstall would refuse. Names no path: the message box may be screenshotted into
+    /// a bug report.
+    /// </summary>
+    public const string UnsafePathsRefusal =
+        "RoboRightClick can't be installed for this user. A folder it would use (under %LOCALAPPDATA%, "
+        + "%APPDATA% or the Windows system folder) contains a character that uninstall refuses "
+        + "(\" & | < > ^ % ! or a control character), or is not where Windows normally puts it, "
+        + "so the app could not be removed again. Nothing was changed.";
+
+    /// <summary>
+    /// Null when uninstall will accept these locations; otherwise <see cref="UnsafePathsRefusal"/>.
+    /// Install checks this before it stops the tray or writes anything, so an install can
+    /// never succeed and then be impossible to uninstall. It runs the very checks uninstall
+    /// runs (<see cref="For"/> from either location and <see cref="SelfDeleteArguments"/>),
+    /// not a copy of them that could drift. Job folder names are not involved: only names
+    /// <see cref="JobLogNames.IsJobFolderName"/> accepts are ever listed, and those are digits
+    /// and hex letters.
+    /// </summary>
+    /// <param name="systemDirectory">%SystemRoot%\System32 as the host resolves it.</param>
+    public static string? InstallRefusal(AppPaths paths, string systemDirectory)
+    {
+        try
+        {
+            _ = For(paths, [], runningFromInstallDir: true);
+            _ = For(paths, [], runningFromInstallDir: false);
+            _ = SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory, systemDirectory);
+            return null;
+        }
+        catch (ArgumentException)
+        {
+            return UnsafePathsRefusal;
+        }
+    }
+
+    /// <summary>
     /// The argument string for %SystemRoot%\System32\cmd.exe that deletes the running exe
     /// after this process exits, then removes the (by then empty) install folder. Deleting
     /// the exe is retried for about 30 seconds because it fails while the process is alive.

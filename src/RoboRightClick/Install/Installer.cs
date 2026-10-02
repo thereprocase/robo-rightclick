@@ -35,6 +35,8 @@ internal static class Installer
         + "the start-with-Windows choice applies to the registry only.";
 
     /// <summary>
+    /// 0. <see cref="UninstallPlan.InstallRefusal"/>: a location uninstall would refuse fails
+    /// the install (exit code 1, message) before anything changes.
     /// 1. If a tray is running, SingleInstance.RequestExitAndWait (fails with a message if
     /// it will not exit because jobs are active). 2. Copy the running exe to
     /// AppPaths.InstalledExe unless it already runs from there (copy to a temp name in the
@@ -53,6 +55,13 @@ internal static class Installer
         var quiet = command.Quiet;
         try
         {
+            // First, before the tray is stopped or anything is written: an install uninstall
+            // would later refuse to remove must not happen at all.
+            if (UninstallPlan.InstallRefusal(paths, Environment.GetFolderPath(Environment.SpecialFolder.System)) is { } refusal)
+            {
+                return Fail(refusal, quiet);
+            }
+
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
                 return Fail(BusyMessage, quiet);

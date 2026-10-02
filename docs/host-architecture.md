@@ -440,7 +440,9 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 
 ## 10. Install and uninstall
 
-- `--install`: stop a running tray (exit request; refused while jobs run) → copy exe to
+- `--install`: refuse (message, exit code 1, nothing changed) when uninstall would later
+  refuse the locations (`UninstallPlan.InstallRefusal`: the same checks uninstall runs, e.g. a
+  profile path holding `&`, `%` or `!`) → stop a running tray (exit request; refused while jobs run) → copy exe to
   `%LOCALAPPDATA%\Programs\RoboRightClick\` → write `Registration.InstallValues` → write the
   default config.json only if absent (or apply an explicit autostart flag to the existing one)
   → start the installed tray → message.
