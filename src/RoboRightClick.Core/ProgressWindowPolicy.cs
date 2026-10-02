@@ -41,12 +41,15 @@ public static class ProgressWindowPolicy
     /// <summary>
     /// Done, a no-op and a plain cancel close the window. DoneWithErrors, Failed and a cancel
     /// that left replaced files partly written show the summary, because each one needs a
-    /// "Try again" or "Skip" from the user. Non-terminal states stay.
+    /// "Try again" or "Skip" from the user. So does a Done job that left files alone because
+    /// their names appeared at the destination mid-paste: Explorer would have asked about
+    /// them, and the summary is where the user learns which ones. Non-terminal states stay.
     /// </summary>
     public static ProgressWindowAction OnTerminal(JobSnapshot job) => job.State switch
     {
         JobState.DoneWithErrors or JobState.Failed => ProgressWindowAction.ShowSummary,
         JobState.Canceled when job.DamagedOnCancel > 0 => ProgressWindowAction.ShowSummary,
+        JobState.Done when job.SkippedAppeared > 0 => ProgressWindowAction.ShowSummary,
         JobState.Done or JobState.Canceled => ProgressWindowAction.Close,
         _ => ProgressWindowAction.Stay,
     };

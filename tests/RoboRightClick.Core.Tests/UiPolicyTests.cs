@@ -71,6 +71,17 @@ public class ProgressWindowPolicyTests
         Assert.Equal(ProgressWindowAction.ShowSummary, ProgressWindowPolicy.OnTerminal(Job(JobState.Canceled) with { DamagedOnCancel = 1 }));
     }
 
+    [Fact]
+    public void A_done_job_that_skipped_late_arrivals_reports_them()
+    {
+        // Explorer would have asked about these files; skipping them silently would leave the
+        // user believing the destination holds the pasted versions.
+        var job = Job(JobState.Done) with { SkippedAppeared = 2 };
+        Assert.Equal(ProgressWindowAction.ShowSummary, ProgressWindowPolicy.OnTerminal(job));
+        Assert.True(ProgressWindowPolicy.ShouldOpen(job, showProgressWindow: true));
+        Assert.False(ProgressWindowPolicy.ShouldOpen(job with { Acknowledged = true }, showProgressWindow: true));
+    }
+
     [Theory]
     [InlineData(JobState.Queued)]
     [InlineData(JobState.Running)]

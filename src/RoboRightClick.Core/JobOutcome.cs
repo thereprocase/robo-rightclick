@@ -3,7 +3,13 @@ namespace RoboRightClick.Core;
 /// <summary>What one executed step produced.</summary>
 /// <param name="CompletedSources">Source paths the step finished (robocopy FileReported, or an in-process copy/rename).</param>
 /// <param name="ExitCode">Robocopy's exit code; null for in-process steps.</param>
-/// <param name="Failure">Set when the step could not run at all: launch failure, an untrusted pipe client, an exception.</param>
+/// <param name="Failure">
+/// Set when the step could not run at all: launch failure, an untrusted pipe client, an
+/// exception. Producers must pass one plain sentence with no path or file name in it: a
+/// Win32 system message for an error code, or a fixed host sentence, never an exception's
+/// Message (which often embeds a path). <see cref="FailureText"/> filters it again and
+/// falls back to a fixed sentence, but that filter is a heuristic, not the guarantee.
+/// </param>
 public sealed record StepOutcome(
     IReadOnlyList<string> CompletedSources,
     IReadOnlyList<ErrorReported> Errors,

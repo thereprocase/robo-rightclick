@@ -25,6 +25,16 @@ public sealed record JobSummary(
 /// interface. Ephemeral mode is enforced by composing <see cref="NullJobSink"/>,
 /// so no other code path needs to know which mode is active.
 /// </summary>
+/// <remarks>
+/// Call order, per job: <see cref="JobCreated"/> first; then <see cref="StateChanged"/>
+/// for each transition in order, interleaved with <see cref="CommandStarted"/>,
+/// <see cref="OutputLine"/> and <see cref="CommandFinished"/> while steps run; the terminal
+/// <see cref="StateChanged"/> before <see cref="JobFinished"/>, which comes exactly once and
+/// last; then Dispose if the sink is <see cref="IDisposable"/>. Calls may come from
+/// different threads but never concurrently for one job's state changes; output lines
+/// can arrive from a run's consumer thread meanwhile, so a sink serializes itself.
+/// Implementations tolerate other orders (a late line after the end is dropped).
+/// </remarks>
 public interface IJobSink
 {
     void JobCreated(JobDescription job);

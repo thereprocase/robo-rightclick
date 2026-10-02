@@ -39,10 +39,15 @@ public static class ConflictScan
     }
 
     /// <summary>
-    /// The policy a job runs with. Ask only survives to this point when the scan found
-    /// nothing to ask about; <see cref="RobocopyArgs.ConflictFlags"/> then runs it with
-    /// Skip flags, so a file that appears after the scan is never overwritten unasked.
+    /// The job-wide answer to "which policy applies": the configured default unless it is
+    /// Ask, in which case the user's choice, or Ask itself when there was nothing to ask.
     /// </summary>
+    /// <remarks>
+    /// Not the per-step policy. <see cref="ExecutionPlanner.Apply"/> decides that, and runs
+    /// every step of a conflict-free scan with Ask whatever the configured default, whose
+    /// flags (<see cref="RobocopyArgs.ConflictFlags"/>) skip a file that appears after the
+    /// scan instead of overwriting it unasked. Use the planner's steps, not this, to run a job.
+    /// </remarks>
     public static ConflictPolicy Resolve(ConflictPolicy configured, int conflictCount, ConflictPolicy? userChoice)
     {
         if (configured != ConflictPolicy.Ask)

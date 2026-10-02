@@ -76,7 +76,6 @@ internal sealed class JobsWindow : Gridline.Window
     private readonly Gridline.Button _openDestination;
     private readonly Gridline.Button _openLog;
     private readonly ContextMenuStrip _menu;
-    private readonly HashSet<Guid> _pauseRequested = [];
     private readonly Dictionary<Guid, ErrorSummaryDialog> _summaries = [];
 
     private IReadOnlyList<JobSnapshot> _rows = [];
@@ -306,15 +305,6 @@ internal sealed class JobsWindow : Gridline.Window
         }
         _lastAll = all;
         var rows = _attentionOnly.Checked ? all.Where(j => j.NeedsAttention).ToList() : all;
-        foreach (var id in _pauseRequested.ToList())
-        {
-            if (all.FirstOrDefault(j => j.Id == id) is not { } job
-                || job.State is JobState.Running or JobState.Paused
-                || JobStates.IsTerminal(job.State))
-            {
-                _pauseRequested.Remove(id);
-            }
-        }
 
         _list.BeginUpdate();
         _rows = rows;
@@ -392,16 +382,15 @@ internal sealed class JobsWindow : Gridline.Window
         }
     }
 
-    private bool PauseLatched(JobSnapshot job) =>
-        job.State is JobState.Queued or JobState.Scanning or JobState.AwaitingDecision
-        && (_pauseRequested.Contains(job.Id) || Jobs.PauseAllActive);
+    /// <summary>A pause latched before Running (<see cref="JobSnapshot.PauseRequested"/>); after that the state shows it.</summary>
+    private static bool PauseLatched(JobSnapshot job) =>
+        job.State is JobState.Queued or JobState.Scanning or JobState.AwaitingDecision && job.PauseRequested;
 
     private static bool CanControl(JobSnapshot job) =>
         !JobStates.IsTerminal(job.State) && !job.CancelRequested && job.State != JobState.Finalizing;
 
     private static bool HasSummary(JobSnapshot job) =>
-        job.State is JobState.DoneWithErrors or JobState.Failed
-        || (job.State == JobState.Canceled && job.DamagedOnCancel > 0);
+        ProgressWindowPolicy.OnTerminal(job) == ProgressWindowAction.ShowSummary;
 
     private void UpdateButtons(JobSnapshot? job)
     {
@@ -426,20 +415,9 @@ internal sealed class JobsWindow : Gridline.Window
         }
     }
 
-    private void PauseJob(JobSnapshot job)
-    {
-        if (job.State != JobState.Running)
-        {
-            _pauseRequested.Add(job.Id);
-        }
-        Jobs.Pause(job.Id);
-    }
+    private void PauseJob(JobSnapshot job) => Jobs.Pause(job.Id);
 
-    private void ResumeJob(JobSnapshot job)
-    {
-        _pauseRequested.Remove(job.Id);
-        Jobs.Resume(job.Id);
-    }
+    private void ResumeJob(JobSnapshot job) => Jobs.Resume(job.Id);
 
     /// <summary>Enter or double-click: answer a waiting question, review an outcome, or open the destination.</summary>
     private void DefaultAction(JobSnapshot job)

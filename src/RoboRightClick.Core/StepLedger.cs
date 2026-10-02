@@ -15,8 +15,9 @@ public sealed record LedgerUpdate(PlannedFile? Completed, PlannedFile? Uncomplet
 /// <para>Matching: robocopy's /FP path and the planned source path are compared after
 /// <see cref="WinPath.NormalizeForMatch"/>. A FileReported that matches no planned file of
 /// the current step sets <see cref="PathsUnreliable"/>: from then on cancel cleanup deletes
-/// nothing for this job and retry falls back to whole steps, because a mismatch means the
-/// ledger can no longer tell finished files from partial ones.</para>
+/// nothing for this job and "Try again" re-runs the whole paste with a fresh scan rather
+/// than repeating steps, because a mismatch means the ledger can no longer tell finished
+/// files from partial ones, and repeating a recursive /MOVE step under Replace is not safe.</para>
 /// <para>Errors: an ErrorReported for a file path marks that file failed, and removes it
 /// from the completed set if its line came first (order under /MT is not guaranteed). An
 /// ErrorReported for a directory (robocopy's "Creating Destination Directory", "Scanning
@@ -91,6 +92,18 @@ public sealed class StepLedger
         state.ReplannedAsMove = true;
     }
 
+    /// <summary>
+    /// A move-mode keep-both rename turned out to cross volumes: robocopy cannot write under
+    /// the keep-both name, so the item is refused (a plan issue), never retried. Call instead
+    /// of <see cref="InProcessCompleted"/>, before <see cref="StepFinished"/>.
+    /// </summary>
+    public void InProcessRefused(int stepIndex)
+    {
+        var state = StateOf(stepIndex);
+        state.Started = true;
+        state.Refused = true;
+    }
+
     /// <param name="killedByCancel">The app killed the run because the user canceled.</param>
     public void StepFinished(int stepIndex, RobocopyExitCode? exitCode, bool killedByCancel)
     {
@@ -154,7 +167,13 @@ public sealed class StepLedger
     /// <summary>Bytes of completed files in steps that have finished: the base for observed bytes.</summary>
     public long CompletedBytesOfFinishedSteps => _steps.Where(s => s.Finished).Sum(s => s.CompletedBytes);
 
-    /// <summary>Files "Try again" should repeat; empty for a job whose paths were unreliable (retry whole steps instead).</summary>
+    /// <summary>
+    /// Files of robocopy steps that "Try again" should repeat. Never a file of a rename,
+    /// duplicate or keep-both step: robocopy would write it under its source name, with
+    /// policy Replace, over the file the user chose to keep. Empty once
+    /// <see cref="PathsUnreliable"/>: the host then offers a full re-run of the paste
+    /// (JobManager.Rerun: a new scan that asks about every file now present) instead.
+    /// </summary>
     public IReadOnlyList<(int StepIndex, PlannedFile File)> Retryable
     {
         get
@@ -184,7 +203,11 @@ public sealed class StepLedger
         }
     }
 
-    /// <summary>In-process steps that failed (not counting <see cref="StepOutcome.ReplanAsMove"/>).</summary>
+    /// <summary>
+    /// In-process steps that failed, for "Try again" to repeat whole. Not counted: steps
+    /// re-planned as a move (<see cref="InProcessReplannedAsMove"/>), refused ones
+    /// (<see cref="InProcessRefused"/>) and steps a cancel interrupted.
+    /// </summary>
     public IReadOnlyList<int> FailedInProcessSteps
     {
         get
@@ -193,7 +216,7 @@ public sealed class StepLedger
             for (var s = 0; s < _steps.Length; s++)
             {
                 var state = _steps[s];
-                if (!state.IsRobocopy && state.Finished && !state.InProcessSucceeded && !state.ReplannedAsMove && !state.KilledByCancel)
+                if (!state.IsRobocopy && state.Finished && !state.InProcessSucceeded && !state.ReplannedAsMove && !state.Refused && !state.KilledByCancel)
                 {
                     failed.Add(s);
                 }
@@ -316,6 +339,8 @@ public sealed class StepLedger
         public bool InProcessSucceeded { get; set; }
 
         public bool ReplannedAsMove { get; set; }
+
+        public bool Refused { get; set; }
 
         public void Complete(int index)
         {

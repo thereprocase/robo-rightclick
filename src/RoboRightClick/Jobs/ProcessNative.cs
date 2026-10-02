@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using Microsoft.Win32.SafeHandles;
+using RoboRightClick.Core;
 
 namespace RoboRightClick.Jobs;
 
@@ -148,4 +149,95 @@ internal static unsafe partial class ProcessNative
         nint lpFileSystemFlags,
         nint lpFileSystemNameBuffer,
         uint nFileSystemNameSize);
+
+    public const uint DELETE = 0x00010000;
+    public const uint FILE_READ_ATTRIBUTES = 0x0080;
+    public const uint FILE_WRITE_ATTRIBUTES = 0x0100;
+    public const uint FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000;
+    public const uint FILE_ATTRIBUTE_READONLY = 0x1;
+    public const uint FILE_ATTRIBUTE_DIRECTORY = 0x10;
+    public const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+    private const int FileBasicInfoClass = 0;
+    private const int FileDispositionInfoClass = 4;
+
+    /// <summary>FILE_BASIC_INFO. Zero times mean "leave unchanged" when set.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileBasicInfo
+    {
+        public long CreationTime;
+        public long LastAccessTime;
+        public long LastWriteTime;
+        public long ChangeTime;
+        public uint FileAttributes;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandleEx(SafeFileHandle hFile, int fileInformationClass, void* lpFileInformation, uint dwBufferSize);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetFileInformationByHandle(SafeFileHandle hFile, int fileInformationClass, void* lpFileInformation, uint dwBufferSize);
+
+    /// <summary>
+    /// Deletes <paramref name="path"/> only if, on the handle that does the deleting, it is a
+    /// plain file: opened with FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself, never
+    /// followed) and without FILE_FLAG_BACKUP_SEMANTICS (a directory does not open at all),
+    /// its attributes checked on that handle, then deleted through FileDispositionInfo on the
+    /// same handle. A check by path followed by a delete by path would leave a window in
+    /// which another process could swap in a link to a file outside the job.
+    /// A read-only file (robocopy copies attributes, so a partial copy of a read-only source
+    /// is read-only) has the attribute cleared first, and restored if the delete fails.
+    /// Returns true when the file was deleted; false for anything else, without throwing.
+    /// </summary>
+    public static bool DeleteFileIfNotReparsePoint(string path)
+    {
+        using var handle = CreateFile(
+            WinPath.ExtendedLengthPath(path),
+            DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_ALL,
+            0,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            0);
+        if (handle.IsInvalid)
+        {
+            return false;
+        }
+
+        FileBasicInfo basic;
+        if (!GetFileInformationByHandleEx(handle, FileBasicInfoClass, &basic, (uint)sizeof(FileBasicInfo)))
+        {
+            return false;
+        }
+        if ((basic.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0)
+        {
+            return false;
+        }
+
+        var wasReadOnly = (basic.FileAttributes & FILE_ATTRIBUTE_READONLY) != 0;
+        if (wasReadOnly && !SetAttributes(handle, basic.FileAttributes & ~FILE_ATTRIBUTE_READONLY))
+        {
+            return false;
+        }
+
+        byte deleteFile = 1;
+        if (SetFileInformationByHandle(handle, FileDispositionInfoClass, &deleteFile, sizeof(byte)))
+        {
+            // The file is removed when this handle closes.
+            return true;
+        }
+        if (wasReadOnly)
+        {
+            SetAttributes(handle, basic.FileAttributes);
+        }
+        return false;
+    }
+
+    private static bool SetAttributes(SafeFileHandle handle, uint attributes)
+    {
+        // 0 would mean "leave unchanged"; FILE_ATTRIBUTE_NORMAL (0x80) is the explicit "none".
+        var info = new FileBasicInfo { FileAttributes = attributes == 0 ? 0x80u : attributes };
+        return SetFileInformationByHandle(handle, FileBasicInfoClass, &info, (uint)sizeof(FileBasicInfo));
+    }
 }

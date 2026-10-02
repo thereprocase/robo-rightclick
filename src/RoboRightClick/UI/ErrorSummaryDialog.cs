@@ -28,10 +28,12 @@ internal enum ErrorSummaryChoice
 /// <remarks>
 /// The content lives in <see cref="ErrorSummaryView"/> so the progress window can turn into
 /// the same summary in place. With a <see cref="JobManager"/> the view acts on the choice
-/// itself (Retry, Rerun or Acknowledge); <see cref="Choice"/> reports what was picked.
-/// Per-item refusals, the files a cancel damaged and files skipped because their name
-/// appeared mid-copy are shown as counts where the snapshot carries them; the snapshot does
-/// not list them per item.
+/// itself (Retry, Rerun or Acknowledge; opening and closing does not acknowledge, see
+/// <see cref="JobSnapshot.Acknowledged"/>) and lists refused items, damaged files and late
+/// arrivals per item (<see cref="JobManager.IssuesOf"/>, <see cref="JobManager.DamagedOf"/>,
+/// <see cref="JobManager.SkippedAppearedOf"/>; the first
+/// <see cref="JobRecords.MaxRecordedErrors"/> of each, with the snapshot's exact counts).
+/// Without one it shows those sections as counts. <see cref="Choice"/> reports what was picked.
 /// </remarks>
 internal sealed class ErrorSummaryDialog : Gridline.Window
 {
@@ -116,11 +118,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         {
             var total = Math.Max(job.ErrorCount, errors.Count);
             var title = string.Create(CultureInfo.InvariantCulture, $"Could not be {done} ({total:N0})");
-            var pane = new Gridline.Pane(title) { Dock = DockStyle.Fill, Padding = Padding.Empty };
-            var list = new ErrorList(errors) { Dock = DockStyle.Fill };
-            pane.Controls.Add(list);
-            RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            Controls.Add(pane);
+            var rows = errors.Select(e => new DetailRow(e.Path, string.Create(CultureInfo.InvariantCulture, $"{e.Message.Trim()} (error {e.Code})")));
+            AddFill(ListPane(title, text: null, rows, "Errors"));
             filled = true;
 
             var unlisted = total - errors.Count;
@@ -133,20 +132,58 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             }
         }
 
+        var refused = jobs?.IssuesOf(job.Id) ?? [];
         if (job.RefusedCount > 0)
         {
-            var text = string.Create(
-                CultureInfo.InvariantCulture,
-                $"{DisplayText.Items(job.RefusedCount)} {(job.RefusedCount == 1 ? "was" : "were")} not {done}. {job.RefusalReason} Trying again would not change this.");
-            AddAuto(Section($"Refused ({job.RefusedCount:N0})", text));
+            var title = string.Create(CultureInfo.InvariantCulture, $"Refused ({job.RefusedCount:N0})");
+            if (refused.Count > 0)
+            {
+                var text = $"Not {done}. Trying again would not change this.";
+                AddFill(ListPane(title, text, refused.Select(r => new DetailRow(r.Path, r.Reason)), "Refused"));
+                filled = true;
+            }
+            else
+            {
+                var text = string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{DisplayText.Items(job.RefusedCount)} {(job.RefusedCount == 1 ? "was" : "were")} not {done}. {job.RefusalReason} Trying again would not change this.");
+                AddAuto(Section(title, text));
+            }
         }
 
         if (job.DamagedOnCancel > 0)
         {
             var files = job.DamagedOnCancel == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.DamagedOnCancel:N0} files were");
-            AddAuto(Section(
-                $"May be incomplete ({job.DamagedOnCancel:N0})",
-                $"{files} being replaced when you canceled. They can look complete but hold only part of the new data. Finish replacing them, or check them before you use them."));
+            var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.DamagedOnCancel:N0})");
+            var text = $"{files} being replaced when you canceled. They can look complete but hold only part of the new data. Finish replacing them, or check them before you use them.";
+            var damaged = jobs?.DamagedOf(job.Id) ?? [];
+            if (damaged.Count > 0)
+            {
+                AddFill(ListPane(title, text, damaged.Select(p => new DetailRow(p, "May hold partial data")), "Damaged"));
+                filled = true;
+            }
+            else
+            {
+                AddAuto(Section(title, text));
+            }
+        }
+
+        if (job.SkippedAppeared > 0)
+        {
+            var title = string.Create(CultureInfo.InvariantCulture, $"Skipped ({job.SkippedAppeared:N0})");
+            var text = job.SkippedAppeared == 1
+                ? "A file with this name appeared at the destination during the paste, so it was left alone. Check which version you want."
+                : "Files with these names appeared at the destination during the paste, so they were left alone. Check which versions you want.";
+            var skipped = jobs?.SkippedAppearedOf(job.Id) ?? [];
+            if (skipped.Count > 0)
+            {
+                AddFill(ListPane(title, text, skipped.Select(p => new DetailRow(p, "Appeared during the paste")), "SkippedAppeared"));
+                filled = true;
+            }
+            else
+            {
+                AddAuto(Section(title, text));
+            }
         }
 
         if (!filled)
@@ -191,6 +228,9 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
     {
         JobState.Failed => $"Nothing was {done} to {into}.",
         JobState.Canceled => $"The paste into {into} was canceled.",
+        JobState.Done => job.SkippedAppeared == 1
+            ? $"Everything was {done} to {into} except 1 file whose name appeared there during the paste."
+            : string.Create(CultureInfo.InvariantCulture, $"Everything was {done} to {into} except {job.SkippedAppeared:N0} files whose names appeared there during the paste."),
         _ => (job.ErrorCount + job.RefusedCount) switch
         {
             1 => $"1 item could not be {done} to {into}. Everything else finished.",
@@ -225,6 +265,45 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         Controls.Add(control);
     }
 
+    /// <summary>A row that shares the spare height with the other lists.</summary>
+    private void AddFill(Control control)
+    {
+        RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        Controls.Add(control);
+    }
+
+    /// <summary>A titled pane with an optional explanation above a list of paths and notes.</summary>
+    private static Gridline.Pane ListPane(string title, string? text, IEnumerable<DetailRow> rows, string automationId)
+    {
+        var pane = new Gridline.Pane(title) { Dock = DockStyle.Fill, Padding = Padding.Empty };
+        var list = new DetailList(rows, automationId) { Dock = DockStyle.Fill };
+        if (text is null)
+        {
+            pane.Controls.Add(list);
+            return pane;
+        }
+        var body = new TableLayoutPanel
+        {
+            ColumnCount = 1,
+            Dock = DockStyle.Fill,
+            BackColor = Gridline.Transparent,
+            Margin = Padding.Empty,
+            Padding = Padding.Empty,
+        };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        body.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        var label = Gridline.TextLabel(text);
+        label.Margin = new Padding(Gridline.Space2, Gridline.Space1, Gridline.Space2, Gridline.Space1);
+        body.Controls.Add(label);
+        body.Controls.Add(list);
+        pane.Controls.Add(body);
+        return pane;
+    }
+
+    /// <summary>One line of a summary list: the path in Plex Mono, then a short note.</summary>
+    private sealed record DetailRow(string Path, string Note);
+
     private static Gridline.Pane Section(string title, string text)
     {
         var pane = new Gridline.Pane(title) { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
@@ -232,22 +311,22 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         return pane;
     }
 
-    /// <summary>Ruled 26 px rows: the path in Plex Mono, then the Windows message and code.</summary>
-    private sealed class ErrorList : ListBox
+    /// <summary>Ruled 26 px rows: the path in Plex Mono, then the Windows message and code or another short note.</summary>
+    private sealed class DetailList : ListBox
     {
-        public ErrorList(IReadOnlyList<ErrorReported> errors)
+        public DetailList(IEnumerable<DetailRow> rows, string automationId)
         {
             DrawMode = DrawMode.OwnerDrawFixed;
             BorderStyle = BorderStyle.None;
             IntegralHeight = false;
             BackColor = Gridline.White;
-            Name = "Errors";
-            AccessibleName = "Errors";
+            Name = automationId;
+            AccessibleName = automationId;
             ItemHeight = Gridline.Scale(this, Gridline.RowHeight);
             BeginUpdate();
-            foreach (var error in errors)
+            foreach (var row in rows)
             {
-                Items.Add(error);
+                Items.Add(row);
             }
             EndUpdate();
         }
@@ -260,7 +339,7 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
 
         protected override void OnDrawItem(DrawItemEventArgs e)
         {
-            if (e.Index < 0 || e.Index >= Items.Count || Items[e.Index] is not ErrorReported error)
+            if (e.Index < 0 || e.Index >= Items.Count || Items[e.Index] is not DetailRow row)
             {
                 return;
             }
@@ -269,10 +348,9 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             var r = e.Bounds;
             Gridline.DrawRow(g, r, selected);
             var pathWidth = (int)(r.Width * 0.55);
-            Gridline.DrawCellText(g, error.Path, Gridline.FontFor(this, Gridline.Face.Mono, Gridline.SizeDense),
+            Gridline.DrawCellText(g, row.Path, Gridline.FontFor(this, Gridline.Face.Mono, Gridline.SizeDense),
                 new Rectangle(r.X, r.Y, pathWidth, r.Height), Gridline.RowText(selected, Gridline.Ink), path: true);
-            var message = string.Create(CultureInfo.InvariantCulture, $"{error.Message.Trim()} (error {error.Code})");
-            Gridline.DrawCellText(g, message, Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense),
+            Gridline.DrawCellText(g, row.Note, Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense),
                 new Rectangle(r.X + pathWidth, r.Y, r.Width - pathWidth, r.Height), Gridline.RowText(selected, Gridline.TextSecondary));
             if ((e.State & DrawItemState.Focus) != 0 && Focused)
             {

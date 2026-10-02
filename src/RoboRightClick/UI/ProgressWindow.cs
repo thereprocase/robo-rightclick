@@ -24,9 +24,9 @@ namespace RoboRightClick.UI;
 /// closes owned forms with their owner, and a closed question answers null, which cancels the
 /// job, so the window lets go of the question before it closes. The window appears without taking keyboard
 /// focus, because it opens a second after the paste and the user may be typing elsewhere;
-/// a conflict question activates its own dialog. A pause clicked before the job reaches
-/// Running is remembered here until the job reports Running or Paused, because the snapshot
-/// does not carry a latched pause; "Pause all" is read from the manager.
+/// a conflict question activates its own dialog. A pause latched before the job reaches
+/// Running (here, in the Jobs window or by "Pause all") comes from
+/// <see cref="JobSnapshot.PauseRequested"/>, so every window agrees.
 /// </remarks>
 internal sealed class ProgressWindow : Gridline.Window
 {
@@ -49,7 +49,6 @@ internal sealed class ProgressWindow : Gridline.Window
     private readonly Gridline.Button _cancel;
     private readonly FlowLayoutPanel _buttons;
     private JobSnapshot? _last;
-    private bool _pauseRequested;
     private bool _showingSummary;
 
     public ProgressWindow(Guid jobId, JobManager jobs)
@@ -192,15 +191,8 @@ internal sealed class ProgressWindow : Gridline.Window
         return Gridline.UseFont(label, Gridline.Face.Mono, Gridline.SizeDense);
     }
 
-    private bool PauseLatched(JobSnapshot job)
-    {
-        if (job.State is JobState.Running or JobState.Paused || JobStates.IsTerminal(job.State))
-        {
-            _pauseRequested = false;
-        }
-        return job.State is JobState.Queued or JobState.Scanning or JobState.AwaitingDecision
-            && (_pauseRequested || Jobs.PauseAllActive);
-    }
+    private static bool PauseLatched(JobSnapshot job) =>
+        job.State is JobState.Queued or JobState.Scanning or JobState.AwaitingDecision && job.PauseRequested;
 
     private void Poll()
     {
@@ -272,12 +264,10 @@ internal sealed class ProgressWindow : Gridline.Window
         }
         if (job.State == JobState.Paused || PauseLatched(job))
         {
-            _pauseRequested = false;
             Jobs.Resume(JobId);
         }
         else
         {
-            _pauseRequested = job.State != JobState.Running;
             Jobs.Pause(JobId);
         }
         _last = null;

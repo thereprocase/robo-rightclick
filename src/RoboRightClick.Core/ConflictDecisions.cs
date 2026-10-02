@@ -291,24 +291,34 @@ public static class ExecutionPlanner
         return path[prefix.Length..];
     }
 
+    /// <summary>Planned files chunked by their source names (<see cref="ChunkByLength{T}"/>).</summary>
+    internal static IEnumerable<List<PlannedFile>> ChunkByNameLength(IEnumerable<PlannedFile> files, int budget) =>
+        ChunkByLength(files, file => WinPath.GetFileName(file.SourcePath), budget);
+
+    /// <summary>File names in command-line order, cut where the next would pass <paramref name="budget"/>.</summary>
+    internal static IEnumerable<List<string>> ChunkNamesByLength(IEnumerable<string> names, int budget) =>
+        ChunkByLength(names, name => name, budget);
+
     /// <summary>
-    /// Same rule as the paste planner's batches: each name costs its quoted length plus a
-    /// separating space, against the room left on one command line.
+    /// The one command-line budget rule (PastePlanner, ExecutionPlanner and RetryPlanner all
+    /// use it): each name costs its quoted length plus a separating space, and a chunk is cut
+    /// before the name that would pass the budget. A single name over budget still gets a
+    /// chunk of its own, so nothing is dropped.
     /// </summary>
-    internal static IEnumerable<List<PlannedFile>> ChunkByNameLength(IEnumerable<PlannedFile> files, int budget)
+    private static IEnumerable<List<T>> ChunkByLength<T>(IEnumerable<T> items, Func<T, string> nameOf, int budget)
     {
-        var chunk = new List<PlannedFile>();
+        var chunk = new List<T>();
         var used = 0;
-        foreach (var file in files)
+        foreach (var item in items)
         {
-            var cost = RobocopyArgs.Quote(WinPath.GetFileName(file.SourcePath)).Length + 1;
+            var cost = RobocopyArgs.Quote(nameOf(item)).Length + 1;
             if (chunk.Count > 0 && used + cost > budget)
             {
                 yield return chunk;
                 chunk = [];
                 used = 0;
             }
-            chunk.Add(file);
+            chunk.Add(item);
             used += cost;
         }
         if (chunk.Count > 0)

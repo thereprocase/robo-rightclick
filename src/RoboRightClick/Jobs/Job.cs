@@ -74,8 +74,10 @@ internal sealed record JobStart(
 /// <para>Cancel (ignored once Finalizing): CancelRequested in the snapshot at once; kill
 /// and wait; then CancelCleanup.Select(ledger.StartedRobocopyFiles, ledger.CompletedSources,
 /// presence set, move, File.Exists on sources, Claims.ClaimedByOtherJob), skipped entirely
-/// when ledger.PathsUnreliable. Each delete checks the file's attributes and refuses a
-/// reparse point; LeftInPlace becomes <see cref="JobSnapshot.DamagedOnCancel"/>.</para>
+/// when ledger.PathsUnreliable. Each delete goes through
+/// <see cref="ProcessNative.DeleteFileIfNotReparsePoint"/>, which checks and deletes on one
+/// handle opened without following links; LeftInPlace becomes
+/// <see cref="JobSnapshot.DamagedOnCancel"/> and <see cref="DamagedPaths"/>.</para>
 /// <para>Finalizing: create LinkFolders empty, clear the clipboard for a cut that ended
 /// Done with at least one item moved, ShellNotify, emit the JobSummary (errors capped at
 /// <see cref="JobRecords.MaxRecordedErrors"/>), then JobOutcome.FinalState. A Failed job's
@@ -111,9 +113,6 @@ internal sealed class Job
     /// <summary>Robocopy's own operation name, so FailureText and the error summary treat these like its errors.</summary>
     private const string CreateFolderOperation = "Creating Destination Directory";
 
-    /// <summary>An estimate beyond this means nothing, and TimeSpan.FromSeconds overflows near its maximum.</summary>
-    private static readonly double MaxEtaSeconds = TimeSpan.FromDays(365).TotalSeconds;
-
     private readonly Lock _lock = new();
     private readonly JobLifecycle _lifecycle;
     private readonly PauseGate _gate = new();
@@ -142,6 +141,12 @@ internal sealed class Job
     private int _damagedOnCancel;
     private string? _failureReason;
     private readonly List<PlanIssue> _issues = [];
+
+    // Detail lists for the error summary, each capped at JobRecords.MaxRecordedErrors; the
+    // counts are exact.
+    private readonly List<string> _damagedPaths = [];
+    private readonly List<string> _skippedAppearedPaths = [];
+    private int _skippedAppeared;
 
     // Execution state. Released on a terminal state unless "Try again" still needs it.
     private ExecutionPlan? _plan;
@@ -239,13 +244,12 @@ internal sealed class Job
     /// replacing them"). Null when there is nothing to repeat.
     /// </summary>
     /// <remarks>
-    /// Only robocopy steps' files are taken from <see cref="StepLedger.Retryable"/>: a failed
-    /// keep-both or duplicate file retried as a robocopy step would be written under its
-    /// source's name, with policy Replace, over the very file the user chose to keep.
-    /// In-process failures are repeated as their own step instead. The failed in-process
-    /// steps come from the outcomes the job saw rather than
-    /// <see cref="StepLedger.FailedInProcessSteps"/>, because the ledger has no way to learn
-    /// that a rename was re-planned as a move or refused, and would repeat it.
+    /// Only robocopy steps' files are taken from <see cref="StepLedger.Retryable"/> (the
+    /// ledger promises that, and this filters again): a failed keep-both or duplicate file
+    /// retried as a robocopy step would be written under its source's name, with policy
+    /// Replace, over the very file the user chose to keep. In-process failures are repeated
+    /// as their own step from <see cref="StepLedger.FailedInProcessSteps"/>, which leaves out
+    /// renames re-planned as moves and refused keep-both moves.
     /// </remarks>
     public ExecutionPlan? RetryPlan()
     {
@@ -270,7 +274,7 @@ internal sealed class Job
                 else
                 {
                     files = RobocopyRetryable(part);
-                    failedInProcess = part.FailedInProcessSteps;
+                    failedInProcess = part.Ledger.FailedInProcessSteps;
                 }
                 if (files.Count == 0 && failedInProcess.Count == 0)
                 {
@@ -279,6 +283,42 @@ internal sealed class Job
                 result = Merge(result, RetryPlanner.ForFailures(part.Plan, files, failedInProcess));
             }
             return result;
+        }
+    }
+
+    /// <summary>Items refused at planning or while running, each with its fixed, path-free reason.</summary>
+    public IReadOnlyList<PlanIssue> Issues
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _issues.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Destination files a cancel left partly replaced (first <see cref="JobRecords.MaxRecordedErrors"/>).</summary>
+    public IReadOnlyList<string> DamagedPaths
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _damagedPaths.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Destinations skipped because a file with that name appeared after the scan (first <see cref="JobRecords.MaxRecordedErrors"/>).</summary>
+    public IReadOnlyList<string> SkippedAppearedPaths
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _skippedAppearedPaths.ToArray();
+            }
         }
     }
 
@@ -377,6 +417,8 @@ internal sealed class Job
         lock (_lock)
         {
             ReconcilePauseLocked();
+            // JobSnapshot.PauseRequested changed even when the state did not (a latched pause).
+            Touch();
         }
         DeliverOnThreadPool();
     }
@@ -387,6 +429,7 @@ internal sealed class Job
         lock (_lock)
         {
             ReconcilePauseLocked();
+            Touch();
         }
         DeliverOnThreadPool();
     }
@@ -449,12 +492,7 @@ internal sealed class Job
             {
                 rate = null;
             }
-            TimeSpan? remaining = null;
-            if (rate is { } bytesPerSecond)
-            {
-                var seconds = Math.Max(0, _totalBytes - done) / bytesPerSecond;
-                remaining = double.IsFinite(seconds) && seconds <= MaxEtaSeconds ? TimeSpan.FromSeconds(seconds) : null;
-            }
+            var remaining = JobProgress.Estimate(_totalBytes - done, rate);
 
             return new JobSnapshot(
                 Id,
@@ -481,6 +519,8 @@ internal sealed class Job
                 CancelRequested = _cancelRequested && !terminal,
                 Wait = state == JobState.Queued ? _wait : JobWait.None,
                 NoOp = _noOp,
+                PauseRequested = !terminal && _gate.IsPaused,
+                SkippedAppeared = _skippedAppeared,
             };
         }
     }
@@ -790,12 +830,14 @@ internal sealed class Job
                 }
                 else if (refused)
                 {
+                    part.Ledger.InProcessRefused(index);
                     _issues.Add(new PlanIssue(SourceOf(step.Step), CannotMoveUnderNewNameReason));
                 }
-                else if (!outcome.ReplanAsMove)
+                else if (outcome.ReplanAsMove)
                 {
-                    part.FailedInProcessSteps.Add(index);
+                    part.Ledger.InProcessReplannedAsMove(index);
                 }
+                // Anything else failed; the ledger lists it in FailedInProcessSteps once finished.
                 foreach (var error in outcome.Errors)
                 {
                     RecordErrorLocked(error);
@@ -1013,6 +1055,7 @@ internal sealed class Job
         {
             _failureReason = failureReason;
             _finalErrorCount = final == JobState.DoneWithErrors ? ErrorCountLocked(outcomes) : _totalErrors;
+            RecordSkippedAppearedLocked();
             MoveLocked(final, SummaryLocked(final));
             ReleaseLocked();
         }
@@ -1055,12 +1098,14 @@ internal sealed class Job
         {
             if (cleanup is { } c)
             {
-                _damagedOnCancel = c.LeftInPlaceCount;
+                _damagedOnCancel = c.LeftInPlace.Count;
+                _damagedPaths.AddRange(c.LeftInPlace.Take(JobRecords.MaxRecordedErrors));
                 for (var i = 0; i < parts.Length; i++)
                 {
                     parts[i].Damaged.AddRange(c.DamagedByPart[i]);
                 }
             }
+            RecordSkippedAppearedLocked();
             MoveLocked(JobState.Canceled, SummaryLocked(JobState.Canceled));
             ReleaseLocked();
         }
@@ -1102,7 +1147,8 @@ internal sealed class Job
             {
                 continue;
             }
-            DeleteIfPlainFile(path);
+            // A file in use, already gone or denied is left: when in doubt, keep data.
+            ProcessNative.DeleteFileIfNotReparsePoint(path);
         }
 
         // The files left in place were being replaced: "Finish replacing them" repeats them.
@@ -1134,34 +1180,7 @@ internal sealed class Job
                 }
             }
         }
-        return new Cleanup(plan.LeftInPlace.Count, damagedByPart);
-    }
-
-    /// <summary>
-    /// Deletes a partial file chosen by <see cref="CancelCleanup"/>. A reparse point or a
-    /// folder found at that path is not ours and is never removed. Failures leave the file.
-    /// </summary>
-    private static void DeleteIfPlainFile(string path)
-    {
-        try
-        {
-            var attributes = File.GetAttributes(path);
-            if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != 0)
-            {
-                return;
-            }
-            if ((attributes & FileAttributes.ReadOnly) != 0)
-            {
-                // Robocopy copies attributes (/COPY:DAT), so our own partial copy of a
-                // read-only source can be read-only; File.Delete would refuse it.
-                File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
-            }
-            File.Delete(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Already gone, in use or denied: leave it.
-        }
+        return new Cleanup(plan.LeftInPlace, damagedByPart);
     }
 
     /// <summary>Explorer leaves an empty folder for each directory link robocopy skipped (docs/parity.md).</summary>
@@ -1179,7 +1198,9 @@ internal sealed class Job
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                errors.Add(new ErrorReported(Win32Code(ex), CreateFolderOperation, folder, ex.Message));
+                // The system message for the code, not ex.Message, which embeds the path.
+                var code = Win32Code(ex);
+                errors.Add(new ErrorReported(code, CreateFolderOperation, folder, code != 0 ? new System.ComponentModel.Win32Exception(code).Message : string.Empty));
             }
         }
         return errors;
@@ -1369,6 +1390,22 @@ internal sealed class Job
         _progress?.FileCompleted(file.Source.Size, at);
     }
 
+    /// <summary>The ledgers' late arrivals, read once at the end (the parts may be released after).</summary>
+    private void RecordSkippedAppearedLocked()
+    {
+        foreach (var part in _parts)
+        {
+            foreach (var file in part.Ledger.SkippedLateArrivals)
+            {
+                _skippedAppeared++;
+                if (_skippedAppearedPaths.Count < JobRecords.MaxRecordedErrors)
+                {
+                    _skippedAppearedPaths.Add(file.DestinationPath);
+                }
+            }
+        }
+    }
+
     private void RecordErrorLocked(ErrorReported error)
     {
         _totalErrors++;
@@ -1388,7 +1425,7 @@ internal sealed class Job
     /// </summary>
     private int ErrorCountLocked(List<StepOutcome> outcomes)
     {
-        var retryable = _parts.Sum(p => RobocopyRetryable(p).Count + p.FailedInProcessSteps.Count);
+        var retryable = _parts.Sum(p => RobocopyRetryable(p).Count + p.Ledger.FailedInProcessSteps.Count);
         var broken = outcomes.Count(IsBroken);
         return Math.Max(_totalErrors, Math.Max(retryable, broken));
     }
@@ -1498,6 +1535,8 @@ internal sealed class Job
             if (notice.Summary is { } summary)
             {
                 BestEffort(sink => sink.JobFinished(summary));
+                // JobFinished is the sink's last call (IJobSink's documented order).
+                BestEffort(sink => (sink as IDisposable)?.Dispose());
             }
             try
             {
@@ -1656,7 +1695,7 @@ internal sealed class Job
     /// <summary>One sink/event delivery: the job's creation, or a state change with the summary of a terminal one.</summary>
     private sealed record Notice(JobDescription? Created, StateChange? Change, JobSummary? Summary);
 
-    private sealed record Cleanup(int LeftInPlaceCount, List<(int StepIndex, PlannedFile File)>[] DamagedByPart);
+    private sealed record Cleanup(IReadOnlyList<string> LeftInPlace, List<(int StepIndex, PlannedFile File)>[] DamagedByPart);
 
     /// <summary>One executed plan with its ledger. Guarded by the job's lock, except <see cref="Plan"/>, which is immutable.</summary>
     private sealed class LedgerPart(ExecutionPlan plan)
@@ -1664,9 +1703,6 @@ internal sealed class Job
         public ExecutionPlan Plan { get; } = plan;
 
         public StepLedger Ledger { get; } = new(plan);
-
-        /// <summary>In-process steps that failed (not re-planned, not refused): repeated by "Try again".</summary>
-        public List<int> FailedInProcessSteps { get; } = [];
 
         /// <summary>Renames that crossed volumes after all, to run again as robocopy moves (worker thread only).</summary>
         public List<RenameStep> Replans { get; } = [];

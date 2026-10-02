@@ -310,6 +310,23 @@ public class StepLedgerTests
     }
 
     [Fact]
+    public void A_refused_keep_both_move_is_neither_failed_nor_retried()
+    {
+        // A cross-volume keep-both cut cannot be moved under the new name; it is a refusal,
+        // and repeating it would only be refused again.
+        var keep = File(@"C:\src\y.txt", @"D:\dst\y (2).txt");
+        var ledger = new StepLedger(PlanOf(
+            new ExecutionStep(new KeepBothStep(keep.SourcePath, keep.DestinationPath, Move: true), ConflictPolicy.Ask, [keep])));
+
+        ledger.InProcessRefused(0);
+        ledger.StepFinished(0, null, killedByCancel: false);
+
+        Assert.Empty(ledger.FailedInProcessSteps);
+        Assert.Empty(ledger.Retryable);
+        Assert.Empty(ledger.CompletedSources);
+    }
+
+    [Fact]
     public void A_step_index_outside_the_plan_is_refused()
     {
         var ledger = TreeLedger();

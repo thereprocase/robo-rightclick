@@ -8,7 +8,11 @@ namespace RoboRightClick.Core;
 /// <param name="Sources">The top-level items pasted, as they came from the clipboard.</param>
 /// <param name="Logging">The mode the job was created under; a later toggle does not change it.</param>
 /// <param name="ErrorCount">Retryable per-file errors (robocopy and in-process); see <see cref="RefusedCount"/> for the rest.</param>
-/// <param name="Acknowledged">The user has seen a DoneWithErrors/Failed/damaged-Canceled outcome (opened it, or chose Skip).</param>
+/// <param name="Acknowledged">
+/// The user dealt with a DoneWithErrors/Failed/damaged-Canceled outcome: chose Skip, or
+/// started Try again. Opening the summary and closing it without a choice does not count,
+/// so the job keeps its attention state until the user decides.
+/// </param>
 public sealed record JobSnapshot(
     Guid Id,
     Guid? ParentId,
@@ -50,6 +54,20 @@ public sealed record JobSnapshot(
 
     /// <summary>The paste had nothing to do (every item already in place): no toast, no clipboard clear.</summary>
     public bool NoOp { get; init; }
+
+    /// <summary>
+    /// The job's pause latch is closed (Pause in any window, or Pause all) and it has not
+    /// ended. Before Running this is the only sign of the pause ("Paused (waiting)"); once
+    /// Running, the state follows it to Paused. Every window reads the same flag.
+    /// </summary>
+    public bool PauseRequested { get; init; }
+
+    /// <summary>
+    /// Files left alone because a file with the same name appeared at the destination after
+    /// the scan (robocopy's skip flags kept it). Not an error and not retryable; the summary
+    /// lists them so the user can check what is there.
+    /// </summary>
+    public int SkippedAppeared { get; init; }
 
     public bool NeedsAttention =>
         State == JobState.AwaitingDecision

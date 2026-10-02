@@ -250,7 +250,7 @@ public static class PastePlanner
 
         foreach (var parent in batchOrder)
         {
-            foreach (var chunk in ChunkByLength(fileBatches[parent], fileListBudget))
+            foreach (var chunk in ExecutionPlanner.ChunkNamesByLength(fileBatches[parent], fileListBudget))
             {
                 steps.Add(new RobocopyStep(parent, destination, chunk, Recursive: false, Move: move));
             }
@@ -261,26 +261,4 @@ public static class PastePlanner
 
     private static bool IsSelfOrUnder(string candidate, string ancestor) =>
         WinPath.AreSame(candidate, ancestor) || WinPath.IsStrictlyUnder(candidate, ancestor);
-
-    private static IEnumerable<IReadOnlyList<string>> ChunkByLength(List<string> names, int budget)
-    {
-        var chunk = new List<string>();
-        var used = 0;
-        foreach (var name in names)
-        {
-            var cost = RobocopyArgs.Quote(name).Length + 1;
-            if (chunk.Count > 0 && used + cost > budget)
-            {
-                yield return chunk;
-                chunk = [];
-                used = 0;
-            }
-            chunk.Add(name);
-            used += cost;
-        }
-        if (chunk.Count > 0)
-        {
-            yield return chunk;
-        }
-    }
 }

@@ -197,6 +197,15 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
 
     public IReadOnlyList<ErrorReported> ErrorsOf(Guid jobId) => Find(jobId)?.Errors ?? [];
 
+    /// <summary>Items refused with their reasons, for the error summary (the snapshot carries only the count and the first reason).</summary>
+    public IReadOnlyList<PlanIssue> IssuesOf(Guid jobId) => Find(jobId)?.Issues ?? [];
+
+    /// <summary>Destination files a cancel left partly replaced (<see cref="JobSnapshot.DamagedOnCancel"/> is the exact count).</summary>
+    public IReadOnlyList<string> DamagedOf(Guid jobId) => Find(jobId)?.DamagedPaths ?? [];
+
+    /// <summary>Destinations skipped because their name appeared mid-copy (<see cref="JobSnapshot.SkippedAppeared"/> is the exact count).</summary>
+    public IReadOnlyList<string> SkippedAppearedOf(Guid jobId) => Find(jobId)?.SkippedAppearedPaths ?? [];
+
     /// <summary>Log folder names of normal-mode jobs that have not finished, for <see cref="JobLogStore.Prune"/>.</summary>
     public IReadOnlySet<string> ActiveLogFolders()
     {
