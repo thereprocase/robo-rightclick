@@ -22,7 +22,7 @@ internal sealed class SettingsStore : IDisposable
     public const string BadCopySuffix = ".bad";
 
     /// <summary>Fixed name, so a crash between write and replace leaves at most one stray file.</summary>
-    public const string TempSuffix = ".tmp";
+    public const string TempSuffix = AppPaths.TempSuffix;
 
     /// <summary>Editors save in several steps (truncate, write, rename); wait for them to settle.</summary>
     public static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(500);
@@ -178,7 +178,7 @@ internal sealed class SettingsStore : IDisposable
             return;
         }
         var result = SettingsSerializer.Parse(text);
-        _lastLoadUnreadable = StartupRules.IsUnreadableConfig(text);
+        _lastLoadUnreadable = result.Unreadable;
         _current = result.Settings;
         _loadProblems = result.Problems;
     }

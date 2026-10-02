@@ -35,6 +35,12 @@ public enum VerbRefusal
 
     /// <summary>The same cut is already being pasted.</summary>
     AlreadyBeingMoved,
+
+    /// <summary>
+    /// Something unexpected stopped the verb before it could hand anything on. Without this,
+    /// an exception inside the dispatcher would leave the click with no visible result.
+    /// </summary>
+    Failed,
 }
 
 /// <summary>
@@ -157,6 +163,7 @@ public static class ToastText
             "Only files and folders on a drive or network share can be Robo-copied or Robo-cut.",
             ToastKind.Warning),
         VerbRefusal.AlreadyBeingMoved => new("Already moving", "These items are already being moved.", ToastKind.Info),
+        VerbRefusal.Failed => new("Something went wrong", "Robo-Copy, Robo-Cut or Robo-Paste could not finish. Try again.", ToastKind.Warning),
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };
 

@@ -141,6 +141,35 @@ public class CommandLineTests
     }
 
     [Fact]
+    public void Quiet_install_and_uninstall_in_any_order()
+    {
+        Assert.Equal(new CliInstall(null, Quiet: true), CommandLine.Parse(["--install", "--quiet"]));
+        Assert.Equal(new CliInstall(true, Quiet: true), CommandLine.Parse(["--install", "--quiet", "--autostart"]));
+        Assert.Equal(new CliInstall(false, Quiet: true), CommandLine.Parse(["--install", "--no-autostart", "--QUIET"]));
+        Assert.Equal(new CliUninstall(Quiet: true), CommandLine.Parse(["--uninstall", "--quiet"]));
+        Assert.Equal(new CliUninstall(Quiet: false), CommandLine.Parse(["--uninstall"]));
+    }
+
+    [Fact]
+    public void Repeated_or_stray_install_options_are_refused()
+    {
+        Assert.IsType<CliError>(CommandLine.Parse(["--install", "--quiet", "--quiet"]));
+        Assert.IsType<CliError>(CommandLine.Parse(["--install", "--autostart", "--autostart"]));
+        Assert.IsType<CliError>(CommandLine.Parse(["--install", "--no-autostart", "--quiet", "--autostart"]));
+        Assert.IsType<CliError>(CommandLine.Parse(["--uninstall", "--quiet", "now"]));
+        Assert.IsType<CliError>(CommandLine.Parse(["--uninstall", "--quiet", "--quiet"]));
+    }
+
+    [Fact]
+    public void After_install_runs_the_tray_with_the_first_run_signal()
+    {
+        Assert.Equal(new CliRunTray(StartedByCom: false, AfterInstall: true), CommandLine.Parse(["--after-install"]));
+        Assert.False(((CliRunTray)CommandLine.Parse([])).AfterInstall);
+        Assert.False(((CliRunTray)CommandLine.Parse(["-Embedding"])).AfterInstall);
+        Assert.IsType<CliError>(CommandLine.Parse(["--after-install", "x"]));
+    }
+
+    [Fact]
     public void Verbs_take_paths_and_paste_takes_one_folder()
     {
         var copy = Assert.IsType<CliInvokeVerb>(CommandLine.Parse(["copy", @"C:\a b.txt", @"C:\日本"]));

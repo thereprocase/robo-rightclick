@@ -67,6 +67,7 @@ internal sealed class TrayApplication : ApplicationContext
     private const string ShutdownBlockReason = "Copying files…";
 
     private readonly SingleInstance _instance;
+    private readonly bool _afterInstall;
     private readonly Action<JobManager?> _publishJobs;
 
     // Everything the tray creates, in creation order; teardown disposes it in reverse, so
@@ -108,9 +109,10 @@ internal sealed class TrayApplication : ApplicationContext
     private bool _finished;
     private bool _tornDown;
 
-    private TrayApplication(bool startedByCom, SingleInstance instance, Action<JobManager?> publishJobs)
+    private TrayApplication(CliRunTray command, SingleInstance instance, Action<JobManager?> publishJobs)
     {
-        StartedByCom = startedByCom;
+        StartedByCom = command.StartedByCom;
+        _afterInstall = command.AfterInstall;
         _instance = instance;
         _publishJobs = publishJobs;
         try
@@ -140,7 +142,9 @@ internal sealed class TrayApplication : ApplicationContext
             _publishJobs(_jobs);
 
             _icon = Own(new NotifyIcon { Text = AppInfo.Name, Visible = false });
-            _notifier = new Notifier(_icon);
+            // Owned after the icon, so it is disposed first: its batch timer must not fire
+            // into a disposed NotifyIcon.
+            _notifier = Own(new Notifier(_icon));
             var dispatcher = new VerbDispatcher(_ui, _clipboard, _jobs, _settings, _notifier);
 
             _comServer = Own(new ComServer(dispatcher));
@@ -155,7 +159,7 @@ internal sealed class TrayApplication : ApplicationContext
             _openLogsItem = new ToolStripMenuItem("Open logs", null, (_, _) => OpenLogs());
             _menu = Own(BuildMenu());
             _icon.ContextMenuStrip = _menu;
-            _jobsWindow = Own(new JobsWindow(_jobs, _logStore));
+            _jobsWindow = Own(new JobsWindow(_jobs, _logStore) { Prompts = _prompts });
             _progressWindows = Own(new ProgressWindowHost(_jobs, () => _settings.Current, _jobsWindow));
             _sessionWindow = Own(new SessionEndWindow(this));
             _refreshTimer = Own(new System.Windows.Forms.Timer { Interval = ActiveRefreshIntervalMs });
@@ -176,27 +180,29 @@ internal sealed class TrayApplication : ApplicationContext
     public bool StartedByCom { get; }
 
     /// <summary>Runs the tray until exit. Returns the process exit code.</summary>
+    /// <param name="command">How this tray was started: by COM, by the installer (first-run hint) or by the user.</param>
     /// <param name="publishJobs">
     /// Receives the job manager once it exists and null after teardown, for
     /// <see cref="CrashPolicy"/>, which is installed before the tray and asks it at crash time.
     /// </param>
-    public static int Run(bool startedByCom, Action<JobManager?> publishJobs)
+    public static int Run(CliRunTray command, Action<JobManager?> publishJobs)
     {
         TrayApplication app;
         try
         {
             var instance = SingleInstance.TryAcquire();
+            if (instance is null && command.StartedByCom)
+            {
+                // Another tray owns the session. COM launched this one because it did not see
+                // a registered server: either the other tray has not registered yet (wait for
+                // it), or it is shutting down (take over once it lets go of the mutex).
+                instance = SingleInstance.WaitForReadyOrAcquire(SingleInstance.ReadyTimeout);
+            }
             if (instance is null)
             {
-                // Another tray owns the session. COM launched this one because it did not
-                // see a registered server yet; give the winner time to register.
-                if (startedByCom)
-                {
-                    SingleInstance.WaitForReady(SingleInstance.ReadyTimeout);
-                }
                 return CliExitCodes.Ok;
             }
-            app = new TrayApplication(startedByCom, instance, publishJobs);
+            app = new TrayApplication(command, instance, publishJobs);
         }
         catch (Exception ex)
         {
@@ -301,19 +307,15 @@ internal sealed class TrayApplication : ApplicationContext
     }
 
     /// <summary>
-    /// The interrupted-jobs toast, the first-run hint and pruning. They read the disk, so they
-    /// run on the thread pool: the UI thread also serves every right-click.
+    /// The interrupted-jobs toast, the first-run hint and pruning. The disk reads run on the
+    /// thread pool: the UI thread also serves every right-click.
     /// </summary>
     private async void RunStartupChecks(LoggingMode mode, bool settingsToastShown)
     {
-        var paths = _settings.Paths;
         int interrupted;
-        bool firstRun;
         try
         {
-            (interrupted, firstRun) = await Task.Run(() => (
-                mode == LoggingMode.Normal ? _logStore.CountInterrupted() : 0,
-                StartupRules.IsFirstRun(mode, File.Exists(paths.HistoryFile), Directory.Exists(paths.JobsDirectory))));
+            interrupted = mode == LoggingMode.Normal ? await Task.Run(_logStore.CountInterrupted) : 0;
         }
         catch (Exception)
         {
@@ -326,15 +328,14 @@ internal sealed class TrayApplication : ApplicationContext
             return;
         }
 
-        // One balloon shows at a time and a new one replaces it, so pick the most important:
-        // possibly damaged files outrank a settings typo, which outranks the hint.
-        if (interrupted > 0)
+        switch (StartupRules.PickStartupToast(interrupted, settingsToastShown, _afterInstall))
         {
-            _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Jobs);
-        }
-        else if (firstRun && !settingsToastShown)
-        {
-            _notifier.Show(ToastText.ForTrayHint(), ToastTarget.None);
+            case StartupToast.Interrupted:
+                _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Jobs);
+                break;
+            case StartupToast.TrayHint:
+                _notifier.Show(ToastText.ForTrayHint(), ToastTarget.None);
+                break;
         }
 
         if (mode == LoggingMode.Normal)
@@ -359,6 +360,8 @@ internal sealed class TrayApplication : ApplicationContext
         {
             return;
         }
+        // A raised maxConcurrentJobs starts waiting jobs now, not at the next state change.
+        _jobs.SettingsChanged();
         RefreshTray();
         ToastSettingsProblemsIfNew();
     }
@@ -546,22 +549,17 @@ internal sealed class TrayApplication : ApplicationContext
     }
 
     /// <summary>Keep is the default: when in doubt, keep data.</summary>
-    private static bool AskDeleteLogs(int count)
-    {
-        var delete = new TaskDialogButton("Delete");
-        var keep = new TaskDialogButton("Keep");
-        var page = new TaskDialogPage
-        {
-            Caption = AppInfo.Name,
-            Heading = "Ephemeral mode is on",
-            Text = count == 1
+    private static bool AskDeleteLogs(int count) =>
+        Gridline.Confirm(
+            owner: null,
+            "Ephemeral mode is on",
+            count == 1
                 ? "New jobs write nothing to disk. Delete the existing job log too?"
                 : $"New jobs write nothing to disk. Delete the {count:N0} existing job logs too?",
-            Buttons = { delete, keep },
-            DefaultButton = keep,
-        };
-        return TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen) == delete;
-    }
+            "Delete",
+            "DeleteLogs",
+            "Keep",
+            "KeepLogs");
 
     private void OpenLogs()
     {
@@ -613,21 +611,18 @@ internal sealed class TrayApplication : ApplicationContext
         FinishExit();
     }
 
+    /// <summary>Keep running is the default, so Enter or Escape never cancels a paste.</summary>
     private bool ConfirmExit()
     {
         var active = _jobs.Snapshots().Count(j => !JobStates.IsTerminal(j.State));
-        var exit = new TaskDialogButton("Exit");
-        var stay = new TaskDialogButton("Keep running");
-        var page = new TaskDialogPage
-        {
-            Caption = AppInfo.Name,
-            Heading = active == 1 ? "1 job is still running" : $"{active} jobs are still running",
-            Text = "Exiting cancels them, as Cancel does in the Jobs window.",
-            Icon = TaskDialogIcon.Warning,
-            Buttons = { exit, stay },
-            DefaultButton = stay,
-        };
-        return TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen) == exit;
+        return Gridline.Confirm(
+            owner: null,
+            active == 1 ? "1 job is still running" : $"{active} jobs are still running",
+            "Exiting cancels them, as Cancel does in the Jobs window.",
+            "Exit",
+            "ConfirmExit",
+            "Keep running",
+            "KeepRunning");
     }
 
     /// <summary>Shared by Exit and session end; whichever comes first starts it.</summary>
@@ -635,12 +630,22 @@ internal sealed class TrayApplication : ApplicationContext
 
     /// <summary>
     /// Revoke first, so a right-click during shutdown is not routed to a server that is going
-    /// away; then cancel with the loop pumping, because jobs in Finalizing post to it.
+    /// away. Then close the conflict questions (each open one answers "cancel", and no new
+    /// one appears while jobs wind down), then cancel with the loop pumping, because jobs in
+    /// Finalizing post to it.
     /// </summary>
     private async Task CancelForExitAsync(TimeSpan timeout)
     {
         _shuttingDown = true;
         RevokeComServer();
+        try
+        {
+            _prompts.Shutdown();
+        }
+        catch (Exception)
+        {
+            // Nothing here may keep the process alive; the cancel below ends those jobs anyway.
+        }
         try
         {
             await _jobs.CancelAllAndWaitAsync(timeout);
@@ -650,22 +655,26 @@ internal sealed class TrayApplication : ApplicationContext
             // Exit must complete whatever the cancel did; cleanup that did not finish is
             // reported at the next start through job.json (normal mode).
         }
-        try
-        {
-            _prompts.Shutdown();
-        }
-        catch (Exception)
-        {
-            // Same: nothing here may keep the process alive.
-        }
     }
 
-    /// <summary>Never throws: the session-end pump waits on the task this runs in, inside a window procedure.</summary>
+    /// <summary>
+    /// Never throws: the session-end pump waits on the task this runs in, inside a window
+    /// procedure. Clears the ready event too, so an -Embedding start from here on waits to
+    /// take over instead of exiting into a failed activation (<see cref="SingleInstance.WaitForReadyOrAcquire"/>).
+    /// </summary>
     private void RevokeComServer()
     {
         if (_owned.Remove(_comServer))
         {
             DisposeQuietly(_comServer);
+        }
+        try
+        {
+            _instance.ClearReady();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already torn down.
         }
     }
 
@@ -740,11 +749,11 @@ internal sealed class TrayApplication : ApplicationContext
             return Task.FromResult(false);
         }
         var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var posted = Post(() =>
+        var posted = Post(async () =>
         {
             try
             {
-                result.TrySetResult(!_shuttingDown && _clipboard.ClearIfUnchanged(sequenceNumber));
+                result.TrySetResult(!_shuttingDown && await _clipboard.ClearIfUnchangedAsync(sequenceNumber));
             }
             catch (Exception)
             {

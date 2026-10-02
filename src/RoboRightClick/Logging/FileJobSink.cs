@@ -21,7 +21,7 @@ internal sealed class FileJobSink : IJobSink, IDisposable
 
     private const int LogBufferBytes = 64 * 1024;
     private const string TruncationLine = "# output truncated at 50 MB";
-    private const string TempSuffix = ".tmp";
+    private const string TempSuffix = AppPaths.TempSuffix;
 
     private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);

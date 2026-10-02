@@ -119,13 +119,15 @@ internal sealed class ClipboardService : IDisposable
     /// by the user or another app is never discarded. Returns whether it cleared.
     /// </summary>
     /// <remarks>
-    /// One attempt, no retry: this is synchronous on the UI thread, and a clipboard that stays
-    /// is the safe outcome (the sources were moved, so a second paste finds them missing and
-    /// reports it).
+    /// Opening is retried for <see cref="OpenRetryBudget"/> with awaited delays, like the
+    /// verbs' own clipboard access, so the UI loop keeps pumping. A clipboard that stays is
+    /// the safe outcome of any failure (the sources were moved, so a second paste finds them
+    /// missing and reports it). Call on the UI thread, which owns the clipboard window.
     /// </remarks>
-    public bool ClearIfUnchanged(uint sequenceNumber)
+    public async Task<bool> ClearIfUnchangedAsync(uint sequenceNumber)
     {
-        if (!TryOpen())
+        // A newer write is known without opening the clipboard; no retries needed to keep it.
+        if (ClipboardNative.GetClipboardSequenceNumber() != sequenceNumber || !await OpenWithRetryAsync())
         {
             return false;
         }

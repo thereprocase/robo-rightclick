@@ -3,15 +3,22 @@ namespace RoboRightClick.Core;
 public abstract record CliCommand;
 
 /// <summary>Run the tray app. <paramref name="StartedByCom"/> is true for COM's "-Embedding" launch.</summary>
-public sealed record CliRunTray(bool StartedByCom) : CliCommand;
+/// <param name="AfterInstall">
+/// "--after-install": the installer started this tray. It is the one durable first-run
+/// signal (the hint about pinning the tray icon shows once per install) and needs no marker
+/// file, which ephemeral mode would forbid and uninstall would have to know about.
+/// </param>
+public sealed record CliRunTray(bool StartedByCom, bool AfterInstall = false) : CliCommand;
 
 /// <param name="StartWithWindows">
 /// --autostart (true), --no-autostart (false) or neither (null: keep an existing config's
 /// choice; see <see cref="Registration.ResolveStartWithWindows"/>).
 /// </param>
-public sealed record CliInstall(bool? StartWithWindows) : CliCommand;
+/// <param name="Quiet">--quiet: no message box; the exit code is the only result (scripts, e2e).</param>
+public sealed record CliInstall(bool? StartWithWindows, bool Quiet = false) : CliCommand;
 
-public sealed record CliUninstall : CliCommand;
+/// <param name="Quiet">--quiet: no message box; the exit code is the only result.</param>
+public sealed record CliUninstall(bool Quiet = false) : CliCommand;
 
 /// <summary>
 /// Drive a verb through the same COM path a right-click takes. Paths are passed as
@@ -35,14 +42,15 @@ public static class CommandLine
     public const string Usage =
         """
         RoboRightClick                     run the tray app
-        RoboRightClick --install [--autostart | --no-autostart]
-        RoboRightClick --uninstall
+        RoboRightClick --install [--autostart | --no-autostart] [--quiet]
+        RoboRightClick --uninstall [--quiet]
         RoboRightClick copy <path>...      Robo-Copy the items (same path as the right-click)
         RoboRightClick cut <path>...       Robo-Cut the items
         RoboRightClick paste <folder>      Robo-Paste the clipboard into the folder
 
         This is a Windows GUI program: cmd and PowerShell do not wait for it. In scripts use
         "start /wait RoboRightClick ..." or "Start-Process -Wait -PassThru" to get the exit code.
+        --quiet skips the install and uninstall message box; the exit code is the result.
         """;
 
     public static CliCommand Parse(IReadOnlyList<string> args)
@@ -61,27 +69,47 @@ public static class CommandLine
         {
             return rest.Count == 0 ? new CliRunTray(StartedByCom: true) : Unexpected(rest[0]);
         }
+        if (Is(first, AfterInstallSwitch))
+        {
+            return rest.Count == 0 ? new CliRunTray(StartedByCom: false, AfterInstall: true) : Unexpected(rest[0]);
+        }
         if (Is(first, "--help") || Is(first, "-h") || Is(first, "/?"))
         {
             return new CliHelp();
         }
         if (Is(first, "--install"))
         {
-            if (rest.Count == 0)
+            bool? startWithWindows = null;
+            var quiet = false;
+            foreach (var option in rest)
             {
-                return new CliInstall(StartWithWindows: null);
+                if (Is(option, QuietSwitch) && !quiet)
+                {
+                    quiet = true;
+                }
+                else if ((Is(option, "--autostart") || Is(option, "--no-autostart")) && startWithWindows is null)
+                {
+                    startWithWindows = Is(option, "--autostart");
+                }
+                else
+                {
+                    // A repeated or contradictory option is refused rather than "last one wins".
+                    return Unexpected(option);
+                }
             }
-            if (rest.Count > 1)
-            {
-                return Unexpected(rest[1]);
-            }
-            return Is(rest[0], "--autostart") ? new CliInstall(true)
-                : Is(rest[0], "--no-autostart") ? new CliInstall(false)
-                : Unexpected(rest[0]);
+            return new CliInstall(startWithWindows, quiet);
         }
         if (Is(first, "--uninstall"))
         {
-            return rest.Count == 0 ? new CliUninstall() : Unexpected(rest[0]);
+            if (rest.Count == 0)
+            {
+                return new CliUninstall();
+            }
+            if (rest.Count == 1 && Is(rest[0], QuietSwitch))
+            {
+                return new CliUninstall(Quiet: true);
+            }
+            return Unexpected(Is(rest[0], QuietSwitch) ? rest[1] : rest[0]);
         }
 
         var verb = first.ToLowerInvariant() switch
@@ -105,6 +133,11 @@ public static class CommandLine
         }
         return new CliInvokeVerb(verb.Value, rest);
     }
+
+    /// <summary>Passed by the installer when it starts the installed tray; not meant for users.</summary>
+    public const string AfterInstallSwitch = "--after-install";
+
+    public const string QuietSwitch = "--quiet";
 
     private static bool Is(string arg, string expected) => string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase);
 

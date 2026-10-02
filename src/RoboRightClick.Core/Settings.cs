@@ -62,7 +62,15 @@ public sealed record Settings
     public static readonly Settings Default = new();
 }
 
-public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string> Problems);
+public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string> Problems)
+{
+    /// <summary>
+    /// The text was not a JSON object at all, so every field is a default. Only then does the
+    /// next save keep a config.json.bad copy: per-field fallback already keeps everything
+    /// else in a readable file, but an unreadable one would be overwritten by defaults and lost.
+    /// </summary>
+    public bool Unreadable { get; init; }
+}
 
 /// <summary>
 /// Reads and writes the config file format. Each bad field falls back to its
@@ -86,11 +94,11 @@ public static class SettingsSerializer
         }
         catch (JsonException ex)
         {
-            return new(Settings.Default, [$"config is not valid JSON ({ex.Message}); using defaults"]);
+            return new(Settings.Default, [$"config is not valid JSON ({ex.Message}); using defaults"]) { Unreadable = true };
         }
         if (root is null)
         {
-            return new(Settings.Default, ["config is not a JSON object; using defaults"]);
+            return new(Settings.Default, ["config is not a JSON object; using defaults"]) { Unreadable = true };
         }
 
         var d = Settings.Default;

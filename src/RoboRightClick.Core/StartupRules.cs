@@ -2,6 +2,18 @@ using System.Text.Json;
 
 namespace RoboRightClick.Core;
 
+/// <summary>The balloon a tray start shows once its message loop runs.</summary>
+public enum StartupToast
+{
+    None,
+
+    /// <summary>Normal-mode job logs show pastes that never finished (<see cref="ToastText.ForInterrupted"/>).</summary>
+    Interrupted,
+
+    /// <summary>The one-time hint about pinning the tray icon (<see cref="ToastText.ForTrayHint"/>).</summary>
+    TrayHint,
+}
+
 /// <summary>What a plain tray start does.</summary>
 public enum StartupAction
 {
@@ -72,12 +84,16 @@ public static class StartupRules
         jobs.Any(j => !JobStates.IsTerminal(j.State) && j.Logging != to);
 
     /// <summary>
-    /// First tray start after install: no history file and no jobs folder yet, so Windows 11
-    /// has only just put the icon in the hidden overflow. Ephemeral mode never creates
-    /// either, so it never counts as a first run; otherwise the hint would show on every start.
+    /// The one balloon a tray start shows after the settings-problem toast (a new balloon
+    /// replaces the one before, so only the most important survives): possibly damaged files
+    /// from interrupted jobs outrank a settings typo, which outranks the first-run hint. The
+    /// hint shows only on the start the installer made (<see cref="CliRunTray.AfterInstall"/>),
+    /// so it appears once per install in either logging mode and never on an ordinary start.
     /// </summary>
-    public static bool IsFirstRun(LoggingMode mode, bool historyFileExists, bool jobsDirectoryExists) =>
-        mode == LoggingMode.Normal && !historyFileExists && !jobsDirectoryExists;
+    public static StartupToast PickStartupToast(int interruptedJobs, bool settingsToastShown, bool afterInstall) =>
+        interruptedJobs > 0 ? StartupToast.Interrupted
+        : afterInstall && !settingsToastShown ? StartupToast.TrayHint
+        : StartupToast.None;
 
     /// <summary>
     /// A tray click while a conflict question waits brings that dialog forward instead of
@@ -91,28 +107,7 @@ public static class StartupRules
 
     /// <summary>
     /// True when <paramref name="configText"/> cannot be read as a JSON object at all, as
-    /// opposed to one with bad fields. Only then does the next save keep a config.json.bad
-    /// copy: per-field fallback already preserves everything else in a readable file, but an
-    /// unreadable one would otherwise be overwritten by defaults and lost.
+    /// opposed to one with bad fields (<see cref="SettingsLoadResult.Unreadable"/>).
     /// </summary>
-    /// <remarks>
-    /// Mirrors the document options of <see cref="SettingsSerializer.Parse"/> (comments,
-    /// trailing commas); a test pins the two together.
-    /// </remarks>
-    public static bool IsUnreadableConfig(string configText)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(configText, new JsonDocumentOptions
-            {
-                CommentHandling = JsonCommentHandling.Skip,
-                AllowTrailingCommas = true,
-            });
-            return document.RootElement.ValueKind != JsonValueKind.Object;
-        }
-        catch (JsonException)
-        {
-            return true;
-        }
-    }
+    public static bool IsUnreadableConfig(string configText) => SettingsSerializer.Parse(configText).Unreadable;
 }

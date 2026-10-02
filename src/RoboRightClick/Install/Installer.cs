@@ -39,16 +39,18 @@ internal static class Installer
     /// Registration.ResolveStartWithWindows(command.StartWithWindows, existing), userSid,
     /// version))). 5. Write the default config.json only if none exists, or write back the
     /// existing one with an explicit --autostart/--no-autostart applied. 6. Start the
-    /// installed exe (tray). 7. Message: "Installed. Right-click files → Show more options
-    /// → Robo-Copy / Robo-Cut / Robo-Paste."
+    /// installed exe (tray) with <see cref="CommandLine.AfterInstallSwitch"/>, so it shows the
+    /// first-run hint once. 7. Message: "Installed. Right-click files → Show more options
+    /// → Robo-Copy / Robo-Cut / Robo-Paste." (none with --quiet; the exit code is the result).
     /// </summary>
     public static int Install(CliInstall command, AppPaths paths)
     {
+        var quiet = command.Quiet;
         try
         {
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
-                return Fail(BusyMessage);
+                return Fail(BusyMessage, quiet);
             }
 
             CopyExecutable(HostEnvironment.ExecutablePath, paths);
@@ -68,11 +70,11 @@ internal static class Installer
             WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
             StartTray(paths);
-            return Succeed("Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste.");
+            return Succeed("Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste.", quiet);
         }
         catch (Exception ex)
         {
-            return Fail($"Install failed: {ex.Message}");
+            return Fail($"Install failed: {ex.Message}", quiet);
         }
     }
 
@@ -130,9 +132,11 @@ internal static class Installer
     /// %SystemRoot%\System32\cmd.exe by absolute path with the command line from
     /// UninstallPlan.SelfDeleteArguments, which waits for this process to exit and deletes the
     /// exe and the folder. Removes nothing outside <see cref="AppPaths"/> and the registry list.
+    /// With --quiet no message box is shown; the exit code is the result.
     /// </summary>
-    public static int Uninstall(AppPaths paths)
+    public static int Uninstall(CliUninstall command, AppPaths paths)
     {
+        var quiet = command.Quiet;
         try
         {
             var runningFromInstall = WinPath.AreSame(HostEnvironment.ExecutablePath, paths.InstalledExe);
@@ -146,7 +150,7 @@ internal static class Installer
 
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
-                return Fail(BusyMessage);
+                return Fail(BusyMessage, quiet);
             }
 
             // Job folders are listed once the tray has stopped, so none appears afterwards.
@@ -160,7 +164,7 @@ internal static class Installer
             var message = leftBehind == 0
                 ? "RoboRightClick was uninstalled."
                 : $"RoboRightClick was uninstalled. {leftBehind} item(s) were left in place because they were not created by it or could not be removed.";
-            var code = Succeed(message);
+            var code = Succeed(message, quiet);
 
             if (selfDelete is not null)
             {
@@ -170,7 +174,7 @@ internal static class Installer
         }
         catch (Exception ex)
         {
-            return Fail($"Uninstall failed: {ex.Message}");
+            return Fail($"Uninstall failed: {ex.Message}", quiet);
         }
     }
 
@@ -261,6 +265,7 @@ internal static class Installer
     {
         Process.Start(new ProcessStartInfo(paths.InstalledExe)
         {
+            ArgumentList = { CommandLine.AfterInstallSwitch },
             UseShellExecute = false,
             WorkingDirectory = paths.InstallDirectory,
         })?.Dispose();
@@ -407,15 +412,21 @@ internal static class Installer
         })?.Dispose();
     }
 
-    private static int Succeed(string message)
+    private static int Succeed(string message, bool quiet)
     {
-        MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        if (!quiet)
+        {
+            MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
         return CliExitCodes.Ok;
     }
 
-    private static int Fail(string message)
+    private static int Fail(string message, bool quiet)
     {
-        MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        if (!quiet)
+        {
+            MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
         return CliExitCodes.Failed;
     }
 }

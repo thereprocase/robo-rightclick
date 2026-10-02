@@ -66,9 +66,10 @@ internal sealed class VerbDispatcher : IVerbHandler
     /// <summary>
     /// Waits for the previous verb, then runs this one. The awaits resume on the UI context
     /// (no ConfigureAwait), which the clipboard calls need. A verb that throws must not stop
-    /// the verbs behind it: <paramref name="previous"/> therefore never faults.
+    /// the verbs behind it: <paramref name="previous"/> therefore never faults. The user gets
+    /// the fixed <see cref="VerbRefusal.Failed"/> toast, so a click never ends in silence.
     /// </summary>
-    private static async Task RunAfterAsync(Task previous, Func<Task> work)
+    private async Task RunAfterAsync(Task previous, Func<Task> work)
     {
         await previous;
         try
@@ -79,6 +80,14 @@ internal sealed class VerbDispatcher : IVerbHandler
         {
             // Type name only: an exception message can carry a path, and toasts and logs must not.
             Trace.TraceError("Verb failed: " + ex.GetType().Name);
+            try
+            {
+                Refuse(VerbRefusal.Failed);
+            }
+            catch (Exception)
+            {
+                // The toast is a courtesy; the queue must keep going.
+            }
         }
     }
 

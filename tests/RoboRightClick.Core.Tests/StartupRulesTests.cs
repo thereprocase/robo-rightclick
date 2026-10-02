@@ -78,14 +78,19 @@ public class StartupRulesTests
     }
 
     [Fact]
-    public void First_run_is_a_normal_mode_start_with_no_history_and_no_jobs_folder()
+    public void The_tray_hint_shows_only_on_the_start_the_installer_made()
     {
-        Assert.True(StartupRules.IsFirstRun(LoggingMode.Normal, historyFileExists: false, jobsDirectoryExists: false));
-        Assert.False(StartupRules.IsFirstRun(LoggingMode.Normal, historyFileExists: true, jobsDirectoryExists: false));
-        Assert.False(StartupRules.IsFirstRun(LoggingMode.Normal, historyFileExists: false, jobsDirectoryExists: true));
+        Assert.Equal(StartupToast.TrayHint, StartupRules.PickStartupToast(0, settingsToastShown: false, afterInstall: true));
+        // An ordinary start never repeats it, however empty the log folder is.
+        Assert.Equal(StartupToast.None, StartupRules.PickStartupToast(0, settingsToastShown: false, afterInstall: false));
+    }
 
-        // Ephemeral mode never writes either file, so it would otherwise look like a first run forever.
-        Assert.False(StartupRules.IsFirstRun(LoggingMode.Ephemeral, historyFileExists: false, jobsDirectoryExists: false));
+    [Fact]
+    public void Interrupted_jobs_outrank_the_settings_toast_which_outranks_the_hint()
+    {
+        Assert.Equal(StartupToast.Interrupted, StartupRules.PickStartupToast(2, settingsToastShown: true, afterInstall: true));
+        Assert.Equal(StartupToast.Interrupted, StartupRules.PickStartupToast(1, settingsToastShown: false, afterInstall: false));
+        Assert.Equal(StartupToast.None, StartupRules.PickStartupToast(0, settingsToastShown: true, afterInstall: true));
     }
 
     [Fact]
@@ -129,6 +134,7 @@ public class StartupRulesTests
         // file Parse could read field by field is never "unreadable", and vice versa.
         var result = SettingsSerializer.Parse(text);
         var parseGaveUp = result.Problems.Any(p => p.StartsWith("config is not", StringComparison.Ordinal));
+        Assert.Equal(parseGaveUp, result.Unreadable);
         Assert.Equal(parseGaveUp, StartupRules.IsUnreadableConfig(text));
     }
 }

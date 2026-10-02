@@ -32,6 +32,16 @@ public class UninstallPlanTests
     }
 
     [Fact]
+    public void Lists_the_temp_files_a_crash_between_write_and_replace_leaves_behind()
+    {
+        // Without these, RemoveDirectory fails on the job folder or the config folder and
+        // uninstall leaves them behind.
+        var plan = UninstallPlan.For(Paths, [JobA], runningFromInstallDir: false);
+        Assert.Contains(Paths.ConfigFile + ".tmp", plan.Files);
+        Assert.Contains(WinPath.Combine(WinPath.Combine(Paths.JobsDirectory, JobA), "job.json.tmp"), plan.Files);
+    }
+
+    [Fact]
     public void Never_lists_a_drive_root_or_a_shared_parent()
     {
         var plan = UninstallPlan.For(Paths, [JobA], runningFromInstallDir: false);

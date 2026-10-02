@@ -39,7 +39,7 @@ internal static class Program
         {
             CliRunTray tray => RunTray(tray),
             CliInstall install => Installer.Install(install, HostEnvironment.Paths),
-            CliUninstall => Installer.Uninstall(HostEnvironment.Paths),
+            CliUninstall uninstall => Installer.Uninstall(uninstall, HostEnvironment.Paths),
             CliInvokeVerb verb => CliRunner.InvokeVerb(verb),
             CliHelp => CliRunner.PrintUsage(error: null),
             CliError error => CliRunner.PrintUsage(error.Message),
@@ -50,7 +50,7 @@ internal static class Program
     private static int RunTray(CliRunTray tray) =>
         StartupRules.Decide(tray, HostEnvironment.RunningFromInstallLocation) switch
         {
-            StartupAction.RunTray => TrayApplication.Run(tray.StartedByCom, jobs => Volatile.Write(ref s_jobs, jobs)),
+            StartupAction.RunTray => TrayApplication.Run(tray, jobs => Volatile.Write(ref s_jobs, jobs)),
             StartupAction.OfferInstall => Installer.OfferInstall(HostEnvironment.Paths),
             var other => throw new InvalidOperationException($"Unhandled startup action {other}."),
         };

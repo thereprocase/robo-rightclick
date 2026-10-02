@@ -16,7 +16,7 @@ internal sealed class JobLogStore
     public const int HistoryRotateLines = 10_000;
 
     private const string RotatedHistoryFileName = "history.1.jsonl";
-    private const string TempSuffix = ".tmp";
+    private const string TempSuffix = AppPaths.TempSuffix;
 
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 

@@ -13,9 +13,11 @@ namespace RoboRightClick.App;
 /// </summary>
 /// <remarks>
 /// A tray started by COM with -Embedding that finds the mutex taken (a Run-key start won
-/// the race) waits up to <see cref="ReadyTimeout"/> for the ready event before exiting 0,
-/// so COM's activation reaches a registered server instead of failing with "server
-/// execution failed".
+/// the race) uses <see cref="WaitForReadyOrAcquire"/>: it exits 0 once the other tray is
+/// ready, so COM's activation reaches a registered server instead of failing with "server
+/// execution failed". If the other tray is shutting down instead (it revoked its class
+/// objects and cleared the ready event, <see cref="ClearReady"/>), the waiting process takes
+/// the mutex when it is released and becomes the server itself.
 /// </remarks>
 internal sealed class SingleInstance : IDisposable
 {
@@ -98,27 +100,42 @@ internal sealed class SingleInstance : IDisposable
         }
     }
 
-    /// <summary>Waits for the running tray's ready event; false on timeout.</summary>
-    public static bool WaitForReady(TimeSpan timeout)
+    /// <summary>
+    /// For an -Embedding start that lost <see cref="TryAcquire"/>: polls until either the
+    /// running tray is ready (returns null: exit 0, COM reaches that tray) or its mutex is
+    /// free (returns this process's guard: run the tray). Null on timeout too.
+    /// </summary>
+    public static SingleInstance? WaitForReadyOrAcquire(TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (true)
         {
-            // The owner creates the mutex first and the event a moment later, so a missing
-            // event is polled for rather than treated as failure.
-            if (EventWaitHandleAcl.TryOpenExisting(ReadyEventName, EventWaitHandleRights.Synchronize, out var ready))
+            if (IsReady())
             {
-                using (ready)
-                {
-                    var remaining = deadline - DateTime.UtcNow;
-                    return remaining > TimeSpan.Zero ? ready.WaitOne(remaining) : ready.WaitOne(0);
-                }
+                return null;
+            }
+            if (TryAcquire() is { } instance)
+            {
+                return instance;
             }
             if (DateTime.UtcNow >= deadline)
             {
-                return false;
+                return null;
             }
             Thread.Sleep(PollInterval);
+        }
+    }
+
+    /// <summary>The running tray's ready event is set right now.</summary>
+    private static bool IsReady()
+    {
+        if (!EventWaitHandleAcl.TryOpenExisting(ReadyEventName, EventWaitHandleRights.Synchronize, out var ready))
+        {
+            return false;
+        }
+        using (ready)
+        {
+            return ready.WaitOne(0);
         }
     }
 
@@ -165,6 +182,13 @@ internal sealed class SingleInstance : IDisposable
 
     /// <summary>Sets the ready event: the class objects are registered and resumed.</summary>
     public void SignalReady() => _readyEvent.Set();
+
+    /// <summary>
+    /// Resets the ready event once the class objects are revoked at exit. Without this, an
+    /// -Embedding start during shutdown would see "ready", exit 0, and leave Explorer's
+    /// activation pointing at a server that is going away.
+    /// </summary>
+    public void ClearReady() => _readyEvent.Reset();
 
     /// <summary>
     /// Raised on a thread-pool thread when another process signals the exit event; handlers

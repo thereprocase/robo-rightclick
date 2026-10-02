@@ -30,6 +30,12 @@ public sealed record AppPaths(
     public const string JobRecordFileName = "job.json";
     public const string RobocopyLogFileName = "robocopy.log";
 
+    /// <summary>
+    /// Suffix of the temp file written next to config.json and job.json before File.Replace.
+    /// A crash between the write and the replace leaves one behind, so uninstall deletes it too.
+    /// </summary>
+    public const string TempSuffix = ".tmp";
+
     public static AppPaths From(string localAppData, string roamingAppData)
     {
         var install = WinPath.Combine(WinPath.Combine(localAppData, "Programs"), AppInfo.Name);

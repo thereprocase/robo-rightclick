@@ -66,6 +66,7 @@ public sealed record UninstallPlan(
             var folder = WinPath.Combine(paths.JobsDirectory, name);
             files.Add(WinPath.Combine(folder, AppPaths.JobRecordFileName));
             files.Add(WinPath.Combine(folder, AppPaths.RobocopyLogFileName));
+            files.Add(WinPath.Combine(folder, AppPaths.JobRecordFileName + AppPaths.TempSuffix));
             AddDirectory(folder, name);
         }
         AddDirectory(paths.JobsDirectory, AppPaths.JobsFolderName);
@@ -76,6 +77,7 @@ public sealed record UninstallPlan(
 
         files.Add(paths.ConfigFile);
         files.Add(paths.ConfigFile + BackupSuffix);
+        files.Add(paths.ConfigFile + AppPaths.TempSuffix);
         AddDirectory(paths.ConfigDirectory, AppInfo.Name);
 
         if (!runningFromInstallDir)
