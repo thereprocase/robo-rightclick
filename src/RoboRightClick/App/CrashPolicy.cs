@@ -14,6 +14,8 @@ internal static class CrashPolicy
     private static Action? s_killChildren;
     private static int s_uiThreadId;
 
+    private static readonly TimeSpan KillChildrenLimit = TimeSpan.FromSeconds(2);
+
     // 1 while a crash message box is up, so a burst of failures shows one box, not a stack of them.
     private static int s_showingMessage;
 
@@ -104,11 +106,30 @@ internal static class CrashPolicy
     {
         try
         {
-            s_killChildren?.Invoke();
+            // Bounded: the crashing thread may hold a lock the kill needs, and nothing may
+            // stand between a crash and TerminateProcess (WER would otherwise snapshot memory).
+            var kill = s_killChildren;
+            if (kill is not null)
+            {
+                var killer = new Thread(() =>
+                {
+                    try
+                    {
+                        kill();
+                    }
+                    catch (Exception)
+                    {
+                        // Best effort; the kill-on-close job object ends them with the process.
+                    }
+                })
+                { IsBackground = true };
+                killer.Start();
+                killer.Join(KillChildrenLimit);
+            }
         }
         catch (Exception)
         {
-            // Best effort; the kill-on-close job object ends them with the process.
+            // Same: the job object covers it.
         }
         AppNative.TerminateProcess(AppNative.GetCurrentProcess(), 1);
 

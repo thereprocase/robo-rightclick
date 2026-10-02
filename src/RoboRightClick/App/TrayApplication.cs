@@ -315,8 +315,10 @@ internal sealed class TrayApplication : ApplicationContext
                 mode == LoggingMode.Normal ? _logStore.CountInterrupted() : 0,
                 StartupRules.IsFirstRun(mode, File.Exists(paths.HistoryFile), Directory.Exists(paths.JobsDirectory))));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
+            // Advisory checks: whatever fails here must not take the tray down (async void
+            // would rethrow it into the crash policy).
             return;
         }
         if (_shuttingDown)
@@ -515,7 +517,7 @@ internal sealed class TrayApplication : ApplicationContext
             }
             await Task.Run(() => _logStore.DeleteAll(_jobs.ActiveLogFolders()));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex)
         {
             MessageBox.Show(
                 $"Some job logs could not be deleted.\n\n{ex.Message}",
