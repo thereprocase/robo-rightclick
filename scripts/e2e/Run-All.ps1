@@ -29,6 +29,7 @@ $plan = @(
     @{ Name = 'Verbs';      Args = @('-Root', $Root) },
     @{ Name = 'CutSafety';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($SmallVolume) { @('-SmallVolume', $SmallVolume) } else { @() }) },
     @{ Name = 'Cancel';     Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
+    @{ Name = 'Hotkey';     Args = @('-Root', $Root) },
     @{ Name = 'Ephemeral';  Args = @('-Root', $Root) + $(if ($AllowPath) { @('-AllowPath', ($AllowPath -join '|')) } else { @() }) },
     @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) },
     @{ Name = 'Uninstall';  Args = @('-Root', $Root) }

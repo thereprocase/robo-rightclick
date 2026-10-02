@@ -1,6 +1,7 @@
 <#
 Ephemeral audit (product invariant 2): with logging set to ephemeral, five jobs write nothing
-about themselves to disk.
+about themselves to disk, and neither does a sixth started with the Robo-Paste hotkey
+(docs/decisions/0001-paste-hotkey.md, release gate 12).
 
 Snapshots %APPDATA%, %LOCALAPPDATA% and %TEMP% (names, sizes, times and hashes), runs five
 jobs whose file names carry a unique marker, snapshots again, and fails on any new or changed
@@ -14,7 +15,12 @@ marker: an ephemeral toast must not carry a path (product invariant 2).
 The test's own folder (-Root) is excluded: the marker is in those names on purpose. A busy
 profile can show unrelated changes (browsers, indexers); the failure lists each path so a
 person can judge it, and -AllowPath adds substring exclusions for noise that has been judged.
-Needs an interactive desktop session and an installed app.
+The hotkey needs a File Explorer window, which is opened on the destination before the first
+snapshot so that its own start-up writes are in both; anything File Explorer still writes
+while the jobs run is listed like any other change, for a person to judge against what a
+right-click paste writes.
+Needs an interactive desktop session and an installed app. The script closes every File
+Explorer window.
 #>
 param(
     [string]$Root = (Join-Path $env:TEMP 'rrc-e2e'),
@@ -129,12 +135,16 @@ function Test-FileContainsText([string]$Path, [string]$Text, [int]$LimitMB = 256
 
 $originalConfig = Get-RoboConfigText
 try {
-    Set-RoboConfig @{ logging = 'ephemeral' }
+    Set-RoboConfig @{ logging = 'ephemeral'; pasteHotkey = 'Ctrl+Shift+V' }
 
     $srcDir = Join-Path $work 'src'
     $destDir = Join-Path $work 'dest'
     New-Item -ItemType Directory -Path $srcDir, $destDir | Out-Null
-    for ($i = 1; $i -le 5; $i++) { Set-Content -LiteralPath (Join-Path $srcDir "$marker-$i.txt") -Value "job $i" }
+    for ($i = 1; $i -le 6; $i++) { Set-Content -LiteralPath (Join-Path $srcDir "$marker-$i.txt") -Value "job $i" }
+
+    Close-ExplorerWindows
+    $explorerWindow = Open-ExplorerLocation $destDir
+    Start-Sleep -Seconds 3
 
     $before = Get-Snapshot
     Write-Step "snapshot before: $($before.Count) files"
@@ -145,6 +155,15 @@ try {
         Assert-That ((Invoke-Robo -Verb paste -Paths $destDir) -eq 0) "job ${i}: Robo-Paste accepted"
         [void](Wait-Settled -Path $destDir -MinFiles $i)
     }
+
+    # Job 6: Robo-Copy, then the hotkey in the destination's file list.
+    Assert-That ((Invoke-Robo -Verb copy -Paths (Join-Path $srcDir "$marker-6.txt")) -eq 0) 'job 6: Robo-Copy accepted'
+    Set-ForegroundWindowFirmly $explorerWindow
+    Set-ExplorerFileListFocus $explorerWindow
+    Send-PasteHotkey
+    Wait-PathExists (Join-Path $destDir "$marker-6.txt") -TimeoutSec 30
+    [void](Wait-Settled -Path $destDir -MinFiles 6)
+    Write-Step 'job 6: the hotkey pasted'
     Start-Sleep -Seconds 5
     Close-TrayDialogs
 
@@ -176,9 +195,10 @@ try {
     if ($problems.Count -gt 0) {
         throw ('Ephemeral mode left traces (judge each; add -AllowPath for noise unrelated to the app):' + [Environment]::NewLine + ($problems -join [Environment]::NewLine))
     }
-    Assert-That $true 'no new or changed file outside config.json, %TEMP%\.net and the notification database, and no file name or content with the marker'
+    Assert-That $true 'no new or changed file outside config.json, %TEMP%\.net and the notification database, and no file name or content with the marker (five CLI pastes and one hotkey paste)'
 }
 finally {
+    Close-ExplorerWindows
     Restore-RoboConfig $originalConfig
 }
 

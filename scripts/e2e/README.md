@@ -9,7 +9,8 @@ on success; there is no test framework.
 (docs/testlog.md, 2026-10-02 user experience entry): Install, Verbs, CutSafety, Cancel,
 Security and Uninstall passed; Ephemeral passed once the Windows noise it listed had been
 judged and passed with `-AllowPath`. A script that has not run against a given build is as
-likely to fail on a script defect as on an app defect.
+likely to fail on a script defect as on an app defect. `Hotkey.Tests.ps1`, and the hotkey
+paste added to `Ephemeral.Tests.ps1`, came later and have not run on Windows yet.
 
 ## Prerequisites
 
@@ -43,7 +44,8 @@ stdout. It writes no files. Exit code 0 means no test failed (a skipped test is 
 | `Verbs.Tests.ps1` | copy and paste against Explorer's `CopyHere` on the same tree (deviations from docs/parity.md only), Ctrl+C interop, `X - Copy` naming, paste into own subfolder refused |
 | `CutSafety.Tests.ps1` | cross-volume cut with a locked file, into a folder that refuses new files, and onto a full volume keeps each failed source (hash); `skip` conflict with same size and time keeps the source; a same-volume cut is a rename (file ID kept); the conflict dialog through UI Automation: Replace, Skip, "Let me decide" with both sides ticked (keep both on one volume, skip across volumes); a movable file in each cut proves the job ran |
 | `Cancel.Tests.ps1` | Cancel through UI Automation leaves no partial file and does not touch pre-existing destinations (A); a file that appeared after the job's presence check and that robocopy skipped survives the cancel (B); a canceled cross-volume cut loses no file (C) |
-| `Ephemeral.Tests.ps1` | five ephemeral jobs leave no new or changed file in `%APPDATA%`, `%LOCALAPPDATA%` or `%TEMP%` except `config.json` and `%TEMP%\.net`, and no file with the test marker; Windows' notification database may change but is searched for the marker (toasts carry no path) |
+| `Hotkey.Tests.ps1` | the Robo-Paste hotkey: pastes into the open folder (A) and into the active tab only (E); held 2 s and double-tapped, one paste each (B, C); the address bar and search box keep the key (D); the Documents library and a zip folder are refused (F); `"pasteHotkey": ""` is off (G); with the tray stopped, File Explorer does nothing with the key (H) |
+| `Ephemeral.Tests.ps1` | five ephemeral jobs through the CLI and a sixth through the hotkey leave no new or changed file in `%APPDATA%`, `%LOCALAPPDATA%` or `%TEMP%` except `config.json` and `%TEMP%\.net`, and no file with the test marker; Windows' notification database may change but is searched for the marker (toasts carry no path) |
 | `Security.Tests.ps1` | a low-integrity copy of the exe cannot run a verb: exit 1 (a normal copy exits 0); any other code is reported as inconclusive |
 | `Uninstall.Tests.ps1` | `--uninstall` removes every key, the Run value, the folders and the tray, and keeps the shared parent keys |
 
@@ -75,6 +77,11 @@ names a machine, an address or a user.
 - Install and uninstall run with `--quiet` and report only through the exit code. As a
   fallback, `Invoke-RoboCommand` in `Common.ps1` presses a message box's `OK` button through UI
   Automation if one still appears.
+- `Hotkey.Tests.ps1` and `Ephemeral.Tests.ps1` close every File Explorer window, open the
+  ones they need with `explorer.exe`, and put the focus in the file list through UI
+  Automation (the item view's class name, `UIItemsView`). Keys are sent with `SendKeys` and
+  `keybd_event`, at the script's own integrity level, which the hook accepts. A paste that
+  happened twice is detected by the conflict question it raises (`Replace`).
 - The progress window's Cancel button has the accessible name `Cancel`. The conflict dialog's
   controls are found by their accessible names: `Replace`, `Skip`, `Decide`, `SelectAllSource`,
   `SelectAllDestination`, `Continue`.
