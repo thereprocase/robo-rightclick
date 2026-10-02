@@ -100,12 +100,15 @@ public static class ToastText
         var done = job.Verb == TransferVerb.Move ? "moved" : "copied";
         var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
         var pasted = Math.Max(0, job.Sources.Count - job.RefusedCount);
+        // A move within one drive is a rename that writes no data, so it counts no bytes;
+        // "(0 bytes)" would misstate the size of what moved. No size is shown then.
+        var size = job.DoneBytes > 0 ? $" ({DisplayText.Bytes(job.DoneBytes)})" : string.Empty;
         return job.State switch
         {
             // Top-level items, as Explorer counts them: an empty folder is still "1 item".
             JobState.Done => new Toast(
                 $"{verb} finished",
-                $"{DisplayText.Items(pasted)} ({DisplayText.Bytes(job.DoneBytes)}) to {into}",
+                $"{DisplayText.Items(pasted)}{size} to {into}",
                 kind),
             JobState.DoneWithErrors when job.ErrorCount == 0 && job.RefusedCount > 0 => new Toast(
                 $"{verb} finished with errors",

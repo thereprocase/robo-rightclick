@@ -381,6 +381,17 @@ public class SnapshotAndToastTests
         Assert.Null(ToastText.ForFinished(done with { NoOp = true }, notifyOnComplete: true));
     }
 
+    // Observed 2026-10-02 (docs/testlog.md): a same-drive cut of a 4-byte file, a rename,
+    // toasted "1 item (0 bytes)".
+    [Fact]
+    public void A_done_toast_shows_no_size_when_nothing_was_written()
+    {
+        var renamed = Job(JobState.Done) with { DoneBytes = 0 };
+        Assert.Equal("2 items to secret-dst", ToastText.ForFinished(renamed, notifyOnComplete: true)!.Body);
+        var copied = Job(JobState.Done) with { DoneBytes = 512 };
+        Assert.Equal($"2 items ({DisplayText.Bytes(512)}) to secret-dst", ToastText.ForFinished(copied, notifyOnComplete: true)!.Body);
+    }
+
     [Fact]
     public void A_failure_reason_is_shown_in_normal_mode()
     {
