@@ -5,25 +5,27 @@ If Install fails the rest are not run, because they need the app installed (run
 Uninstall.Tests.ps1 by hand if Install left anything behind). After that every test runs even
 when an earlier one fails, and Uninstall runs last so the machine is left clean.
 
-  .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe [-Root D:\rrc-e2e] [-SecondVolume E:\scratch]
+  .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe [-Root D:\rrc-e2e] [-SecondVolume E:\scratch] [-SmallVolume F:\scratch]
 
 Results are recorded in docs/testlog.md by hand.
 #>
 param(
     [Parameter(Mandatory)][string]$Exe,
     [string]$Root = (Join-Path $env:TEMP 'rrc-e2e'),
-    [string]$SecondVolume
+    [string]$SecondVolume,
+    # A folder on a nearly full volume, for CutSafety's full-destination scenario.
+    [string]$SmallVolume
 )
 $ErrorActionPreference = 'Stop'
 
 $hostExe = (Get-Process -Id $PID).Path
-$exeFull = (Resolve-Path -LiteralPath $Exe).Path
+$exeFull = (Resolve-Path -LiteralPath $Exe).ProviderPath
 
 $plan = @(
     @{ Name = 'Install';    Args = @('-Exe', $exeFull, '-Root', $Root) },
     @{ Name = 'Verbs';      Args = @('-Root', $Root) },
-    @{ Name = 'CutSafety';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
-    @{ Name = 'Cancel';     Args = @('-Root', $Root) },
+    @{ Name = 'CutSafety';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($SmallVolume) { @('-SmallVolume', $SmallVolume) } else { @() }) },
+    @{ Name = 'Cancel';     Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
     @{ Name = 'Ephemeral';  Args = @('-Root', $Root) },
     @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) },
     @{ Name = 'Uninstall';  Args = @('-Root', $Root) }

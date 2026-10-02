@@ -29,7 +29,7 @@ function Initialize-E2E {
     )
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     $script:E2E = @{
-        Root       = (Resolve-Path -LiteralPath $Root).Path
+        Root       = (Resolve-Path -LiteralPath $Root).ProviderPath
         DistExe    = $Exe
         InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\RoboRightClick'
         ConfigDir  = Join-Path $env:APPDATA 'RoboRightClick'
@@ -286,6 +286,38 @@ function Find-UiaButton([int]$ProcessId, [string]$Name) {
     return $null
 }
 
+# Any element called $Name (a button, a check box, ...) in the windows owned by one process.
+function Find-UiaElement([int]$ProcessId, [string]$Name) {
+    $owner = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ProcessIdProperty), $ProcessId
+    $windows = [Windows.Automation.AutomationElement]::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $owner)
+    $byName = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::NameProperty), $Name
+    foreach ($window in $windows) {
+        $found = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $byName)
+        if ($found) { return $found }
+    }
+    return $null
+}
+
+# Waits for an element called $Name in any tray window, or throws.
+function Wait-TrayElement([string]$Name, [int]$TimeoutSec = 30) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($p in Get-RoboProcesses) {
+            $found = Find-UiaElement $p.Id $Name
+            if ($found) { return $found }
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    throw "No tray window showed '$Name' within $TimeoutSec s."
+}
+
+function Set-UiaToggle($Element, [bool]$On) {
+    $toggle = $Element.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+    $want = if ($On) { [Windows.Automation.ToggleState]::On } else { [Windows.Automation.ToggleState]::Off }
+    for ($i = 0; $i -lt 3 -and $toggle.Current.ToggleState -ne $want; $i++) { $toggle.Toggle() }
+    if ($toggle.Current.ToggleState -ne $want) { throw "Could not set the check box to $want." }
+}
+
 function Invoke-UiaButton($Element) {
     $pattern = $Element.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
     $pattern.Invoke()
@@ -436,6 +468,72 @@ function Wait-RobocopyGone([int]$TimeoutSec = 120) {
         Start-Sleep -Milliseconds 300
     }
     throw 'robocopy is still running.'
+}
+
+<#
+Suspends the next robocopy.exe that starts, as early as a polling thread can catch it, and
+resumes it on request. Cancel.Tests uses it to put a file in the destination after the job's
+presence check (done before robocopy starts) but before robocopy looks at the destination:
+the late arrival that cancel cleanup must never mistake for a partial copy. Robocopy may still
+have started before the catch; the caller checks for that and reports the run as inconclusive.
+#>
+function Start-RobocopyCatcher {
+    if (-not ('RrcE2E.RobocopyCatcher' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Threading;
+namespace RrcE2E {
+    public sealed class RobocopyCatcher : IDisposable {
+        [DllImport("ntdll.dll")] private static extern int NtSuspendProcess(IntPtr process);
+        [DllImport("ntdll.dll")] private static extern int NtResumeProcess(IntPtr process);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+        [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+        private const uint ProcessSuspendResume = 0x0800;
+        private readonly HashSet<int> before = new HashSet<int>();
+        private readonly ManualResetEvent caught = new ManualResetEvent(false);
+        private readonly Thread thread;
+        private volatile bool stop;
+        private IntPtr handle = IntPtr.Zero;
+        private bool suspended;
+        public int ProcessId;
+        public RobocopyCatcher() {
+            foreach (var p in Process.GetProcessesByName("robocopy")) { before.Add(p.Id); }
+            thread = new Thread(Loop);
+            thread.IsBackground = true;
+            thread.Priority = ThreadPriority.Highest;
+            thread.Start();
+        }
+        private void Loop() {
+            while (!stop) {
+                foreach (var p in Process.GetProcessesByName("robocopy")) {
+                    if (before.Contains(p.Id)) { continue; }
+                    var h = OpenProcess(ProcessSuspendResume, false, p.Id);
+                    if (h == IntPtr.Zero) { continue; }
+                    if (NtSuspendProcess(h) >= 0) { handle = h; suspended = true; ProcessId = p.Id; caught.Set(); return; }
+                    CloseHandle(h);
+                }
+                Thread.Sleep(0);
+            }
+        }
+        public bool WaitCaught(int milliseconds) { return caught.WaitOne(milliseconds); }
+        public bool Resume() {
+            if (!suspended) { return false; }
+            suspended = false;
+            return NtResumeProcess(handle) >= 0;
+        }
+        public void Dispose() {
+            stop = true;
+            if (suspended) { Resume(); }
+            if (handle != IntPtr.Zero) { CloseHandle(handle); handle = IntPtr.Zero; }
+        }
+    }
+}
+'@
+    }
+    return New-Object RrcE2E.RobocopyCatcher
 }
 
 # Presses OK on any message box the tray left open (a refusal or an error summary).

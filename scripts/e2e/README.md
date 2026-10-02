@@ -5,9 +5,10 @@ install, the three verbs through the same COM path as a right-click, cancel, eph
 mode, the integrity-level check, uninstall. Each `*.Tests.ps1` throws on failure and exits 0
 on success; there is no test framework.
 
-**Status:** written and cross-checked on Linux only. They have not been run on Windows. Until
-a dated entry in [docs/testlog.md](../../docs/testlog.md) says they ran, treat a failure as just
-as likely to be a script defect as an app defect.
+**Status:** `CutSafety.Tests.ps1` and `Cancel.Tests.ps1` ran on Windows build 26200 (VM) and
+passed (docs/testlog.md, 2026-10-02 cancel entry). The others are written and cross-checked on
+Linux only. Until a dated entry in [docs/testlog.md](../../docs/testlog.md) says a script ran,
+treat its failure as just as likely to be a script defect as an app defect.
 
 ## Prerequisites
 
@@ -20,14 +21,17 @@ as likely to be a script defect as an app defect.
 - Use a disposable machine or VM. The scripts install and uninstall the app, restart the tray,
   write and restore `config.json`, and create files under `-Root`. `Cancel.Tests.ps1` writes about
   2 GB, `Ephemeral.Tests.ps1` hashes your profile folders.
-- `CutSafety.Tests.ps1` scenario A and the cross-volume cut need a second volume: a writable
-  folder on a different drive letter (for example a small attached virtual disk), passed as
-  `-SecondVolume`. Without it the same-volume part runs and the script reports SKIP, not PASS.
+- `CutSafety.Tests.ps1` scenarios A and C and the cross-volume cuts need a second volume: a
+  writable folder on a different drive letter (for example a small attached virtual disk),
+  passed as `-SecondVolume`. Without it the same-volume parts run and the script reports SKIP,
+  not PASS. Scenario D needs `-SmallVolume`, a folder on a volume with less free space than
+  `-FullFileMB` (default 64 MB; a 40 MB virtual disk works). `Cancel.Tests.ps1` scenario C also
+  uses `-SecondVolume`.
 
 ## Run
 
     .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe
-    .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe -Root D:\rrc-e2e -SecondVolume E:\scratch
+    .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe -Root D:\rrc-e2e -SecondVolume E:\scratch -SmallVolume F:\scratch
 
 Run-All runs the scripts in this order, each in its own process, and prints a summary to
 stdout. It writes no files. Exit code 0 means no test failed (a skipped test is not a failure).
@@ -36,8 +40,8 @@ stdout. It writes no files. Exit code 0 means no test failed (a skipped test is 
 |---|---|
 | `Install.Tests.ps1` | `--install`, every registry value, the Uninstall entry, the AppID security descriptors, the tray process |
 | `Verbs.Tests.ps1` | copy and paste against Explorer's `CopyHere` on the same tree (deviations from docs/parity.md only), Ctrl+C interop, `X - Copy` naming, paste into own subfolder refused |
-| `CutSafety.Tests.ps1` | cross-volume cut with a locked file keeps that source; `skip` conflict with same size and time keeps the source (hash); a movable file in each cut proves the job ran |
-| `Cancel.Tests.ps1` | Cancel through UI Automation leaves no partial file and does not touch pre-existing destinations |
+| `CutSafety.Tests.ps1` | cross-volume cut with a locked file, into a folder that refuses new files, and onto a full volume keeps each failed source (hash); `skip` conflict with same size and time keeps the source; a same-volume cut is a rename (file ID kept); the conflict dialog through UI Automation: Replace, Skip, "Let me decide" with both sides ticked (keep both on one volume, skip across volumes); a movable file in each cut proves the job ran |
+| `Cancel.Tests.ps1` | Cancel through UI Automation leaves no partial file and does not touch pre-existing destinations (A); a file that appeared after the job's presence check and that robocopy skipped survives the cancel (B); a canceled cross-volume cut loses no file (C) |
 | `Ephemeral.Tests.ps1` | five ephemeral jobs leave no new or changed file in `%APPDATA%`, `%LOCALAPPDATA%` or `%TEMP%` except `config.json` and `%TEMP%\.net`, and no file with the test marker; Windows' notification database may change but is searched for the marker (toasts carry no path) |
 | `Security.Tests.ps1` | a low-integrity copy of the exe cannot run a verb: exit 1 (a normal copy exits 0); any other code is reported as inconclusive |
 | `Uninstall.Tests.ps1` | `--uninstall` removes every key, the Run value, the folders and the tray, and keeps the shared parent keys |
@@ -58,7 +62,11 @@ names a machine, an address or a user.
 | `-Root` | all | Scratch folder for test trees (default `$env:TEMP\rrc-e2e`) |
 | `-SecondVolume` | Run-All, CutSafety | Writable folder on another volume |
 | `-LargeMB` | Verbs | Size of the large file in the test tree (default 64) |
+| `-SmallVolume`, `-FullFileMB` | Run-All, CutSafety | Folder on a nearly full volume, and the size of the file that must not fit (default 64 MB) |
 | `-Files`, `-FileMB` | Cancel | Size of the large copy (default 8 files of 256 MB) |
+| `-IoRate` | Cancel | robocopy `/IORATE` value set through `extraArgs` for the test, so a fast disk cannot finish before Cancel is pressed (default `8M`) |
+| `-CutFiles`, `-CutFileMB` | Cancel | Size of the canceled cross-volume cut (default 6 files of 32 MB; the first is 1 MB) |
+| `-Scenarios` | Cancel | Subset of A, B, C to run (default all; C only with `-SecondVolume`) |
 | `-AllowPath` | Ephemeral | Substrings of paths to ignore after a person has judged them to be unrelated noise |
 
 ## Things the scripts assume
@@ -66,7 +74,14 @@ names a machine, an address or a user.
 - Install and uninstall run with `--quiet` and report only through the exit code. As a
   fallback, `Invoke-RoboCommand` in `Common.ps1` presses a message box's `OK` button through UI
   Automation if one still appears.
-- The progress window's Cancel button has the accessible name `Cancel`.
+- The progress window's Cancel button has the accessible name `Cancel`. The conflict dialog's
+  controls are found by their accessible names: `Replace`, `Skip`, `Decide`, `SelectAllSource`,
+  `SelectAllDestination`, `Continue`.
+- `Cancel.Tests.ps1` scenario B suspends the next `robocopy.exe` as soon as a polling thread sees
+  it, to put a file in the destination before robocopy lists it. If robocopy had already created
+  the destination when it was caught, the run throws `INCONCLUSIVE`; run it again.
+- Error scenarios restart the tray afterwards so their summary windows cannot answer a later
+  dialog.
 - The expected registry table in `Common.ps1` mirrors `Registration.InstallValues`. When that
   changes, change the table in the same commit.
 - `copy` and `cut` put exactly the given items on the clipboard. `Invoke-Robo` clears the
