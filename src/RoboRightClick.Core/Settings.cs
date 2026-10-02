@@ -26,15 +26,22 @@ public sealed record ExtraArgs(string Copy, string Move)
 }
 
 /// <summary>
-/// User configuration. Defaults reproduce Explorer's paste behavior, except
-/// that robocopy runs with 32 threads.
+/// User configuration. Defaults reproduce Explorer's paste behavior, except that robocopy
+/// copies in parallel, with a thread count chosen per drive (<see cref="ThreadPolicy"/>).
 /// </summary>
 public sealed record Settings
 {
     public const int MinThreads = 1;
     public const int MaxThreads = 128; // robocopy's own /MT ceiling
 
-    public int Threads { get; init; } = 32;
+    /// <summary>
+    /// "threads": "auto" in config.json (the default): each robocopy run gets the thread
+    /// count <see cref="ThreadPolicy"/> picks for its source and destination drives.
+    /// </summary>
+    public bool AutoThreads { get; init; } = true;
+
+    /// <summary>The fixed /MT count when <see cref="AutoThreads"/> is off ("threads": n).</summary>
+    public int Threads { get; init; } = ThreadPolicy.Fallback;
 
     // Explorer never retries silently; it stops and asks. Zero retries keeps
     // that behavior, with failures collected for an end-of-job "Try again".
@@ -104,7 +111,8 @@ public static class SettingsSerializer
         var d = Settings.Default;
         var s = d with
         {
-            Threads = ReadInt(root, "threads", d.Threads, Settings.MinThreads, Settings.MaxThreads, problems),
+            AutoThreads = ReadThreads(root, d, problems, out var threads),
+            Threads = threads,
             Retries = ReadInt(root, "retries", d.Retries, 0, 1_000, problems),
             RetryWaitSeconds = ReadInt(root, "retryWaitSeconds", d.RetryWaitSeconds, 0, 3_600, problems),
             ConflictDefault = ReadEnum(root, "conflictDefault", d.ConflictDefault, problems),
@@ -131,7 +139,7 @@ public static class SettingsSerializer
     {
         var root = new JsonObject
         {
-            ["threads"] = s.Threads,
+            ["threads"] = s.AutoThreads ? JsonValue.Create(ThreadsAuto) : JsonValue.Create(s.Threads),
             ["retries"] = s.Retries,
             ["retryWaitSeconds"] = s.RetryWaitSeconds,
             ["conflictDefault"] = ToJsonName(s.ConflictDefault),
@@ -160,6 +168,33 @@ public static class SettingsSerializer
     {
         var name = value.ToString();
         return char.ToLowerInvariant(name[0]) + name[1..];
+    }
+
+    /// <summary>The config text for automatic, per-drive thread counts.</summary>
+    public const string ThreadsAuto = "auto";
+
+    /// <summary>"threads" is either "auto" or a fixed count; anything else falls back to auto.</summary>
+    private static bool ReadThreads(JsonObject root, Settings defaults, List<string> problems, out int threads)
+    {
+        threads = defaults.Threads;
+        if (!root.TryGetPropertyValue("threads", out var node) || node is null)
+        {
+            return defaults.AutoThreads;
+        }
+        if (node is JsonValue v)
+        {
+            if (v.TryGetValue<string>(out var text) && string.Equals(text.Trim(), ThreadsAuto, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+            if (v.TryGetValue<int>(out var n) && n >= Settings.MinThreads && n <= Settings.MaxThreads)
+            {
+                threads = n;
+                return false;
+            }
+        }
+        problems.Add($"'threads' must be \"{ThreadsAuto}\" or an integer from {Settings.MinThreads} to {Settings.MaxThreads}; using \"{ThreadsAuto}\"");
+        return true;
     }
 
     private static int ReadInt(JsonObject root, string key, int fallback, int min, int max, List<string> problems)
