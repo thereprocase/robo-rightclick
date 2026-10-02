@@ -23,8 +23,10 @@ param(
     [int]$HashLimitMB = 16
 )
 $ErrorActionPreference = 'Stop'
-# Run-All passes the list as one '|'-separated string ('|' cannot appear in a Windows path).
-$AllowPath = @($AllowPath | ForEach-Object { $_ -split '\|' } | Where-Object { $_ })
+# "powershell -File" hands a list over as one string: "a","b" arrives as "a,b", and Run-All
+# joins with '|' ('|' cannot appear in a Windows path). Both separators are split here, so a
+# substring itself cannot contain a comma.
+$AllowPath = @($AllowPath | ForEach-Object { $_ -split '[|,]' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot 'Common.ps1')
 Initialize-E2E -Root $Root
 Assert-Installed
@@ -162,7 +164,8 @@ try {
         elseif (($isNew -or $isChanged) -and -not $isConfig) {
             $found = Test-FileContainsText $path $marker
             if ($found -eq $true) { $problems.Add("marker in content: $path") }
-            elseif ($null -eq $found -and $isSearchedOnly) { $problems.Add("could not search for the marker: $path") }
+            # Explorer deletes its toast images within seconds; one that is gone left nothing behind.
+            elseif ($null -eq $found -and $isSearchedOnly -and (Test-Path -LiteralPath $path)) { $problems.Add("could not search for the marker: $path") }
         }
     }
     # A deleted file is a change too (a temp file created and removed leaves the other list empty).

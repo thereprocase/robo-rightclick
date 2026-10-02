@@ -5,10 +5,11 @@ install, the three verbs through the same COM path as a right-click, cancel, eph
 mode, the integrity-level check, uninstall. Each `*.Tests.ps1` throws on failure and exits 0
 on success; there is no test framework.
 
-**Status:** `CutSafety.Tests.ps1` and `Cancel.Tests.ps1` ran on Windows build 26200 (VM) and
-passed (docs/testlog.md, 2026-10-02 cancel entry). The others are written and cross-checked on
-Linux only. Until a dated entry in [docs/testlog.md](../../docs/testlog.md) says a script ran,
-treat its failure as just as likely to be a script defect as an app defect.
+**Status:** all seven scripts ran on Windows build 26200 (VM) through `Run-All.ps1`
+(docs/testlog.md, 2026-10-02 user experience entry): Install, Verbs, CutSafety, Cancel,
+Security and Uninstall passed; Ephemeral passed once the Windows noise it listed had been
+judged and passed with `-AllowPath`. A script that has not run against a given build is as
+likely to fail on a script defect as on an app defect.
 
 ## Prerequisites
 
@@ -67,7 +68,7 @@ names a machine, an address or a user.
 | `-IoRate` | Cancel | robocopy `/IORATE` value set through `extraArgs` for the test, so a fast disk cannot finish before Cancel is pressed (default `8M`) |
 | `-CutFiles`, `-CutFileMB` | Cancel | Size of the canceled cross-volume cut (default 6 files of 32 MB; the first is 1 MB) |
 | `-Scenarios` | Cancel | Subset of A, B, C to run (default all; C only with `-SecondVolume`) |
-| `-AllowPath` | Ephemeral | Substrings of paths to ignore after a person has judged them to be unrelated noise |
+| `-AllowPath` | Run-All, Ephemeral | Substrings of paths to ignore after a person has judged them to be unrelated noise. Through `-File`, `"a","b"` arrives as one string; Ephemeral splits it on `,` and `\|` |
 
 ## Things the scripts assume
 
