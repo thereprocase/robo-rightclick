@@ -20,10 +20,15 @@ Each release has a zip and a `.sha256` file:
 - `RoboRightClick-<version>-win-x64.zip.sha256`
 
 The zip holds `RoboRightClick.exe` (self-contained, no .NET install needed), `LICENSE`,
-`README.md` and `Fonts\LICENSE-IBM-Plex-OFL.txt`. Check the download in PowerShell and
-compare it with the hash in the `.sha256` file:
+`README.md` and `Fonts\LICENSE-IBM-Plex-OFL.txt`. Check the download in PowerShell, in the
+folder holding both files. It prints `True` when the zip matches its `.sha256` file:
 
-    Get-FileHash .\RoboRightClick-<version>-win-x64.zip -Algorithm SHA256
+    $zip = 'RoboRightClick-<version>-win-x64.zip'
+    (Get-FileHash $zip -Algorithm SHA256).Hash -eq (Get-Content "$zip.sha256").Split(' ')[0]
+
+`False` means the download is damaged or not the published file: download it again, and do
+not run it. The zip is reproducible: `./scripts/publish.sh` on the release's commit produces the
+same SHA256.
 
 ## Install
 
@@ -52,12 +57,19 @@ the config, history and job logs, and the install folder. Nothing else is touche
 ## Scripting
 
 The exe is a Windows GUI program, so `cmd` and PowerShell do not wait for it and the exit
-code is lost unless you ask for it:
+code is lost unless you ask for it. Install does not add the exe to `PATH`, so use its full
+path. In `cmd`, the empty `""` after `start` is the window title; without it, `start` takes
+the quoted exe path as the title and runs nothing.
 
-    start /wait RoboRightClick.exe copy "C:\data\a.txt" "C:\data\b.txt"
-    start /wait RoboRightClick.exe paste "D:\target"
+    start "" /wait "%LOCALAPPDATA%\Programs\RoboRightClick\RoboRightClick.exe" copy "C:\data\a.txt" "C:\data\b.txt"
+    echo %ERRORLEVEL%
+    start "" /wait "%LOCALAPPDATA%\Programs\RoboRightClick\RoboRightClick.exe" paste "D:\target"
 
-    $p = Start-Process RoboRightClick.exe -ArgumentList 'paste','D:\target' -Wait -PassThru
+In PowerShell, pass the arguments as one string and quote each path yourself:
+`-ArgumentList` does not add quotes, so a path with a space would split in two.
+
+    $exe = "$env:LOCALAPPDATA\Programs\RoboRightClick\RoboRightClick.exe"
+    $p = Start-Process $exe -ArgumentList 'paste "D:\My target"' -Wait -PassThru
     $p.ExitCode
 
 Exit codes: 0 ok, 1 failed, 2 usage error. The exit code reports that the tray accepted the
@@ -65,12 +77,10 @@ verb, not that the copy finished. A paste runs as a job in the tray; watch it in
 Jobs window. `copy` and `cut` put the items on the clipboard, and `paste` takes the clipboard.
 `RoboRightClick.exe --help` prints the full list.
 
-## How it fits into Explorer
+## Clipboard
 
-- The items live in the classic context menu. On Windows 11 that's
-  **Show more options** (or Shift+F10).
-- Robo-Copy and Robo-Cut place files on the normal Windows clipboard, so a plain Ctrl+V works
-  afterwards. Robo-Paste accepts files copied with a plain Ctrl+C.
+Robo-Copy and Robo-Cut place files on the normal Windows clipboard, so a plain Ctrl+V works
+afterwards. Robo-Paste accepts files copied with a plain Ctrl+C.
 
 ## Ephemeral mode
 
