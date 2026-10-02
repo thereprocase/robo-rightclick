@@ -78,8 +78,8 @@ public static class JobStateText
                 return job.DamagedOnCancel switch
                 {
                     0 => "Canceled",
-                    1 => "Canceled; 1 replaced file may be incomplete",
-                    var n => string.Create(CultureInfo.InvariantCulture, $"Canceled; {n:N0} replaced files may be incomplete"),
+                    1 => "Canceled; 1 file may be incomplete",
+                    var n => string.Create(CultureInfo.InvariantCulture, $"Canceled; {n:N0} files may be incomplete"),
                 };
             default:
                 return job.State.ToString();

@@ -71,12 +71,13 @@ internal sealed record JobStart(
 /// this run's read counter, from callbacks of the current run only. ShellNotify after each
 /// step. A closed gate before Running moves straight on to Paused; the loop waits on the
 /// gate between steps and before Finalizing; JobProgress.ResetRate on resume.</para>
-/// <para>Cancel (ignored once Finalizing): CancelRequested in the snapshot at once; kill
-/// and wait; then CancelCleanup.Select(ledger.StartedRobocopyFiles, ledger.CompletedSources,
-/// presence set, move, File.Exists on sources, Claims.ClaimedByOtherJob), skipped entirely
-/// when ledger.PathsUnreliable. Each delete goes through
-/// <see cref="ProcessNative.DeleteFileIfNotReparsePoint"/>, which checks and deletes on one
-/// handle opened without following links; LeftInPlace becomes
+/// <para>Cancel (ignored once Finalizing): CancelRequested in the snapshot at once; suspend
+/// robocopy, record which unfinished destinations exist and which of them it holds open
+/// (<see cref="ObserveAtKill"/>), kill and wait; then CancelCleanup.Select(ledger.KilledRunFiles,
+/// ledger.CompletedSources, presence set, those observations, move, existence checks,
+/// Claims.ClaimedByOtherJob), skipped entirely when ledger.PathsUnreliable. Each delete goes
+/// through <see cref="ProcessNative.DeleteFileIfSameFile"/>, which checks identity and
+/// attributes and deletes on one handle opened without following links; LeftInPlace becomes
 /// <see cref="JobSnapshot.DamagedOnCancel"/> and <see cref="DamagedPaths"/>.</para>
 /// <para>Finalizing: create LinkFolders empty, clear the clipboard for a cut that ended
 /// Done with at least one item moved, ShellNotify, emit the JobSummary (errors capped at
@@ -152,6 +153,10 @@ internal sealed class Job
     private ExecutionPlan? _plan;
     private readonly List<LedgerPart> _parts = [];
     private HashSet<string>? _presence;
+
+    // What was seen at the killed run's destinations while robocopy was suspended for the
+    // cancel, by normalized path. Cancel cleanup deletes only files robocopy held open then.
+    private readonly Dictionary<string, KillObservation> _atKill = new(WinPath.Comparer);
 
     // Claims: normalized destinations this job planned. Kept for the job's life in history.
     private readonly HashSet<string> _claimedFiles = new(WinPath.Comparer);
@@ -240,8 +245,8 @@ internal sealed class Job
     /// <summary>
     /// Files "Try again" would repeat, and failed in-process steps. DoneWithErrors: the
     /// ledger's retryable files of robocopy steps plus the in-process steps that failed.
-    /// Canceled with damage: the pre-existing files that were being replaced ("Finish
-    /// replacing them"). Null when there is nothing to repeat.
+    /// Canceled with damage: the files the cancel left possibly incomplete ("Finish copying
+    /// them"). Null when there is nothing to repeat.
     /// </summary>
     /// <remarks>
     /// Only robocopy steps' files are taken from <see cref="StepLedger.Retryable"/> (the
@@ -1072,8 +1077,9 @@ internal sealed class Job
         LedgerPart[] parts;
         HashSet<string> presence;
         bool unreliable;
-        List<PlannedFile> started;
+        List<KilledRunFile> killed;
         List<string> completed;
+        Dictionary<string, KillObservation> atKill;
         lock (_lock)
         {
             _cancelRequested = true;
@@ -1081,17 +1087,18 @@ internal sealed class Job
             parts = _parts.ToArray();
             presence = _presence is null ? new HashSet<string>(WinPath.Comparer) : new HashSet<string>(_presence, WinPath.Comparer);
             unreliable = parts.Any(p => p.Ledger.PathsUnreliable);
-            started = parts.SelectMany(p => p.Ledger.StartedRobocopyFiles).ToList();
+            killed = parts.SelectMany(p => p.Ledger.KilledRunFiles).ToList();
             completed = parts.SelectMany(p => p.Ledger.CompletedSources).ToList();
+            atKill = new Dictionary<string, KillObservation>(_atKill, WinPath.Comparer);
         }
         DeliverNotices();
 
         Cleanup? cleanup = null;
-        if (parts.Length > 0 && !unreliable && started.Count > 0)
+        if (parts.Length > 0 && !unreliable && killed.Count > 0)
         {
             // Skipped entirely when the ledger could not match robocopy's paths: it can no
             // longer tell finished files from partial ones, and keeping data wins.
-            cleanup = await RunBlockingAsync(() => CleanUpPartialFiles(parts, started, completed, presence)).ConfigureAwait(false);
+            cleanup = await RunBlockingAsync(() => CleanUpPartialFiles(parts, killed, completed, presence, atKill)).ConfigureAwait(false);
         }
 
         lock (_lock)
@@ -1114,18 +1121,21 @@ internal sealed class Job
 
     private Cleanup CleanUpPartialFiles(
         LedgerPart[] parts,
-        List<PlannedFile> started,
+        List<KilledRunFile> killed,
         List<string> completed,
-        HashSet<string> presence)
+        HashSet<string> presence,
+        Dictionary<string, KillObservation> atKill)
     {
         var move = Start.Order.Verb == TransferVerb.Move;
         var plan = CancelCleanup.Select(
-            started,
+            killed,
             completed,
             presence,
+            atKill,
             move,
-            File.Exists,
-            path => Services.Claims.ClaimedByOtherJob(Id, path));
+            destinationExists: Services.FileSystem.Exists,
+            sourceStillExists: File.Exists,
+            claimedByOtherJob: path => Services.Claims.ClaimedByOtherJob(Id, path));
 
         // Invariant 1, belt and braces: whatever the selection says, a path this job reads as
         // a source is never deleted by cleanup.
@@ -1141,17 +1151,18 @@ internal sealed class Job
             }
         }
 
-        foreach (var path in plan.Delete)
+        foreach (var target in plan.Delete)
         {
-            if (sources.Contains(WinPath.NormalizeForMatch(path)))
+            if (sources.Contains(WinPath.NormalizeForMatch(target.Path)))
             {
                 continue;
             }
-            // A file in use, already gone or denied is left: when in doubt, keep data.
-            ProcessNative.DeleteFileIfNotReparsePoint(path);
+            // A file in use, already gone, denied or no longer the one robocopy held open is
+            // left: when in doubt, keep data.
+            ProcessNative.DeleteFileIfSameFile(target.Path, target.Identity);
         }
 
-        // The files left in place were being replaced: "Finish replacing them" repeats them.
+        // The files left in place may be incomplete: "Finish copying them" repeats them.
         // For a cut whose source is already gone the move had finished, so there is nothing
         // to repeat (and a retry would only fail on the missing source).
         var leftInPlace = new HashSet<string>(plan.LeftInPlace.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
@@ -1204,6 +1215,76 @@ internal sealed class Job
             }
         }
         return errors;
+    }
+
+    /// <summary>
+    /// Runs on the canceling thread while robocopy is suspended for the kill. For each file of
+    /// the step not reported complete and not present before the step, records whether a file
+    /// is there and whether robocopy holds it open. One listing per destination folder finds
+    /// the files that exist, so only those are opened: robocopy's in-flight files, finished
+    /// files whose lines are still in the pipe, and late arrivals.
+    /// </summary>
+    private void ObserveAtKill(StepLedger ledger, int stepIndex, int run, int processId)
+    {
+        List<string> candidates;
+        lock (_lock)
+        {
+            if (run != _activeRun)
+            {
+                return;
+            }
+            var presence = _presence;
+            candidates = ledger.UnfinishedFiles(stepIndex)
+                .Select(f => f.DestinationPath)
+                .Where(p => presence is null || !presence.Contains(WinPath.NormalizeForMatch(p)))
+                .Distinct(WinPath.Comparer)
+                .ToList();
+        }
+
+        var observed = new List<(string Path, KillObservation Observation)>(candidates.Count);
+        foreach (var folder in candidates.GroupBy(WinPath.GetParent, WinPath.Comparer))
+        {
+            HashSet<string>? names = null;
+            try
+            {
+                if (Services.FileSystem.List(folder.Key) is { } entries)
+                {
+                    names = new HashSet<string>(entries.Select(e => e.Name), WinPath.Comparer);
+                }
+            }
+            catch (Exception)
+            {
+                // Unknown: every file of this folder is opened and asked about directly.
+            }
+
+            foreach (var path in folder)
+            {
+                var name = WinPath.GetFileName(path);
+                if (names is not null && !names.Contains(name))
+                {
+                    observed.Add((path, new KillObservation(KillEvidence.Absent, default)));
+                    continue;
+                }
+                KillObservation observation;
+                try
+                {
+                    observation = ProcessNative.ObserveAtKill(path, processId);
+                }
+                catch (Exception)
+                {
+                    observation = default;
+                }
+                observed.Add((path, observation));
+            }
+        }
+
+        lock (_lock)
+        {
+            foreach (var (path, observation) in observed)
+            {
+                _atKill[WinPath.NormalizeForMatch(path)] = observation;
+            }
+        }
     }
 
     /// <summary>Records which of the step's destinations exist right now (one listing per folder).</summary>
@@ -1707,7 +1788,7 @@ internal sealed class Job
         /// <summary>Renames that crossed volumes after all, to run again as robocopy moves (worker thread only).</summary>
         public List<RenameStep> Replans { get; } = [];
 
-        /// <summary>Pre-existing files left in place by a cancel, for "Finish replacing them".</summary>
+        /// <summary>Files a cancel left possibly incomplete, for "Finish copying them".</summary>
         public List<(int StepIndex, PlannedFile File)> Damaged { get; } = [];
     }
 
@@ -1737,5 +1818,7 @@ internal sealed class Job
         public void OnEvents(IReadOnlyList<RobocopyEvent> events) => job.OnRunEvents(ledger, stepIndex, run, events);
 
         public void OnBytesRead(long bytes, DateTimeOffset at) => job.OnRunBytes(run, bytes, at);
+
+        public void OnSuspendedForCancel(int processId) => job.ObserveAtKill(ledger, stepIndex, run, processId);
     }
 }

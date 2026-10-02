@@ -38,8 +38,10 @@ public sealed record JobSnapshot(
     public string? RefusalReason { get; init; }
 
     /// <summary>
-    /// Pre-existing files that were being replaced when the user canceled. Robocopy
-    /// allocates full length first, so they may look whole but hold partial data.
+    /// Files a cancel left that may hold partial data: pre-existing files a replacing run was
+    /// writing, and new files nothing proved robocopy was writing (cancel cleanup deletes
+    /// only proven partial copies). Robocopy allocates full length first, so they may look
+    /// whole.
     /// </summary>
     public int DamagedOnCancel { get; init; }
 

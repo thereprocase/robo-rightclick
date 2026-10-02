@@ -262,15 +262,25 @@ public class CancelClaimTests
     {
         // Jobs A and B both planned D:\dst\f.bin; B (a cut) finished it and its source is
         // gone. Canceling A must not delete the only copy.
+        var held = new FileIdentity(1, 0, 42, 7);
         var plan = CancelCleanup.Select(
-            [new PlannedFile(@"C:\a\f.bin", @"D:\dst\f.bin", Facts), new PlannedFile(@"C:\a\g.bin", @"D:\dst\g.bin", Facts)],
+            [
+                new KilledRunFile(new PlannedFile(@"C:\a\f.bin", @"D:\dst\f.bin", Facts), ConflictPolicy.Ask),
+                new KilledRunFile(new PlannedFile(@"C:\a\g.bin", @"D:\dst\g.bin", Facts), ConflictPolicy.Ask),
+            ],
             completedSources: [],
             presentBeforeStep: [],
+            atKill: new Dictionary<string, KillObservation>(WinPath.Comparer)
+            {
+                [@"D:\dst\f.bin"] = new(KillEvidence.OpenByRobocopy, held),
+                [@"D:\dst\g.bin"] = new(KillEvidence.OpenByRobocopy, held),
+            },
             move: false,
+            destinationExists: _ => true,
             sourceStillExists: _ => true,
             claimedByOtherJob: p => p.EndsWith("f.bin", StringComparison.Ordinal));
 
-        Assert.Equal([@"D:\dst\g.bin"], plan.Delete);
+        Assert.Equal([new CleanupTarget(@"D:\dst\g.bin", held)], plan.Delete);
     }
 
     [Fact]
@@ -278,14 +288,20 @@ public class CancelClaimTests
     {
         // A root source is passed to robocopy as "C:\." and may come back as "C:\.\name".
         var plan = CancelCleanup.Select(
-            [new PlannedFile(@"C:\f.bin", @"D:\dst\f.bin", Facts)],
+            [new KilledRunFile(new PlannedFile(@"C:\f.bin", @"D:\dst\f.bin", Facts), ConflictPolicy.Ask)],
             completedSources: [@"C:\.\f.bin"],
             presentBeforeStep: [],
+            atKill: new Dictionary<string, KillObservation>(WinPath.Comparer)
+            {
+                [@"D:\dst\f.bin"] = new(KillEvidence.OpenByRobocopy, new FileIdentity(1, 0, 42, 7)),
+            },
             move: false,
+            destinationExists: _ => true,
             sourceStillExists: _ => true,
             claimedByOtherJob: _ => false);
 
         Assert.Empty(plan.Delete);
+        Assert.Empty(plan.LeftInPlace);
     }
 }
 
@@ -360,7 +376,7 @@ public class SnapshotAndToastTests
 
         var toast = ToastText.ForFinished(damaged, notifyOnComplete: false);
         Assert.NotNull(toast);
-        Assert.Contains("2 files were being replaced", toast.Body);
+        Assert.Contains("2 files were being written", toast.Body);
         Assert.Null(ToastText.ForFinished(Job(JobState.Canceled), notifyOnComplete: true));
     }
 

@@ -8,48 +8,127 @@ public class CancelCleanupTests
 
     private static PlannedFile File(string name) => new($@"C:\src\{name}", $@"D:\dst\{name}", Facts);
 
-    [Fact]
-    public void Unreported_new_files_are_deleted_and_reported_ones_kept()
-    {
-        var plan = CancelCleanup.Select(
-            [File("done.bin"), File("partial.bin")],
-            completedSources: [@"C:\SRC\done.bin"],
-            presentBeforeStep: [],
-            move: false,
-            sourceStillExists: _ => true,
+    private static KilledRunFile Killed(string name, ConflictPolicy policy = ConflictPolicy.Ask) => new(File(name), policy);
+
+    private static FileIdentity Id(ulong n) => new(0xABCD, 0, n, 1_000 + (long)n);
+
+    private static KillObservation Open(ulong n) => new(KillEvidence.OpenByRobocopy, Id(n));
+
+    private static KillObservation NotOpen(ulong n) => new(KillEvidence.NotOpenByRobocopy, Id(n));
+
+    private static readonly KillObservation Absent = new(KillEvidence.Absent, default);
+
+    private static Dictionary<string, KillObservation> Seen(params (string Name, KillObservation Observation)[] seen) =>
+        seen.ToDictionary(s => $@"D:\dst\{s.Name}", s => s.Observation, WinPath.Comparer);
+
+    private static CleanupPlan Select(
+        IEnumerable<KilledRunFile> killed,
+        IReadOnlyDictionary<string, KillObservation> atKill,
+        IEnumerable<string>? completedSources = null,
+        IEnumerable<string>? presentBeforeStep = null,
+        bool move = false,
+        Func<string, bool>? destinationExists = null,
+        Func<string, bool>? sourceStillExists = null) =>
+        CancelCleanup.Select(
+            killed,
+            completedSources ?? [],
+            presentBeforeStep ?? [],
+            atKill,
+            move,
+            destinationExists ?? (_ => true),
+            sourceStillExists ?? (_ => true),
             claimedByOtherJob: _ => false);
 
-        Assert.Equal([@"D:\dst\partial.bin"], plan.Delete);
+    [Fact]
+    public void Only_a_file_robocopy_held_open_at_the_kill_is_deleted_and_only_as_that_file()
+    {
+        var plan = Select(
+            [Killed("partial.bin"), Killed("absent.bin"), Killed("done.bin")],
+            Seen(("partial.bin", Open(7)), ("absent.bin", Absent), ("done.bin", Open(8))),
+            completedSources: [@"C:\SRC\done.bin"]);
+
+        Assert.Equal([new CleanupTarget(@"D:\dst\partial.bin", Id(7))], plan.Delete);
         Assert.Empty(plan.LeftInPlace);
     }
 
     [Fact]
-    public void A_destination_that_existed_before_the_job_is_never_deleted()
+    public void A_late_arrival_robocopy_skipped_is_never_deleted()
     {
-        var plan = CancelCleanup.Select(
-            [File("existing.bin")],
-            completedSources: [],
-            presentBeforeStep: [@"d:\DST\existing.bin"],
-            move: false,
-            sourceStillExists: _ => true,
-            claimedByOtherJob: _ => false);
+        // The file appeared after the step's presence check; robocopy saw it, skipped it under
+        // its Skip flags and printed nothing. It is not a partial copy: robocopy did not have it
+        // open while suspended for the kill.
+        var plan = Select([Killed("late.bin")], Seen(("late.bin", NotOpen(9))));
 
         Assert.Empty(plan.Delete);
-        Assert.Equal([@"D:\dst\existing.bin"], plan.LeftInPlace);
+        Assert.Empty(plan.LeftInPlace);
+    }
+
+    [Fact]
+    public void Without_evidence_nothing_is_deleted_and_an_existing_file_is_reported()
+    {
+        // No observation at all: robocopy could not be suspended, or the look failed.
+        var plan = Select(
+            [Killed("unknown.bin"), Killed("never-created.bin"), Killed("failed-look.bin")],
+            Seen(("failed-look.bin", new KillObservation(KillEvidence.Unknown, default))),
+            destinationExists: p => !p.EndsWith("never-created.bin", StringComparison.Ordinal));
+
+        Assert.Empty(plan.Delete);
+        Assert.Equal([@"D:\dst\unknown.bin", @"D:\dst\failed-look.bin"], plan.LeftInPlace);
+    }
+
+    [Fact]
+    public void Held_open_without_a_usable_identity_is_reported_not_deleted()
+    {
+        var plan = Select([Killed("noid.bin")], Seen(("noid.bin", new KillObservation(KillEvidence.OpenByRobocopy, default))));
+
+        Assert.Empty(plan.Delete);
+        Assert.Equal([@"D:\dst\noid.bin"], plan.LeftInPlace);
+    }
+
+    [Fact]
+    public void A_destination_that_existed_before_the_step_is_never_deleted()
+    {
+        var plan = Select(
+            [Killed("replaced.bin", ConflictPolicy.Replace), Killed("newer.bin", ConflictPolicy.KeepNewer), Killed("skipped.bin", ConflictPolicy.Skip)],
+            Seen(("replaced.bin", Open(1)), ("newer.bin", Open(2)), ("skipped.bin", Open(3))),
+            presentBeforeStep: [@"d:\DST\replaced.bin", @"D:\dst\newer.bin", @"D:\dst\skipped.bin"]);
+
+        Assert.Empty(plan.Delete);
+        // Only a policy that overwrites can have left it half written.
+        Assert.Equal([@"D:\dst\replaced.bin", @"D:\dst\newer.bin"], plan.LeftInPlace);
     }
 
     [Fact]
     public void A_cut_keeps_an_unreported_destination_whose_source_is_already_gone()
     {
-        var plan = CancelCleanup.Select(
-            [File("moved.bin"), File("inflight.bin")],
-            completedSources: [],
-            presentBeforeStep: [],
+        var plan = Select(
+            [Killed("moved.bin"), Killed("inflight.bin")],
+            Seen(("moved.bin", Open(1)), ("inflight.bin", Open(2))),
             move: true,
-            sourceStillExists: p => !p.EndsWith("moved.bin", StringComparison.Ordinal),
-            claimedByOtherJob: _ => false);
+            sourceStillExists: p => !p.EndsWith("moved.bin", StringComparison.Ordinal));
 
-        Assert.Equal([@"D:\dst\inflight.bin"], plan.Delete);
+        Assert.Equal([new CleanupTarget(@"D:\dst\inflight.bin", Id(2))], plan.Delete);
+    }
+
+    [Theory]
+    [InlineData(ConflictPolicy.Ask)]
+    [InlineData(ConflictPolicy.Skip)]
+    [InlineData(ConflictPolicy.Replace)]
+    [InlineData(ConflictPolicy.KeepNewer)]
+    public void Overwriting_policies_are_exactly_those_without_all_three_skip_flags(ConflictPolicy policy)
+    {
+        var flags = RobocopyArgs.ConflictFlags(policy).Split(' ');
+        var skipsEveryExistingFile = flags.Contains("/XC") && flags.Contains("/XN") && flags.Contains("/XO") && !flags.Contains("/IS");
+
+        Assert.Equal(!skipsEveryExistingFile, RobocopyArgs.MayOverwriteExisting(policy));
+    }
+
+    [Fact]
+    public void An_identity_of_zeros_is_not_an_identity()
+    {
+        Assert.False(new FileIdentity(5, 0, 0, 123).IsKnown);
+        Assert.True(new FileIdentity(5, 0, 1, 0).IsKnown);
+        Assert.NotEqual(new FileIdentity(5, 0, 1, 100), new FileIdentity(5, 0, 1, 101));
     }
 }
 

@@ -326,7 +326,7 @@ public class JobStateTextTests
         Assert.StartsWith("Nothing to do", JobStateText.For(Job(JobState.Done) with { NoOp = true }));
         Assert.Equal("Done, 3 items had problems", JobStateText.For(Job(JobState.DoneWithErrors) with { ErrorCount = 2, RefusedCount = 1 }));
         Assert.Equal("Failed: Disk full.", JobStateText.For(Job(JobState.Failed) with { FailureReason = "Disk full." }));
-        Assert.Equal("Canceled; 2 replaced files may be incomplete", JobStateText.For(Job(JobState.Canceled) with { DamagedOnCancel = 2 }));
+        Assert.Equal("Canceled; 2 files may be incomplete", JobStateText.For(Job(JobState.Canceled) with { DamagedOnCancel = 2 }));
     }
 
     [Fact]

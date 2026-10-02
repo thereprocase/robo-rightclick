@@ -18,6 +18,14 @@ internal interface IRobocopyObserver
 
     /// <summary>This run's cumulative ReadTransferCount, from <see cref="ProgressSampler"/>.</summary>
     void OnBytesRead(long bytes, DateTimeOffset at);
+
+    /// <summary>
+    /// The user's cancel is about to kill robocopy, which is suspended right now: the
+    /// destination files it holds open are exactly the ones it was writing, and stay so until
+    /// this returns. Called at most once, on the canceling thread, before the kill; never
+    /// when robocopy could not be suspended or had already exited. Must not throw.
+    /// </summary>
+    void OnSuspendedForCancel(int processId);
 }
 
 /// <summary>
@@ -44,6 +52,9 @@ internal sealed class RobocopyRun : IDisposable
     private bool _killRequested;
     private bool _suspended;
     private bool _pauseClosed;
+
+    // Set once the run is suspended for a cancel: no resume may follow, the kill comes next.
+    private bool _frozenForKill;
     private Process? _process;
     private SafeFileHandle? _job;
     private RobocopyPipe? _pipe;
@@ -125,7 +136,7 @@ internal sealed class RobocopyRun : IDisposable
         });
         var robocopyPid = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        using var killOnCancel = cancellationToken.Register(Kill);
+        using var killOnCancel = cancellationToken.Register(KillForCancel);
 
         // Both tasks start before robocopy, so the connect wait is already pending when it
         // opens the pipe (see RobocopyPipe.WaitForRobocopyAsync). From here on every path
@@ -428,6 +439,64 @@ internal sealed class RobocopyRun : IDisposable
         }
     }
 
+    /// <summary>
+    /// The user's cancel: suspend robocopy, let the observer record which destination files
+    /// it holds open (cancel cleanup deletes only those), then kill. Without the suspension
+    /// the observer is not called, so cleanup has no evidence and deletes nothing.
+    /// </summary>
+    private void KillForCancel()
+    {
+        Process? process;
+        lock (_processLock)
+        {
+            process = _process;
+        }
+
+        if (process is not null && FreezeForKill(process))
+        {
+            try
+            {
+                Observer.OnSuspendedForCancel(process.Id);
+            }
+            catch (Exception)
+            {
+                // No evidence is recorded; the kill must still happen.
+            }
+        }
+
+        Kill();
+    }
+
+    /// <summary>
+    /// Suspends robocopy for good (a pause change can no longer resume it). True only when
+    /// it is now suspended and had not exited: the state the observer is allowed to read.
+    /// </summary>
+    private bool FreezeForKill(Process process)
+    {
+        lock (_pauseLock)
+        {
+            if (_pauseClosed)
+            {
+                return false;
+            }
+            _frozenForKill = true;
+            try
+            {
+                if (process.HasExited)
+                {
+                    return false;
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
+            {
+                return false;
+            }
+
+            // A paused run is already suspended; one more suspend is harmless, the kill follows.
+            return ProcessNative.NtSuspendProcess(process.SafeHandle) >= 0 || _suspended;
+        }
+    }
+
     private void OnPauseChanged(object? sender, bool paused) => ApplyPause(paused);
 
     /// <summary>
@@ -438,7 +507,7 @@ internal sealed class RobocopyRun : IDisposable
     {
         lock (_pauseLock)
         {
-            if (_pauseClosed || _process is null || paused == _suspended)
+            if (_pauseClosed || _frozenForKill || _process is null || paused == _suspended)
             {
                 return;
             }

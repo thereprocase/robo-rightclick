@@ -160,9 +160,52 @@ public sealed class StepLedger
         }
     }
 
-    /// <summary>Planned files of the robocopy steps that started: cancel cleanup's candidates.</summary>
-    public IReadOnlyList<PlannedFile> StartedRobocopyFiles =>
-        _steps.Where(s => s.IsRobocopy && s.Started).SelectMany(s => s.Files).ToList();
+    /// <summary>
+    /// Cancel cleanup's candidates: the files of the robocopy runs the user's cancel killed
+    /// that had not completed, each with its step's policy. A run that ended on its own is
+    /// left out entirely: whatever it did not report it skipped (a late arrival, someone
+    /// else's file) or failed on, and neither is a partial copy of this cancel.
+    /// </summary>
+    public IReadOnlyList<KilledRunFile> KilledRunFiles
+    {
+        get
+        {
+            var files = new List<KilledRunFile>();
+            foreach (var state in _steps)
+            {
+                if (!state.IsRobocopy || !state.KilledByCancel)
+                {
+                    continue;
+                }
+                for (var i = 0; i < state.Status.Length; i++)
+                {
+                    if (state.Status[i] != FileStatus.Completed)
+                    {
+                        files.Add(new KilledRunFile(state.Files[i], state.Policy));
+                    }
+                }
+            }
+            return files;
+        }
+    }
+
+    /// <summary>
+    /// The files of a step not reported complete so far: what the host looks at while the run
+    /// is suspended for a cancel, to see which of them robocopy has open.
+    /// </summary>
+    public IReadOnlyList<PlannedFile> UnfinishedFiles(int stepIndex)
+    {
+        var state = StateOf(stepIndex);
+        var files = new List<PlannedFile>();
+        for (var i = 0; i < state.Status.Length; i++)
+        {
+            if (state.Status[i] != FileStatus.Completed)
+            {
+                files.Add(state.Files[i]);
+            }
+        }
+        return files;
+    }
 
     /// <summary>Bytes of completed files in steps that have finished: the base for observed bytes.</summary>
     public long CompletedBytesOfFinishedSteps => _steps.Where(s => s.Finished).Sum(s => s.CompletedBytes);
@@ -305,6 +348,7 @@ public sealed class StepLedger
         public StepState(ExecutionStep step)
         {
             Files = step.Files;
+            Policy = step.Policy;
             IsRobocopy = step.Step is RobocopyStep;
             Status = new FileStatus[Files.Count];
             NormalizedSources = Files.Select(f => WinPath.NormalizeForMatch(f.SourcePath)).ToArray();
@@ -316,6 +360,8 @@ public sealed class StepLedger
         }
 
         public IReadOnlyList<PlannedFile> Files { get; }
+
+        public ConflictPolicy Policy { get; }
 
         public bool IsRobocopy { get; }
 

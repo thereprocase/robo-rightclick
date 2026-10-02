@@ -9,7 +9,7 @@ internal enum ErrorSummaryChoice
     /// <summary>Dialog closed without a choice: the job keeps its attention state.</summary>
     None,
 
-    /// <summary>DoneWithErrors: JobManager.Retry. Failed: JobManager.Rerun. Damaged cancel: Retry of the damaged files ("Finish replacing them").</summary>
+    /// <summary>DoneWithErrors: JobManager.Retry. Failed: JobManager.Rerun. Damaged cancel: Retry of the damaged files ("Finish copying them").</summary>
     TryAgain,
     Skip,
 }
@@ -155,7 +155,7 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         {
             var files = job.DamagedOnCancel == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.DamagedOnCancel:N0} files were");
             var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.DamagedOnCancel:N0})");
-            var text = $"{files} being replaced when you canceled. They can look complete but hold only part of the new data. Finish replacing them, or check them before you use them.";
+            var text = $"{files} being written when you canceled. They can look complete but hold only part of the data. {FinishText(job)}, or check them before you use them.";
             var damaged = jobs?.DamagedOf(job.Id) ?? [];
             if (damaged.Count > 0)
             {
@@ -215,14 +215,17 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
     /// <summary>The primary action: Try again when there is something to try, else the close button.</summary>
     public IButtonControl DefaultButton { get; }
 
-    /// <summary>"Try again (N)", "Try again" for a failed paste, "Finish replacing them" after a damaging cancel, or null when nothing can be retried.</summary>
+    /// <summary>"Try again (N)", "Try again" for a failed paste, "Finish copying/moving them" after a damaging cancel, or null when nothing can be retried.</summary>
     private static string? TryAgainText(JobSnapshot job) => job.State switch
     {
         JobState.Failed => "Try again",
-        JobState.Canceled when job.DamagedOnCancel > 0 => "Finish replacing them",
+        JobState.Canceled when job.DamagedOnCancel > 0 => FinishText(job),
         _ when job.ErrorCount > 0 => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.ErrorCount:N0})"),
         _ => null,
     };
+
+    /// <summary>Repeats the files a cancel left possibly incomplete, with Replace (RetryPlanner).</summary>
+    private static string FinishText(JobSnapshot job) => job.Verb == TransferVerb.Move ? "Finish moving them" : "Finish copying them";
 
     private static string Heading(JobSnapshot job, string done, string into) => job.State switch
     {

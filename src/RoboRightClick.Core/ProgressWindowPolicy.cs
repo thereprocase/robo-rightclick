@@ -40,7 +40,7 @@ public static class ProgressWindowPolicy
 
     /// <summary>
     /// Done, a no-op and a plain cancel close the window. DoneWithErrors, Failed and a cancel
-    /// that left replaced files partly written show the summary, because each one needs a
+    /// that left files possibly incomplete show the summary, because each one needs a
     /// "Try again" or "Skip" from the user. So does a Done job that left files alone because
     /// their names appeared at the destination mid-paste: Explorer would have asked about
     /// them, and the summary is where the user learns which ones. Non-terminal states stay.

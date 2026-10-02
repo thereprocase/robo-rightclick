@@ -179,19 +179,179 @@ internal static unsafe partial class ProcessNative
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetFileInformationByHandle(SafeFileHandle hFile, int fileInformationClass, void* lpFileInformation, uint dwBufferSize);
 
+    private const int FileIdInfoClass = 18;
+    private const int FileProcessIdsUsingFileInformationClass = 47;
+    private const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
+    private const int ERROR_FILE_NOT_FOUND = 2;
+    private const int ERROR_PATH_NOT_FOUND = 3;
+
+    /// <summary>Longest PID list asked for; beyond it the answer is "unknown", never a guess.</summary>
+    private const int MaxProcessIdsUsingFile = 4_096;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileIdInfo
+    {
+        public ulong VolumeSerialNumber;
+        public ulong FileIdLow;
+        public ulong FileIdHigh;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ByHandleFileInformation
+    {
+        public uint FileAttributes;
+        public long CreationTime;
+        public long LastAccessTime;
+        public long LastWriteTime;
+        public uint VolumeSerialNumber;
+        public uint FileSizeHigh;
+        public uint FileSizeLow;
+        public uint NumberOfLinks;
+        public uint FileIndexHigh;
+        public uint FileIndexLow;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public nint Status;
+        public nint Information;
+    }
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileInformationByHandle(SafeFileHandle hFile, ByHandleFileInformation* lpFileInformation);
+
+    [LibraryImport("ntdll.dll")]
+    private static partial int NtQueryInformationFile(SafeFileHandle fileHandle, IoStatusBlock* ioStatusBlock, void* fileInformation, uint length, int fileInformationClass);
+
+    /// <summary>
+    /// Looks at one destination while the robocopy being killed is suspended: is there a
+    /// plain file, which one (<see cref="FileIdentity"/>), and does robocopy hold it open
+    /// (FileProcessIdsUsingFileInformation, the list Restart Manager uses)? The handle asks
+    /// for FILE_READ_ATTRIBUTES only, which no sharing mode refuses, and opens a link as
+    /// itself. Observed on NTFS, FAT32, exFAT and an SMB loopback share (testlog 2026-10-02).
+    /// Any failure is <see cref="KillEvidence.Unknown"/>: cleanup then deletes nothing there.
+    /// </summary>
+    public static KillObservation ObserveAtKill(string path, int robocopyProcessId)
+    {
+        using var handle = CreateFile(
+            WinPath.ExtendedLengthPath(path),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_ALL,
+            0,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            0);
+        if (handle.IsInvalid)
+        {
+            var error = Marshal.GetLastPInvokeError();
+            return new KillObservation(
+                error is ERROR_FILE_NOT_FOUND or ERROR_PATH_NOT_FOUND ? KillEvidence.Absent : KillEvidence.Unknown,
+                default);
+        }
+
+        if (!TryReadPlainFileIdentity(handle, out var identity))
+        {
+            return default;
+        }
+
+        var openBy = ProcessIdsUsingFile(handle);
+        if (openBy is null)
+        {
+            return new KillObservation(KillEvidence.Unknown, identity);
+        }
+        var evidence = openBy.Contains((nuint)robocopyProcessId) ? KillEvidence.OpenByRobocopy : KillEvidence.NotOpenByRobocopy;
+        return new KillObservation(evidence, identity);
+    }
+
+    /// <summary>Process IDs with the file open, or null when the file system cannot say.</summary>
+    private static HashSet<nuint>? ProcessIdsUsingFile(SafeFileHandle handle)
+    {
+        // FILE_PROCESS_IDS_USING_FILE_INFORMATION: a ULONG count, then ULONG_PTR IDs (aligned).
+        var capacity = 64;
+        while (capacity <= MaxProcessIdsUsingFile)
+        {
+            var bytes = (uint)(sizeof(nuint) * (capacity + 1));
+            var buffer = NativeMemory.Alloc(bytes);
+            try
+            {
+                IoStatusBlock io;
+                var status = NtQueryInformationFile(handle, &io, buffer, bytes, FileProcessIdsUsingFileInformationClass);
+                if (status == STATUS_INFO_LENGTH_MISMATCH)
+                {
+                    capacity *= 4;
+                    continue;
+                }
+                if (status < 0)
+                {
+                    return null;
+                }
+                var count = *(uint*)buffer;
+                if (count > capacity)
+                {
+                    return null;
+                }
+                var ids = (nuint*)((byte*)buffer + sizeof(nuint));
+                var set = new HashSet<nuint>();
+                for (var i = 0; i < count; i++)
+                {
+                    set.Add(ids[i]);
+                }
+                return set;
+            }
+            finally
+            {
+                NativeMemory.Free(buffer);
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// The identity of a plain file (not a directory, not a reparse point) on an open handle.
+    /// FILE_ID_INFO where the file system has it (NTFS, ReFS, SMB); otherwise the 64-bit file
+    /// index (FAT32 and exFAT answer only that, observed 2026-10-02). The same handle-based
+    /// read is used when the file is observed and when it is deleted, so the two compare.
+    /// </summary>
+    private static bool TryReadPlainFileIdentity(SafeFileHandle handle, out FileIdentity identity)
+    {
+        identity = default;
+        ByHandleFileInformation legacy;
+        if (!GetFileInformationByHandle(handle, &legacy))
+        {
+            return false;
+        }
+        if ((legacy.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) != 0)
+        {
+            return false;
+        }
+
+        FileIdInfo id;
+        identity = GetFileInformationByHandleEx(handle, FileIdInfoClass, &id, (uint)sizeof(FileIdInfo))
+            ? new FileIdentity(id.VolumeSerialNumber, id.FileIdHigh, id.FileIdLow, legacy.CreationTime)
+            : new FileIdentity(legacy.VolumeSerialNumber, 0, ((ulong)legacy.FileIndexHigh << 32) | legacy.FileIndexLow, legacy.CreationTime);
+        return identity.IsKnown;
+    }
+
     /// <summary>
     /// Deletes <paramref name="path"/> only if, on the handle that does the deleting, it is a
-    /// plain file: opened with FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself, never
-    /// followed) and without FILE_FLAG_BACKUP_SEMANTICS (a directory does not open at all),
-    /// its attributes checked on that handle, then deleted through FileDispositionInfo on the
-    /// same handle. A check by path followed by a delete by path would leave a window in
-    /// which another process could swap in a link to a file outside the job.
+    /// plain file and still the file <paramref name="expected"/> identifies: opened with
+    /// FILE_FLAG_OPEN_REPARSE_POINT (a link is opened as itself, never followed) and without
+    /// FILE_FLAG_BACKUP_SEMANTICS (a directory does not open at all), identity and attributes
+    /// checked on that handle, then deleted through FileDispositionInfo on the same handle. A
+    /// check by path followed by a delete by path would leave a window in which another
+    /// process could swap in a link, or its own file, under the same name.
     /// A read-only file (robocopy copies attributes, so a partial copy of a read-only source
     /// is read-only) has the attribute cleared first, and restored if the delete fails.
     /// Returns true when the file was deleted; false for anything else, without throwing.
     /// </summary>
-    public static bool DeleteFileIfNotReparsePoint(string path)
+    public static bool DeleteFileIfSameFile(string path, FileIdentity expected)
     {
+        if (!expected.IsKnown)
+        {
+            return false;
+        }
         using var handle = CreateFile(
             WinPath.ExtendedLengthPath(path),
             DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
@@ -201,6 +361,11 @@ internal static unsafe partial class ProcessNative
             FILE_FLAG_OPEN_REPARSE_POINT,
             0);
         if (handle.IsInvalid)
+        {
+            return false;
+        }
+
+        if (!TryReadPlainFileIdentity(handle, out var actual) || actual != expected)
         {
             return false;
         }

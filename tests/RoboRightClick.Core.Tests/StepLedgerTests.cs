@@ -239,13 +239,16 @@ public class StepLedgerTests
 
         Assert.Empty(ledger.Retryable);
         Assert.Empty(ledger.SkippedLateArrivals);
-        Assert.Equal([A, B, C, Sibling], ledger.StartedRobocopyFiles);
+        Assert.Equal([B, C, Sibling], ledger.KilledRunFiles.Select(k => k.File));
+        Assert.All(ledger.KilledRunFiles, k => Assert.Equal(ConflictPolicy.Ask, k.Policy));
         Assert.Equal([A.SourcePath], ledger.CompletedSources);
     }
 
     [Fact]
-    public void Only_robocopy_steps_that_started_are_cleanup_candidates()
+    public void Only_robocopy_runs_the_cancel_killed_are_cleanup_candidates()
     {
+        // Step 0 ended on its own and skipped A (a late arrival at its destination). A cancel
+        // during step 2 must not make A a candidate: it is someone else's file.
         var copy = File(@"C:\src\x.txt", @"C:\src\x - Copy.txt");
         var ledger = new StepLedger(PlanOf(
             Robocopy(@"C:\src\T", @"D:\dst\T", A),
@@ -253,19 +256,26 @@ public class StepLedgerTests
             Robocopy(@"C:\src\U", @"D:\dst\U", B)));
 
         ledger.StepStarted(0);
+        ledger.StepFinished(0, new RobocopyExitCode(0), killedByCancel: false);
         ledger.StepStarted(1);
+        ledger.InProcessCompleted(1);
+        ledger.StepFinished(1, null, killedByCancel: false);
+        ledger.StepStarted(2);
+        ledger.StepFinished(2, new RobocopyExitCode(-1), killedByCancel: true);
 
-        Assert.Equal([A], ledger.StartedRobocopyFiles);
+        Assert.Equal([A], ledger.SkippedLateArrivals);
+        Assert.Equal([B], ledger.KilledRunFiles.Select(k => k.File));
     }
 
     [Fact]
-    public void Output_from_a_run_counts_as_the_run_having_started()
+    public void Unfinished_files_are_the_ones_not_reported_complete()
     {
         var ledger = TreeLedger();
+        ledger.StepStarted(0);
+        ledger.Apply(0, new FileReported(100, A.SourcePath));
+        ledger.Apply(0, Error(C.SourcePath));
 
-        ledger.Apply(0, new OtherOutput("ERROR: RETRY LIMIT EXCEEDED."));
-
-        Assert.Equal(4, ledger.StartedRobocopyFiles.Count);
+        Assert.Equal([B, C, Sibling], ledger.UnfinishedFiles(0));
     }
 
     [Fact]

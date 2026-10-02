@@ -122,6 +122,19 @@ public static class RobocopyArgs
     };
 
     /// <summary>
+    /// Whether a run under <paramref name="policy"/> can write over a file that already exists
+    /// when robocopy reaches it. Only /XC /XN /XO together rule that out (robocopy skips a
+    /// "same" file by default). Cancel cleanup relies on this to tell which pre-existing
+    /// files a killed run may have left half written; keep it in step with <see cref="ConflictFlags"/>.
+    /// </summary>
+    public static bool MayOverwriteExisting(ConflictPolicy policy) => policy switch
+    {
+        ConflictPolicy.Replace or ConflictPolicy.KeepNewer => true,
+        ConflictPolicy.Skip or ConflictPolicy.Ask => false,
+        _ => true,
+    };
+
+    /// <summary>
     /// One robocopy argument string. Files the user chose to keep are never protected by a
     /// filter here: <see cref="ExecutionPlanner"/> leaves them out of every step by
     /// construction (robocopy /MOV can delete the source of a "same" file it skipped).

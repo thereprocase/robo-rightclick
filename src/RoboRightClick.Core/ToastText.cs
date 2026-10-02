@@ -136,7 +136,7 @@ public static class ToastText
         var files = job.DamagedOnCancel == 1 ? "1 file was" : $"{job.DamagedOnCancel:N0} files were";
         return new Toast(
             job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled",
-            $"{files} being replaced when you canceled and may be incomplete. Open Jobs to finish replacing them.",
+            $"{files} being written when you canceled and may be incomplete. Open Jobs to finish them.",
             ToastKind.Warning);
     }
 
