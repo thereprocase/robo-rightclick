@@ -49,8 +49,8 @@ internal static class Installer
     /// existing one with an explicit --autostart/--no-autostart applied, unless a newer
     /// version wrote it (then it is left as it is, and the message says so). 6. Start the
     /// installed exe (tray) with <see cref="CommandLine.AfterInstallSwitch"/>, so it shows the
-    /// first-run hint once. 7. Message: "Installed. Right-click files → Show more options
-    /// → Robo-Copy / Robo-Cut / Robo-Paste." (none with --quiet; the exit code is the result).
+    /// first-run hint once. 7. Message: <see cref="InstallText.Installed"/>, which names the
+    /// hotkey when it is on (none with --quiet; the exit code is the result).
     /// </summary>
     public static int Install(CliInstall command, AppPaths paths)
     {
@@ -86,12 +86,13 @@ internal static class Installer
 
             var configKept = !WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
+            // The hotkey the tray will load: a missing file was just written with the defaults.
+            var pasteHotkey = existing is null ? Settings.Default.PasteHotkey : existing.PasteHotkey;
+
             StartTray(paths);
             return Succeed(
                 $"{AppInfo.Name} is installed.",
-                "Right-click files or folders and choose Show more options, then Robo-Copy or Robo-Cut. "
-                    + "Right-click the destination folder, or the empty space inside it, and choose Robo-Paste. "
-                    + "The app's icon near the clock opens Jobs and Settings; Windows may put it under the ^ arrow."
+                InstallText.Installed(pasteHotkey)
                     + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty),
                 quiet);
         }

@@ -129,7 +129,9 @@ this section is verified on Windows yet; the checks that will verify it are list
   file list in Windows clipboard history, which Robo-Copy and Robo-Cut avoid.
 - Change it or turn it off in Settings (**Hotkey**), from the tray menu's hotkey line, or in
   `config.json` (`"pasteHotkey": ""` is off). An install from before the hotkey existed gets
-  it switched on when upgraded; the notice after the install names it.
+  it switched on when upgraded. The message at the end of the install names it (an install
+  with `--quiet` shows none), and so does the tray's first notice, unless a notice about
+  interrupted pastes or a settings problem takes its place.
 - The combination is Ctrl, optionally Shift, and one key: A to Z, 0 to 9 or F1 to F12 (not
   F10). Alt and the Windows key are not allowed, and neither are combinations File Explorer
   already uses (Settings says why for each one).

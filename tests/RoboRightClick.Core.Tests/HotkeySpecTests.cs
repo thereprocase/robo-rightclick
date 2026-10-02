@@ -351,6 +351,28 @@ public class HotkeySpecTests
         Assert.True(longest.Body.Length <= ToastText.MaxBalloonText, $"{longest.Body.Length} characters");
     }
 
+    /// <summary>
+    /// The install message is the one notice an upgrade always shows (the tray hint can be
+    /// pre-empted), so it must name a hotkey the upgrade turned on.
+    /// </summary>
+    [Fact]
+    public void The_install_message_names_the_hotkey_when_it_is_on()
+    {
+        Assert.Contains("Ctrl+Shift+V also runs Robo-Paste", InstallText.Installed(HotkeySpec.Default), StringComparison.Ordinal);
+        Assert.Contains("Ctrl+Shift+F12 also runs Robo-Paste", InstallText.Installed(Valid("Ctrl+Shift+F12")), StringComparison.Ordinal);
+        Assert.DoesNotContain("Ctrl+", InstallText.Installed(null), StringComparison.Ordinal);
+        Assert.DoesNotContain(@":\", InstallText.Installed(HotkeySpec.Default), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_upgraded_config_without_the_setting_has_the_hotkey_on_and_both_notices_say_so()
+    {
+        var upgraded = SettingsSerializer.Parse("""{ "version": 1, "threads": "auto" }""").Settings.PasteHotkey;
+        Assert.Equal(HotkeySpec.Default, upgraded);
+        Assert.Contains(HotkeySpec.DefaultText, InstallText.Installed(upgraded), StringComparison.Ordinal);
+        Assert.Contains(HotkeySpec.DefaultText, ToastText.ForTrayHint(upgraded).Body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void The_hotkey_refusals_are_path_free_and_distinct()
     {
