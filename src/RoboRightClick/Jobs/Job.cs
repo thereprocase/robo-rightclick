@@ -1100,6 +1100,12 @@ internal sealed class Job
             // longer tell finished files from partial ones, and keeping data wins.
             cleanup = await RunBlockingAsync(() => CleanUpPartialFiles(parts, killed, completed, presence, atKill)).ConfigureAwait(false);
         }
+        else
+        {
+            System.Diagnostics.Trace.WriteLine(string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"RoboRightClick cancel cleanup: skipped, parts={parts.Length} pathsUnreliable={unreliable} candidates={killed.Count}"));
+        }
 
         lock (_lock)
         {
@@ -1151,6 +1157,7 @@ internal sealed class Job
             }
         }
 
+        var deleted = 0;
         foreach (var target in plan.Delete)
         {
             if (sources.Contains(WinPath.NormalizeForMatch(target.Path)))
@@ -1159,8 +1166,12 @@ internal sealed class Job
             }
             // A file in use, already gone, denied or no longer the one robocopy held open is
             // left: when in doubt, keep data.
-            ProcessNative.DeleteFileIfSameFile(target.Path, target.Identity);
+            if (ProcessNative.DeleteFileIfSameFile(target.Path, target.Identity))
+            {
+                deleted++;
+            }
         }
+        TraceCleanup(killed.Count, atKill, plan, deleted);
 
         // The files left in place may be incomplete: "Finish copying them" repeats them.
         // For a cut whose source is already gone the move had finished, so there is nothing
@@ -1192,6 +1203,21 @@ internal sealed class Job
             }
         }
         return new Cleanup(plan.LeftInPlace, damagedByPart);
+    }
+
+    /// <summary>
+    /// One debug-output line per cancel cleanup (OutputDebugString through the default trace
+    /// listener; nothing reaches a file): how many candidates there were, what was seen at
+    /// the kill, and how many files were deleted or left. Counts only, never a path, so it is
+    /// allowed in ephemeral mode. It is how a test tells "nothing was proven" from "the
+    /// delete failed".
+    /// </summary>
+    private static void TraceCleanup(int candidates, Dictionary<string, KillObservation> atKill, CleanupPlan plan, int deleted)
+    {
+        int Count(KillEvidence evidence) => atKill.Values.Count(o => o.Evidence == evidence);
+        System.Diagnostics.Trace.WriteLine(string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"RoboRightClick cancel cleanup: candidates={candidates} observed={atKill.Count} open={Count(KillEvidence.OpenByRobocopy)} notOpen={Count(KillEvidence.NotOpenByRobocopy)} absent={Count(KillEvidence.Absent)} unknown={Count(KillEvidence.Unknown)} toDelete={plan.Delete.Count} deleted={deleted} leftInPlace={plan.LeftInPlace.Count}"));
     }
 
     /// <summary>Explorer leaves an empty folder for each directory link robocopy skipped (docs/parity.md).</summary>
