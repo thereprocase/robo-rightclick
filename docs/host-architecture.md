@@ -226,6 +226,7 @@ key and the app's own Uninstall key.
 | ⌫ `Software\Classes\CLSID\{verb clsid}` | (default) / `AppID` | `RoboRightClick Robo-Copy` / `{B708F29C-…}` |
 | `…\CLSID\{verb clsid}\LocalServer32` | (default) | `"<install dir>\RoboRightClick.exe"` |
 | ⌫ `Software\Classes\<assoc>\shell\<Verb>` | `MUIVerb` / `MultiSelectModel` | `Robo-Copy` / `Player` (copy, cut) or `Single` (paste) |
+| (same key) | `Icon` | `<install dir>\robo-copy.ico` (`robo-cut.ico`, `robo-paste.ico`): written by install beside the exe, deleted by uninstall; one pixel-fitted frame per display scale, 16–48 px |
 | `…\shell\<Verb>\command` | `DelegateExecute` | `{verb clsid}` |
 | ⌫ `Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboRightClick` | `DisplayName`, `DisplayVersion`, `DisplayIcon`, `InstallLocation`, `UninstallString`, `NoModify`=1, `NoRepair`=1 | Settings → Apps → Installed apps entry |
 | `Software\Microsoft\Windows\CurrentVersion\Run` | `RoboRightClick` | `"<exe>"` (only when autostart resolves true; always removed) |

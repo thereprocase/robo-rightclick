@@ -50,6 +50,19 @@ public static class ShellVerbs
 
     public static readonly IReadOnlyList<ShellVerbInfo> All = [RoboCopy, RoboCut, RoboPaste];
 
+    /// <summary>
+    /// The menu icon file for a verb, written next to the installed exe. Each .ico holds one
+    /// pixel-fitted frame per common display scale (16-48 px), so Explorer picks a crisp one
+    /// at 100-300% scaling instead of resampling (tools/icons/render_icons.py).
+    /// </summary>
+    public static string IconFileName(ShellVerbInfo verb) => verb.Verb switch
+    {
+        ShellVerb.RoboCopy => "robo-copy.ico",
+        ShellVerb.RoboCut => "robo-cut.ico",
+        ShellVerb.RoboPaste => "robo-paste.ico",
+        _ => throw new ArgumentOutOfRangeException(nameof(verb)),
+    };
+
     /// <summary>Right-click on the empty space of a folder: a click with no selected item.</summary>
     public const string BackgroundAssociation = @"Directory\Background";
 

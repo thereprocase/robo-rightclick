@@ -33,6 +33,20 @@ public class UninstallPlanTests
         Assert.Contains(WinPath.Combine(WinPath.Combine(Paths.JobsDirectory, JobB), "robocopy.log"), plan.Files);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Deletes_the_menu_icons_whether_or_not_it_runs_from_the_install_folder(bool runningFromInstallDir)
+    {
+        // The self-delete step removes the install folder with a non-recursive rd after
+        // deleting only the exe, so the icons must already be gone by then.
+        var plan = UninstallPlan.For(Paths, [], runningFromInstallDir);
+        foreach (var verb in ShellVerbs.All)
+        {
+            Assert.Contains(WinPath.Combine(Paths.InstallDirectory, ShellVerbs.IconFileName(verb)), plan.Files);
+        }
+    }
+
     [Fact]
     public void Lists_the_temp_files_a_crash_between_write_and_replace_leaves_behind()
     {

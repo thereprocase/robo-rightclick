@@ -29,7 +29,9 @@ AMBER = "#B87900"
 RED = "#B3261E"
 
 GRID = 16
-ICON_SIZES = [16, 20, 24, 32, 48, 64, 256]
+# One hand-fitted frame per common display scale: 100, 125, 150, 175, 200, 225,
+# 250 and 300 percent of a 16 px menu icon, plus 64 and 256 for large views.
+ICON_SIZES = [16, 20, 24, 28, 32, 36, 40, 48, 64, 256]
 TRAY_SIZES = [16, 20, 24, 32]
 
 
