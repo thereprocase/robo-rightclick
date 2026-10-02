@@ -26,4 +26,12 @@
     <ProjectReference Include="../RoboRightClick.Core/RoboRightClick.Core.csproj" />
   </ItemGroup>
 
+  <!-- IBM Plex for the Gridline design language (docs/gridline.md). Embedded and loaded
+       with PrivateFontCollection.AddMemoryFont, so nothing is installed system-wide.
+       Source: Arch ttf-ibm-plex 6.4.0; SIL OFL 1.1, licence shipped next to the exe. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Fonts\*.ttf" LogicalName="RoboRightClick.Fonts.%(Filename)%(Extension)" />
+    <None Include="Fonts\LICENSE-IBM-Plex-OFL.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
