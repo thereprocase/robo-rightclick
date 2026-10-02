@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using RoboRightClick.Core;
 
@@ -41,8 +42,40 @@ internal sealed partial class ClassFactory : IClassFactory
     /// <see cref="ComNative.Wrappers"/> and QueryInterfaces for riid. Never throws: any
     /// exception becomes E_FAIL with *ppvObject = 0.
     /// </summary>
-    public int CreateInstance(nint pUnkOuter, in Guid riid, out nint ppvObject) =>
-        throw new NotImplementedException();
+    public int CreateInstance(nint pUnkOuter, in Guid riid, out nint ppvObject)
+    {
+        ppvObject = 0;
+        if (pUnkOuter != 0)
+        {
+            return HResult.CLASS_E_NOAGGREGATION;
+        }
+
+        try
+        {
+            var unknown = ComNative.Wrappers.GetOrCreateComInterfaceForObject(
+                new VerbCommand(Verb, Handler), CreateComInterfaceFlags.None);
+            try
+            {
+                var hr = Marshal.QueryInterface(unknown, in riid, out var requested);
+                if (hr < 0)
+                {
+                    return hr;
+                }
+                ppvObject = requested;
+                return HResult.S_OK;
+            }
+            finally
+            {
+                // The QueryInterface result carries its own reference.
+                Marshal.Release(unknown);
+            }
+        }
+        catch (Exception)
+        {
+            ppvObject = 0;
+            return HResult.E_FAIL;
+        }
+    }
 
     /// <summary>The tray stays resident regardless, so locks are acknowledged and ignored.</summary>
     public int LockServer(bool fLock) => HResult.S_OK;

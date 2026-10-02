@@ -8,6 +8,11 @@ namespace RoboRightClick.Com;
 // Learn method tables. IIDs and order checked against shobjidl_core.h as mirrored in
 // Wine's and ReactOS's shobjidl.idl. Methods the app never calls are still declared,
 // with pointer-sized placeholders, because they occupy vtable slots.
+//
+// Interface parameters the app releases itself use UniqueComInterfaceMarshaller. The
+// default ComInterfaceMarshaller returns a cached, shared wrapper, and
+// ComObject.FinalRelease does nothing on one of those (it acts only on unique
+// instances), which would leave Explorer's proxies to the finalizer thread.
 
 [StructLayout(LayoutKind.Sequential)]
 internal struct NativePoint
@@ -25,7 +30,11 @@ internal static class HResult
     public const int E_POINTER = unchecked((int)0x80004003);
     public const int E_FAIL = unchecked((int)0x80004005);
     public const int E_INVALIDARG = unchecked((int)0x80070057);
+    public const int E_ACCESSDENIED = unchecked((int)0x80070005);
     public const int CLASS_E_NOAGGREGATION = unchecked((int)0x80040110);
+
+    /// <summary>The class is not registered for this user: the CLI's "not installed" case.</summary>
+    public const int REGDB_E_CLASSNOTREG = unchecked((int)0x80040154);
 }
 
 internal static class ShellConstants
@@ -39,11 +48,45 @@ internal static class ShellConstants
 
     public const uint CLSCTX_LOCAL_SERVER = 0x4;
 
+    /// <summary>Clipboard format of a file list (wtypes.h CF_HDROP).</summary>
+    public const ushort CF_HDROP = 15;
+
+    public const uint DVASPECT_CONTENT = 1;
+
+    /// <summary>TYMED_HGLOBAL: the data is in a global memory block.</summary>
+    public const uint TYMED_HGLOBAL = 1;
+
+    /// <summary>BHID_DataObject: BindToHandler yields the item array's IDataObject.</summary>
+    public static readonly Guid BHID_DataObject = new("B8C0BD9F-ED24-455C-83E6-D5390C4FE8C4");
+
+    public static readonly Guid IID_IUnknown = new("00000000-0000-0000-C000-000000000046");
+    public static readonly Guid IID_IDataObject = new("0000010E-0000-0000-C000-000000000046");
+
     /// <summary>One registration serves every activation: each right-click reaches this process.</summary>
     public const uint REGCLS_MULTIPLEUSE = 1;
 
     /// <summary>Register all three classes, then expose them together with CoResumeClassObjects.</summary>
     public const uint REGCLS_SUSPENDED = 4;
+}
+
+/// <summary>objidl.h FORMATETC. Sequential layout gives the native padding after cfFormat.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct FORMATETC
+{
+    public ushort cfFormat;
+    public nint ptd;
+    public uint dwAspect;
+    public int lindex;
+    public uint tymed;
+}
+
+/// <summary>objidl.h STGMEDIUM. <c>data</c> is the union: an HGLOBAL for TYMED_HGLOBAL.</summary>
+[StructLayout(LayoutKind.Sequential)]
+internal struct STGMEDIUM
+{
+    public uint tymed;
+    public nint data;
+    public nint pUnkForRelease;
 }
 
 /// <summary>unknwn.h. Slots: QueryInterface, AddRef, Release, CreateInstance, LockServer.</summary>
@@ -91,7 +134,7 @@ internal partial interface IExecuteCommand
 internal partial interface IObjectWithSelection
 {
     [PreserveSig]
-    int SetSelection(IShellItemArray? psia);
+    int SetSelection([MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItemArray>))] IShellItemArray? psia);
 
     [PreserveSig]
     int GetSelection(in Guid riid, out nint ppv);
@@ -128,7 +171,7 @@ internal partial interface IShellItemArray
     int GetCount(out uint pdwNumItems);
 
     [PreserveSig]
-    int GetItemAt(uint dwIndex, out IShellItem? ppsi);
+    int GetItemAt(uint dwIndex, [MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItem>))] out IShellItem? ppsi);
 
     [PreserveSig]
     int EnumItems(out nint ppenumShellItems);
@@ -143,7 +186,7 @@ internal partial interface IShellItem
     int BindToHandler(nint pbc, in Guid bhid, in Guid riid, out nint ppv);
 
     [PreserveSig]
-    int GetParent(out IShellItem? ppsi);
+    int GetParent([MarshalUsing(typeof(UniqueComInterfaceMarshaller<IShellItem>))] out IShellItem? ppsi);
 
     [PreserveSig]
     int GetDisplayName(uint sigdnName, out nint ppszName);
@@ -153,4 +196,42 @@ internal partial interface IShellItem
 
     [PreserveSig]
     int Compare(IShellItem? psi, uint hint, out int piOrder);
+}
+
+/// <summary>
+/// objidl.h. Only GetData is called. The rest hold vtable slots with pointer-sized
+/// placeholders. Slots: GetData, GetDataHere, QueryGetData, GetCanonicalFormatEtc, SetData,
+/// EnumFormatEtc, DAdvise, DUnadvise, EnumDAdvise.
+/// </summary>
+[GeneratedComInterface]
+[Guid("0000010E-0000-0000-C000-000000000046")]
+internal partial interface IDataObject
+{
+    [PreserveSig]
+    int GetData(in FORMATETC pformatetcIn, out STGMEDIUM pmedium);
+
+    /// <summary>pformatetc and pmedium are pointers.</summary>
+    [PreserveSig]
+    int GetDataHere(nint pformatetc, nint pmedium);
+
+    [PreserveSig]
+    int QueryGetData(in FORMATETC pformatetc);
+
+    [PreserveSig]
+    int GetCanonicalFormatEtc(nint pformatectIn, nint pformatetcOut);
+
+    [PreserveSig]
+    int SetData(nint pformatetc, nint pmedium, [MarshalAs(UnmanagedType.Bool)] bool fRelease);
+
+    [PreserveSig]
+    int EnumFormatEtc(uint dwDirection, out nint ppenumFormatEtc);
+
+    [PreserveSig]
+    int DAdvise(nint pformatetc, uint advf, nint pAdvSink, out uint pdwConnection);
+
+    [PreserveSig]
+    int DUnadvise(uint dwConnection);
+
+    [PreserveSig]
+    int EnumDAdvise(out nint ppenumAdvise);
 }

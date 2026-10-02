@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using RoboRightClick.Core;
 
@@ -36,16 +38,66 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
     /// </summary>
     public IShellItemArray? Selection { get; private set; }
 
-    public int Initialize(string? pszCommandName, nint ppb) => HResult.S_OK;
-
-    public int SetSelection(IShellItemArray? psia)
+    public int Initialize(string? pszCommandName, nint ppb)
     {
-        Selection = psia;
+        VerifyUiThread();
         return HResult.S_OK;
     }
 
+    public int SetSelection(IShellItemArray? psia)
+    {
+        try
+        {
+            VerifyUiThread();
+            ReleaseSelection();
+            Selection = psia;
+            return HResult.S_OK;
+        }
+        catch (Exception)
+        {
+            return HResult.E_FAIL;
+        }
+    }
+
     /// <summary>QueryInterface the held array for riid; E_FAIL with no selection.</summary>
-    public int GetSelection(in Guid riid, out nint ppv) => throw new NotImplementedException();
+    public unsafe int GetSelection(in Guid riid, out nint ppv)
+    {
+        ppv = 0;
+        try
+        {
+            VerifyUiThread();
+            if (Selection is null)
+            {
+                return HResult.E_FAIL;
+            }
+
+            // The marshaller hands back the foreign object's own interface pointer with a
+            // reference of its own; a second QueryInterface then yields the requested one.
+            var held = (nint)ComInterfaceMarshaller<IShellItemArray>.ConvertToUnmanaged(Selection);
+            if (held == 0)
+            {
+                return HResult.E_FAIL;
+            }
+            try
+            {
+                var hr = Marshal.QueryInterface(held, in riid, out var requested);
+                if (hr >= 0)
+                {
+                    ppv = requested;
+                }
+                return hr;
+            }
+            finally
+            {
+                Marshal.Release(held);
+            }
+        }
+        catch (Exception)
+        {
+            ppv = 0;
+            return HResult.E_FAIL;
+        }
+    }
 
     // Explorer's invocation details. None changes what a copy, cut or paste does.
     public int SetKeyState(uint grfKeyState) => HResult.S_OK;
@@ -67,5 +119,70 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
     /// released). 3. Hands them to <see cref="Handler"/> and returns S_OK. No dialog, no
     /// file-system work and no waiting happens inside this call.
     /// </summary>
-    public int Execute() => throw new NotImplementedException();
+    public int Execute()
+    {
+        try
+        {
+            VerifyUiThread();
+            if (!ComCallerSecurity.CallerIsAtLeastMediumIntegrity())
+            {
+                ReleaseSelection();
+                return HResult.E_ACCESSDENIED;
+            }
+
+            var array = Selection;
+            if (array is null)
+            {
+                return HResult.E_FAIL;
+            }
+
+            SelectionPaths selection;
+            try
+            {
+                selection = ShellSelection.ReadPaths(array);
+            }
+            finally
+            {
+                // Read once, then released: the array is a cross-process proxy.
+                ReleaseSelection();
+            }
+
+            Handler.Invoke(Verb, selection.Paths, selection.SkippedItems);
+            return HResult.S_OK;
+        }
+        catch (Exception)
+        {
+            // Nothing crosses into Explorer. The reason is not reported here: paths in an
+            // exception message would reach a log that ephemeral mode forbids.
+            return HResult.E_FAIL;
+        }
+    }
+
+    private void ReleaseSelection()
+    {
+        var held = Selection;
+        Selection = null;
+        ComNative.FinalRelease(held);
+    }
+
+    private static bool _threadWarningLogged;
+
+    /// <summary>
+    /// The class objects are registered on the UI thread, so every call should arrive there.
+    /// If the generated wrapper turns out to be agile that is false, and the unlocked state
+    /// of this class would be unsafe: assert in Debug, write one trace line in Release.
+    /// </summary>
+    private static void VerifyUiThread()
+    {
+        if (Environment.CurrentManagedThreadId == ComServer.UiThreadId)
+        {
+            return;
+        }
+        Debug.Fail("VerbCommand was called off the UI thread.");
+        if (!_threadWarningLogged)
+        {
+            _threadWarningLogged = true;
+            Trace.TraceError("VerbCommand was called off the UI thread.");
+        }
+    }
 }
