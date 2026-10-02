@@ -36,6 +36,12 @@ internal sealed class FileJobSink : IJobSink, IDisposable
     private System.Threading.Timer? _flushTimer;
     private long _logBytes;
     private bool _logTruncated;
+
+    // After the first open or write failure robocopy.log is abandoned: retrying would throw
+    // once per output line on a full disk, and a writer that lost a buffer mid-file would
+    // leave a silent gap in the log.
+    private bool _logFailed;
+    private bool _flushArmed;
     private bool _closed;
 
     public FileJobSink(JobLogStore store, string jobFolder)
@@ -57,8 +63,12 @@ internal sealed class FileJobSink : IJobSink, IDisposable
                 return;
             }
             _job = job;
-            _states.Clear();
-            _states.Add(new StateChange(JobState.Queued, job.CreatedAt));
+            // Every job starts Queued at its creation time (JobLifecycle does the same); the
+            // manager may or may not report that first state itself.
+            if (_states.Count == 0 || _states[0].State != JobState.Queued)
+            {
+                _states.Insert(0, new StateChange(JobState.Queued, job.CreatedAt));
+            }
             Guard(WriteJobJson);
         }
     }
@@ -71,8 +81,9 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             {
                 return;
             }
-            // JobCreated already recorded the initial Queued state.
-            if (_states.Count == 0 || _states[^1] != change)
+            // The state machine has no self-transitions, so a repeat of the last state is the
+            // initial Queued that JobCreated already recorded (possibly with another timestamp).
+            if (_states.Count == 0 || _states[^1].State != change.State)
             {
                 _states.Add(change);
             }
@@ -130,17 +141,29 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             {
                 return;
             }
-            _summary = summary;
-            Guard(WriteJobJson);
-            if (_job is not null)
+            try
             {
-                // The terminal state change carries the finish time; the clock is only a fallback.
-                var finishedAt = _states.Count > 0 && _states[^1].State == summary.FinalState
-                    ? _states[^1].At
-                    : DateTimeOffset.UtcNow;
-                Store.AppendHistory(JobRecords.ToHistoryLine(_job, summary, finishedAt));
+                _summary = summary;
+                // job.json must end in the final state even if the terminal StateChanged has not
+                // arrived (it would be dropped after close): a record whose last state is not
+                // terminal is reported at the next start as a paste the app died in.
+                if (_states.Count == 0 || _states[^1].State != summary.FinalState)
+                {
+                    _states.Add(new StateChange(summary.FinalState, DateTimeOffset.UtcNow));
+                }
+                Guard(WriteJobJson);
+                if (_job is { } job)
+                {
+                    // The terminal state change carries the finish time.
+                    var finishedAt = _states[^1].At;
+                    Guard(() => Store.AppendHistory(JobRecords.ToHistoryLine(job, summary, finishedAt)));
+                }
             }
-            CloseLog();
+            finally
+            {
+                // Release the file handle and the timer whatever happened above.
+                CloseLog();
+            }
         }
     }
 
@@ -198,19 +221,31 @@ internal sealed class FileJobSink : IJobSink, IDisposable
 
     private void WriteLogLine(string line)
     {
-        if (_logTruncated)
+        if (_logTruncated || _logFailed)
         {
             return;
         }
-        var bytes = Utf8NoBom.GetByteCount(line) + Environment.NewLine.Length;
-        if (_logBytes + bytes > MaxRobocopyLogBytes)
+        try
         {
-            OpenLog().WriteLine(TruncationLine);
-            _logTruncated = true;
-            return;
+            // StreamWriter.WriteLine appends Environment.NewLine, which is ASCII.
+            var bytes = Utf8NoBom.GetByteCount(line) + Environment.NewLine.Length;
+            if (_logBytes + bytes > MaxRobocopyLogBytes)
+            {
+                OpenLog().WriteLine(TruncationLine);
+                _logTruncated = true;
+            }
+            else
+            {
+                OpenLog().WriteLine(line);
+                _logBytes += bytes;
+            }
+            ArmFlush();
         }
-        OpenLog().WriteLine(line);
-        _logBytes += bytes;
+        catch
+        {
+            AbandonLog();
+            throw;
+        }
     }
 
     private StreamWriter OpenLog()
@@ -225,33 +260,93 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             FileMode.Create,
             FileAccess.Write,
             FileShare.Read);
-        _log = new StreamWriter(stream, Utf8NoBom, LogBufferBytes);
-        _flushTimer = new System.Threading.Timer(_ => FlushTick(), null, FlushInterval, FlushInterval);
+        try
+        {
+            _log = new StreamWriter(stream, Utf8NoBom, LogBufferBytes);
+        }
+        catch
+        {
+            stream.Dispose();
+            throw;
+        }
+        // One-shot, re-armed by the next write: an idle or paused job has no timer running,
+        // and a sink that is never finished is not kept alive by a periodic callback.
+        _flushTimer = new System.Threading.Timer(_ => FlushTick(), null, Timeout.Infinite, Timeout.Infinite);
         return _log;
+    }
+
+    private void ArmFlush()
+    {
+        if (!_flushArmed && _flushTimer is not null)
+        {
+            _flushArmed = true;
+            _flushTimer.Change(FlushInterval, Timeout.InfiniteTimeSpan);
+        }
     }
 
     private void FlushTick()
     {
         lock (_gate)
         {
+            _flushArmed = false;
             Guard(FlushLog);
         }
     }
 
-    private void FlushLog() => _log?.Flush();
+    private void FlushLog()
+    {
+        if (_log is null)
+        {
+            return;
+        }
+        try
+        {
+            _log.Flush();
+        }
+        catch
+        {
+            AbandonLog();
+            throw;
+        }
+    }
+
+    // Callers hold _gate. Stops all further log writes; the caller records the cause.
+    private void AbandonLog()
+    {
+        _logFailed = true;
+        DisposeLog();
+    }
 
     private void CloseLog()
     {
         _closed = true;
+        if (_log is not null)
+        {
+            Guard(FlushLog);
+        }
+        DisposeLog();
+    }
+
+    private void DisposeLog()
+    {
         _flushTimer?.Dispose();
         _flushTimer = null;
+        _flushArmed = false;
         var log = _log;
         _log = null;
         if (log is null)
         {
             return;
         }
-        Guard(log.Flush);
-        Guard(log.Dispose);
+        try
+        {
+            log.Dispose();
+        }
+        catch (Exception ex)
+        {
+            // Dispose flushes; after a failure that flush fails again. The handle is released
+            // regardless, so the failure only needs recording.
+            Store.RecordFailure(ex);
+        }
     }
 }

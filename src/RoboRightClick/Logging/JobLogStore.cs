@@ -26,6 +26,10 @@ internal sealed class JobLogStore
     // Counted once, on the first append, so a rotation check does not re-read the file.
     private int _historyLines = -1;
 
+    // history.jsonl ends without "\n": an append was cut short (disk full, crash). The next
+    // line starts with one so the partial record does not swallow a complete one.
+    private bool _historyEndsMidLine;
+
     public JobLogStore(AppPaths paths, Func<int> retentionJobs)
     {
         Paths = paths;
@@ -59,19 +63,24 @@ internal sealed class JobLogStore
                 Directory.CreateDirectory(Paths.DataDirectory);
                 if (_historyLines < 0)
                 {
-                    _historyLines = File.Exists(Paths.HistoryFile) ? File.ReadLines(Paths.HistoryFile).Count() : 0;
+                    var exists = File.Exists(Paths.HistoryFile);
+                    _historyLines = exists ? File.ReadLines(Paths.HistoryFile).Count() : 0;
+                    _historyEndsMidLine = exists && EndsMidLine(Paths.HistoryFile);
                 }
                 if (_historyLines >= HistoryRotateLines)
                 {
                     File.Move(Paths.HistoryFile, RotatedHistoryFile(), overwrite: true);
                     _historyLines = 0;
+                    _historyEndsMidLine = false;
                 }
-                File.AppendAllText(Paths.HistoryFile, line + "\n", Utf8NoBom);
+                File.AppendAllText(Paths.HistoryFile, (_historyEndsMidLine ? "\n" : "") + line + "\n", Utf8NoBom);
+                _historyEndsMidLine = false;
                 _historyLines++;
             }
             catch (Exception ex)
             {
-                // Forget the count: the file may have changed under us, so recount next time.
+                // Forget the count and the tail: a failed append may have written part of the
+                // line, so both are read again next time.
                 _historyLines = -1;
                 RecordFailure(ex);
             }
@@ -88,7 +97,19 @@ internal sealed class JobLogStore
     {
         lock (_gate)
         {
-            DeleteJobFolders(keep: Math.Max(0, RetentionJobs()), activeFolders);
+            int keep;
+            try
+            {
+                // The setting comes from outside; a failure reading it must not escape into
+                // the job manager's worker.
+                keep = Math.Max(0, RetentionJobs());
+            }
+            catch (Exception ex)
+            {
+                RecordFailure(ex);
+                return;
+            }
+            DeleteJobFolders(keep, activeFolders);
         }
     }
 
@@ -174,6 +195,17 @@ internal sealed class JobLogStore
             RecordFailure(ex);
             return null;
         }
+    }
+
+    private static bool EndsMidLine(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length == 0)
+        {
+            return false;
+        }
+        stream.Seek(-1, SeekOrigin.End);
+        return stream.ReadByte() != '\n';
     }
 
     private string RotatedHistoryFile() => WinPath.Combine(Paths.DataDirectory, RotatedHistoryFileName);
