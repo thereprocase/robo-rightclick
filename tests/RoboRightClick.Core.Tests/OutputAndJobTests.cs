@@ -262,6 +262,7 @@ public class ConflictAndLoggingTests
         public void StateChanged(Guid jobId, StateChange change) { }
         public void CommandStarted(Guid jobId, string arguments) { }
         public void OutputLine(Guid jobId, string line) { }
+        public void CommandFinished(Guid jobId, int exitCode) { }
         public void JobFinished(JobSummary summary) { }
     }
 }

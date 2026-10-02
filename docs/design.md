@@ -19,6 +19,8 @@ robo-rightclick/
   docs/parity.md   docs/testlog.md (append-only)   CLAUDE.md   README.md   LICENSE (MIT)
 ```
 
+The Windows host's components, threading, COM contracts and work split are in docs/host-architecture.md.
+
 **One process does everything.** `RoboRightClick.exe` runs in the tray. It is also an out-of-process COM server, registered per-user (`HKCU\Software\Classes\CLSID\{…}\LocalServer32`) with `REGCLS_MULTIPLEUSE`. That way every right-click lands in the instance that is already running. If none is running, COM starts it with `-Embedding` and it stays resident.
 
 **Menu items** (HKCU only, so no admin):

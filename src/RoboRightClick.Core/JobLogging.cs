@@ -27,6 +27,9 @@ public interface IJobSink
     void StateChanged(Guid jobId, StateChange change);
     void CommandStarted(Guid jobId, string arguments);
     void OutputLine(Guid jobId, string line);
+
+    /// <summary>Robocopy's exit code for the command most recently started (job.json records it).</summary>
+    void CommandFinished(Guid jobId, int exitCode);
     void JobFinished(JobSummary summary);
 }
 
@@ -42,6 +45,7 @@ public sealed class NullJobSink : IJobSink
     public void StateChanged(Guid jobId, StateChange change) { }
     public void CommandStarted(Guid jobId, string arguments) { }
     public void OutputLine(Guid jobId, string line) { }
+    public void CommandFinished(Guid jobId, int exitCode) { }
     public void JobFinished(JobSummary summary) { }
 }
 

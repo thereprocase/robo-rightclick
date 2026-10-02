@@ -85,7 +85,17 @@ public static class RobocopyArgs
         _ => throw new ArgumentOutOfRangeException(nameof(policy)),
     };
 
-    public static string Build(RobocopyStep step, Settings settings, ConflictPolicy resolvedPolicy, string logPipeName)
+    /// <param name="excludedFiles">
+    /// Full source paths robocopy must leave alone (/XF). Used when the user decides per
+    /// file: files to skip, and files kept both ways that are copied in-process under a
+    /// new name afterwards.
+    /// </param>
+    public static string Build(
+        RobocopyStep step,
+        Settings settings,
+        ConflictPolicy resolvedPolicy,
+        string logPipeName,
+        IReadOnlyList<string>? excludedFiles = null)
     {
         var sb = new StringBuilder();
         sb.Append(Quote(step.SourceDirectory)).Append(' ').Append(Quote(step.DestinationDirectory));
@@ -116,6 +126,18 @@ public static class RobocopyArgs
         if (conflict.Length > 0)
         {
             sb.Append(' ').Append(conflict);
+        }
+
+        if (excludedFiles is { Count: > 0 })
+        {
+            // Robocopy reads /XF operands until the next switch, so the list goes last
+            // among the app's own flags. Whether a user /XF in extraArgs adds to this
+            // list or replaces it is unverified on Windows.
+            sb.Append(" /XF");
+            foreach (var path in excludedFiles)
+            {
+                sb.Append(' ').Append(Quote(path));
+            }
         }
 
         var extra = step.Move ? settings.ExtraArgs.Move : settings.ExtraArgs.Copy;
