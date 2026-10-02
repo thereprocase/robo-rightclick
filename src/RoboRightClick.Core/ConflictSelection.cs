@@ -52,7 +52,7 @@ public static class ConflictSelection
         return new ConflictChoice.DecideEach(byDestination);
     }
 
-    /// <summary>What Continue will do, for the line above the button: "2 replaced, 1 kept both, 3 skipped".</summary>
+    /// <summary>What Continue will do, for the line above the button: "2 files replaced, 1 file pasted under a new name, 3 files skipped".</summary>
     public static string Summary(IEnumerable<FileDecision> decisions)
     {
         int replace = 0, keepBoth = 0, skip = 0;
@@ -78,7 +78,8 @@ public static class ConflictSelection
         }
         if (keepBoth > 0)
         {
-            parts.Add(Count(keepBoth) + " kept both");
+            // Keep both keeps the existing file and gives the pasted one a new name ("x (2).txt").
+            parts.Add(Count(keepBoth) + " pasted under a new name");
         }
         if (skip > 0)
         {
@@ -87,6 +88,59 @@ public static class ConflictSelection
         return parts.Count == 0 ? "No files" : string.Join(", ", parts);
     }
 
+    /// <summary>
+    /// The note on a row of the per-file list: how the two files compare, and why keep-both is
+    /// not offered where it is not. The size and date columns stay plain values, so they fit.
+    /// </summary>
+    public static string Note(FileConflict conflict)
+    {
+        var parts = new List<string>();
+        if (conflict.LooksIdentical)
+        {
+            parts.Add("Same size and date");
+        }
+        else
+        {
+            // -1: the existing file is newer (larger), 0: the same, 1: the pasted file is.
+            var newer = conflict.Source.LastWriteUtc.CompareTo(conflict.Existing.LastWriteUtc);
+            var larger = conflict.Source.Size.CompareTo(conflict.Existing.Size);
+            static string Side(int sign) => sign > 0 ? "The pasted file" : "The existing file";
+            parts.Add((Math.Sign(newer), Math.Sign(larger)) switch
+            {
+                (0, _) => $"{Side(larger)} is larger; same date",
+                (_, 0) => $"{Side(newer)} is newer; same size",
+                var (n, l) when n == l => $"{Side(newer)} is newer and larger",
+                _ => $"{Side(newer)} is newer; {Side(larger).ToLowerInvariant()} is larger",
+            });
+        }
+        if (!conflict.KeepBothAllowed)
+        {
+            parts.Add(KeepBothUnavailableReason);
+        }
+        return string.Join(". ", parts);
+    }
+
+    /// <summary>The conflict dialog's three choices and their notes, worded for one file or several.</summary>
+    public static ConflictChoiceText ChoiceText(int count)
+    {
+        if (count == 1)
+        {
+            return new ConflictChoiceText(
+                "Replace the file in the destination", "Overwrites it with the file being pasted",
+                "Skip this file", "Leaves the file in the destination as it is",
+                "Let me decide", "Compare the two files; tick both to keep both");
+        }
+        var files = count.ToString("N0", CultureInfo.InvariantCulture) + " files";
+        return new ConflictChoiceText(
+            "Replace the files in the destination", $"Overwrites the {files} with the ones being pasted",
+            "Skip these files", $"Leaves the {files} in the destination as they are",
+            "Let me decide for each file", "Tick the files to keep; tick both to keep both");
+    }
+
+    /// <summary>The pane title over the per-file list. Never contains a file name: titles are shown in capitals, which would misstate a name.</summary>
+    public static string ListTitle(int count) =>
+        count == 1 ? "1 file with the same name" : count.ToString("N0", CultureInfo.InvariantCulture) + " files with the same names";
+
     private static string Count(int n) => n == 1 ? "1 file" : n.ToString("N0", CultureInfo.InvariantCulture) + " files";
 
     private static FileDecision LeastDestructive(FileDecision a, FileDecision b) =>
@@ -94,3 +148,7 @@ public static class ConflictSelection
         : a == FileDecision.KeepBoth || b == FileDecision.KeepBoth ? FileDecision.KeepBoth
         : FileDecision.Replace;
 }
+
+/// <summary>Button text and the line under it for each of the conflict dialog's three choices.</summary>
+public sealed record ConflictChoiceText(
+    string Replace, string ReplaceNote, string Skip, string SkipNote, string Decide, string DecideNote);

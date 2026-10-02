@@ -41,17 +41,12 @@ public static class JobStateText
         switch (job.State)
         {
             case JobState.Queued when pauseLatched:
-                return "Paused (waiting)";
+                // The label already says PAUSED; the text says what the job is waiting for.
+                return QueueReason(job, maxConcurrentJobs) is { } waitingFor
+                    ? "Paused; " + char.ToLowerInvariant(waitingFor[0]) + waitingFor[1..]
+                    : "Paused before starting";
             case JobState.Queued:
-                return job.Wait switch
-                {
-                    JobWait.OverlappingJob => "Waiting for another paste into this folder",
-                    JobWait.ConcurrencyLimit when maxConcurrentJobs > 0 =>
-                        string.Create(CultureInfo.InvariantCulture, $"Waiting (limit of {maxConcurrentJobs} {(maxConcurrentJobs == 1 ? "job" : "jobs")})"),
-                    JobWait.ConcurrencyLimit => "Waiting for a free job slot",
-                    JobWait.ScanLimit => "Waiting to scan",
-                    _ => "Starting…",
-                };
+                return QueueReason(job, maxConcurrentJobs) ?? "Starting…";
             case JobState.Scanning:
                 var found = job.TotalFiles == 0
                     ? "Scanning…"
@@ -85,6 +80,17 @@ public static class JobStateText
                 return job.State.ToString();
         }
     }
+
+    /// <summary>Why a queued job has not started, or null when it is about to.</summary>
+    private static string? QueueReason(JobSnapshot job, int maxConcurrentJobs) => job.Wait switch
+    {
+        JobWait.OverlappingJob => "Waiting for another paste into this folder",
+        JobWait.ConcurrencyLimit when maxConcurrentJobs > 0 =>
+            string.Create(CultureInfo.InvariantCulture, $"Waiting (limit of {maxConcurrentJobs} {(maxConcurrentJobs == 1 ? "job" : "jobs")})"),
+        JobWait.ConcurrencyLimit => "Waiting for a free job slot",
+        JobWait.ScanLimit => "Waiting to scan",
+        _ => null,
+    };
 
     /// <summary>The short UPPERCASE state label drawn in the state's colour.</summary>
     public static string Label(JobSnapshot job, bool pauseLatched = false)

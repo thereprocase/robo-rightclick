@@ -266,9 +266,48 @@ public class ConflictSelectionTests
     public void Summary_says_what_continue_will_do()
     {
         Assert.Equal(
-            "2 files replaced, 1 file kept both, 1 file skipped",
+            "2 files replaced, 1 file pasted under a new name, 1 file skipped",
             ConflictSelection.Summary([FileDecision.Replace, FileDecision.KeepBoth, FileDecision.Skip, FileDecision.Replace]));
         Assert.Equal("1,200 files skipped", ConflictSelection.Summary(Enumerable.Repeat(FileDecision.Skip, 1200)));
+    }
+
+    private static FileConflict Compare(long sourceSize, int sourceDay, long existingSize, int existingDay, bool keepBoth = true) =>
+        new(@"C:\src\a.txt", @"D:\dst\a.txt",
+            new FileFacts(sourceSize, new DateTimeOffset(2026, 10, sourceDay, 0, 0, 0, TimeSpan.Zero)),
+            new FileFacts(existingSize, new DateTimeOffset(2026, 10, existingDay, 0, 0, 0, TimeSpan.Zero)))
+        { KeepBothAllowed = keepBoth };
+
+    [Fact]
+    public void The_note_says_which_file_is_newer_and_larger()
+    {
+        Assert.Equal("Same size and date", ConflictSelection.Note(Compare(10, 2, 10, 2)));
+        Assert.Equal("The pasted file is newer and larger", ConflictSelection.Note(Compare(20, 3, 10, 2)));
+        Assert.Equal("The existing file is newer and larger", ConflictSelection.Note(Compare(10, 2, 20, 3)));
+        Assert.Equal("The pasted file is newer; the existing file is larger", ConflictSelection.Note(Compare(10, 3, 20, 2)));
+        Assert.Equal("The existing file is newer; same size", ConflictSelection.Note(Compare(10, 2, 10, 3)));
+        Assert.Equal("The pasted file is larger; same date", ConflictSelection.Note(Compare(20, 2, 10, 2)));
+        Assert.Equal(
+            "The pasted file is newer; same size. " + ConflictSelection.KeepBothUnavailableReason,
+            ConflictSelection.Note(Compare(10, 3, 10, 2, keepBoth: false)));
+    }
+
+    [Fact]
+    public void The_choices_are_worded_for_one_file_or_several()
+    {
+        var one = ConflictSelection.ChoiceText(1);
+        Assert.Equal("Replace the file in the destination", one.Replace);
+        Assert.Equal("Skip this file", one.Skip);
+        Assert.DoesNotContain("files", one.ReplaceNote + one.SkipNote, StringComparison.Ordinal);
+        var many = ConflictSelection.ChoiceText(1200);
+        Assert.Equal("Skip these files", many.Skip);
+        Assert.Contains("1,200 files", many.ReplaceNote, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_list_title_names_no_file()
+    {
+        Assert.Equal("1 file with the same name", ConflictSelection.ListTitle(1));
+        Assert.Equal("3 files with the same names", ConflictSelection.ListTitle(3));
     }
 }
 
@@ -296,10 +335,11 @@ public class JobStateTextTests
     }
 
     [Fact]
-    public void A_pause_before_running_reads_as_paused_waiting()
+    public void A_pause_before_running_says_paused_and_what_it_waits_for()
     {
         var queued = Job(JobState.Queued) with { Wait = JobWait.OverlappingJob };
-        Assert.Equal("Paused (waiting)", JobStateText.For(queued, pauseLatched: true));
+        Assert.Equal("Paused; waiting for another paste into this folder", JobStateText.For(queued, pauseLatched: true));
+        Assert.Equal("Paused before starting", JobStateText.For(queued with { Wait = JobWait.None }, pauseLatched: true));
         Assert.Equal("PAUSED", JobStateText.Label(queued, pauseLatched: true));
         Assert.Equal(StateTone.Attention, JobStateText.Tone(queued, pauseLatched: true));
         Assert.Equal("Paused", JobStateText.For(Job(JobState.Paused)));

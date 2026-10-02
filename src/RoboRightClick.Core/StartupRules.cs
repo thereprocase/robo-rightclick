@@ -35,17 +35,21 @@ public enum ExitAction
     RefuseWithToast,
 }
 
-/// <summary>Visibility and check states of the tray menu items that depend on app state.</summary>
-public sealed record TrayMenu(bool OpenLogsVisible, bool PauseAllChecked, bool EphemeralChecked)
+/// <summary>Visibility, check and enabled states of the tray menu items that depend on app state.</summary>
+public sealed record TrayMenu(bool OpenLogsVisible, bool PauseAllChecked, bool EphemeralChecked, bool ResumeAllEnabled = false)
 {
     /// <summary>
     /// "Open logs" is hidden in ephemeral mode: the mode promises nothing about jobs is on
-    /// disk, and a menu item leading to a logs folder would say otherwise.
+    /// disk, and a menu item leading to a logs folder would say otherwise. "Resume all" is
+    /// enabled only when it would resume something: with Pause all on, or a job that is paused
+    /// or will pause when it starts. Otherwise a click on it would visibly do nothing.
     /// </summary>
-    public static TrayMenu For(LoggingMode mode, bool pauseAllActive) => new(
+    public static TrayMenu For(LoggingMode mode, bool pauseAllActive, IReadOnlyList<JobSnapshot>? jobs = null) => new(
         OpenLogsVisible: mode == LoggingMode.Normal,
         PauseAllChecked: pauseAllActive,
-        EphemeralChecked: mode == LoggingMode.Ephemeral);
+        EphemeralChecked: mode == LoggingMode.Ephemeral,
+        ResumeAllEnabled: pauseAllActive || (jobs ?? []).Any(j =>
+            !JobStates.IsTerminal(j.State) && !j.CancelRequested && (j.State == JobState.Paused || j.PauseRequested)));
 }
 
 /// <summary>

@@ -43,6 +43,21 @@ public class StartupRulesTests
     }
 
     [Fact]
+    public void Resume_all_is_enabled_only_when_it_would_resume_something()
+    {
+        static JobSnapshot Job(JobState state) => DisplayAndTrayTests.Job(state);
+
+        Assert.False(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false).ResumeAllEnabled);
+        Assert.False(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, [Job(JobState.Running), Job(JobState.Done)]).ResumeAllEnabled);
+        Assert.True(TrayMenu.For(LoggingMode.Normal, pauseAllActive: true).ResumeAllEnabled);
+        Assert.True(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, [Job(JobState.Paused)]).ResumeAllEnabled);
+        // A pause latched before the job runs is resumable too.
+        Assert.True(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, [Job(JobState.Queued) with { PauseRequested = true }]).ResumeAllEnabled);
+        // A job being canceled is not coming back.
+        Assert.False(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, [Job(JobState.Paused) with { CancelRequested = true }]).ResumeAllEnabled);
+    }
+
+    [Fact]
     public void Exit_without_active_jobs_is_immediate_for_anyone()
     {
         Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, requestedByOtherProcess: false));
