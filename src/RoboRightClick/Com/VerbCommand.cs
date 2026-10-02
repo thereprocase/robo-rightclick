@@ -132,7 +132,10 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
     /// released). A background click has no selection. 3. <see cref="ShellVerbs.InvocationItems"/>
     /// picks the selection or, for a background paste, <see cref="Directory"/>; nothing at
     /// all is E_FAIL. 4. Hands the items to <see cref="Handler"/> and returns S_OK. No dialog,
-    /// no file-system work and no waiting happens inside this call.
+    /// no file-system work and no waiting happens inside this call. A selection over
+    /// <see cref="SelectionLimits"/> is E_FAIL with <see cref="IVerbHandler.RefuseSelection"/>
+    /// posting the <see cref="VerbRefusal.SelectionTooLarge"/> toast (the CLI then exits 1;
+    /// Explorer showed nothing for an E_FAIL from Execute, testlog 2026-10-02).
     /// </summary>
     public int Execute()
     {
@@ -152,6 +155,13 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
                 try
                 {
                     selection = ShellSelection.ReadPaths(array);
+                }
+                catch (SelectionTooLargeException)
+                {
+                    // Every limit is checked before the data is copied, so this returns as
+                    // quickly as any other click; the toast says why nothing happened.
+                    Handler.RefuseSelection(Verb, VerbRefusal.SelectionTooLarge);
+                    return HResult.E_FAIL;
                 }
                 finally
                 {

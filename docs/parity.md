@@ -88,6 +88,10 @@ Design deviations (decided, not yet measured against Explorer):
   message pointing to Explorer's Paste. Explorer's own behavior here is not yet measured.
 - **Files that appear at the destination after the scan are skipped, not overwritten.**
   Explorer would ask about them; Robo-Paste reports them in the job summary.
+- **At most 250,000 items per click.** Robo-Copy, Robo-Cut and Robo-Paste refuse a larger
+  selection (or one whose paths add up to more than 64 MiB) with a toast that states the
+  limit, so Robo-Copy never writes more to the clipboard than Robo-Paste reads back. Explorer's
+  own Copy has no such limit. Selecting the parent folder copies the same files.
 - **"Keep newer" also keeps a destination with the same time but a different size.**
   (`/XC /XO`). Explorer has no such option; it exists only as a configured default.
 - **A retried cut can leave empty source folders.** After "Try again" moves the files that

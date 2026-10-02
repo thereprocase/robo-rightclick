@@ -273,16 +273,21 @@ is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
   Verb = `ClipboardPayload.VerbForPaste` (move only for a pure move marker). A move where every source's parent is the destination is Explorer's
   no-op and does nothing. Otherwise `JobManager.Enqueue(PasteOrder, cut ? sequence : null)`;
   everything that touches the disk happens later, in Scanning, on a worker thread.
-- **Refusals** (`VerbRefusal`): empty clipboard, virtual items, too large, busy, no
+- **Refusals** (`VerbRefusal`): empty clipboard, virtual items, clipboard too large, busy, no
   file-system destination, several destinations, non-file selection, same cut already being
-  pasted, and `Failed` (a verb threw; the dispatcher logs the exception type only). Each has
-  one fixed, path-free sentence in `ToastText.ForRefusal`.
+  pasted, selection too large, and `Failed` (a verb threw; the dispatcher logs the exception
+  type only). Each has one fixed, path-free sentence in `ToastText.ForRefusal`.
 - **After a cut-paste ends `Done` with at least one item moved:** `ClearIfUnchangedAsync(sequence)`
   compares the sequence number, opens the clipboard (retried with awaited delays for about a
   second), compares again, then empties. A newer clipboard write by anyone is left alone.
   `DoneWithErrors` keeps the clipboard (its sources still exist).
-- Robo-Copy writes any number of paths, as Explorer's Ctrl+C does; Robo-Paste refuses more
-  than `ClipboardPayload.MaxDropFilesPaths`. Refusing at copy time is a product decision left open.
+- **Selection size.** `ShellSelection.ReadPaths` checks Core's `SelectionLimits` (250,000
+  items, a 64 MiB `CF_HDROP` block, 32,767 characters per path and 32 Mi characters in all,
+  the clipboard's own limits) before it copies anything, for every verb and for the CLI. Over
+  a limit, `Execute` hands `VerbRefusal.SelectionTooLarge` to `IVerbHandler.RefuseSelection`,
+  which queues the toast behind earlier clicks, and returns `E_FAIL` at once (the CLI exits 1).
+  So Robo-Copy never puts more on the clipboard than Robo-Paste reads back. Explorer's own
+  Ctrl+C has no such limit (deviation in docs/parity.md).
 
 ## 6. Job engine contracts
 
@@ -638,9 +643,8 @@ Known gaps carried into the Windows phase:
 
 - Cancel cleanup cannot tell a partial file from a late arrival robocopy skipped silently in
   the same killed run (section 6).
-- `CF_HDROP` size is not capped on Robo-Copy; Robo-Paste refuses past its limit.
-- An oversized selection makes `Execute` return `E_FAIL` without a toast; no COM call timeout
-  guards against a hostile in-process `IShellItemArray` that blocks.
+- No COM call timeout guards against a hostile `IShellItemArray` that blocks. (An oversized
+  selection is now refused with a toast, section 5; unverified on Windows.)
 - The first-run install offer (`Installer.OfferInstall`) uses the native TaskDialog, before any
   Gridline font is loaded.
 - Hand edits of `startWithWindows` reload the setting but do not rewrite the Run value; only a

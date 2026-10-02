@@ -37,6 +37,12 @@ public enum VerbRefusal
     AlreadyBeingMoved,
 
     /// <summary>
+    /// The selection handed to the verb is over <see cref="SelectionLimits"/>: more items, or
+    /// more path text, than one click accepts. Refused whole, never truncated.
+    /// </summary>
+    SelectionTooLarge,
+
+    /// <summary>
     /// Something unexpected stopped the verb before it could hand anything on. Without this,
     /// an exception inside the dispatcher would leave the click with no visible result.
     /// </summary>
@@ -166,6 +172,11 @@ public static class ToastText
             "Only files and folders on a drive or network share can be Robo-copied or Robo-cut.",
             ToastKind.Warning),
         VerbRefusal.AlreadyBeingMoved => new("Already moving", "These items are already being moved.", ToastKind.Info),
+        VerbRefusal.SelectionTooLarge => new(
+            "Too many items selected",
+            $"Robo-Copy, Robo-Cut and Robo-Paste take up to {SelectionLimits.MaxItems:N0} selected items at once, "
+                + "fewer when their paths are very long. Select the folder that holds them instead.",
+            ToastKind.Warning),
         VerbRefusal.Failed => new("Something went wrong", "Robo-Copy, Robo-Cut or Robo-Paste could not finish. Try again.", ToastKind.Warning),
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };

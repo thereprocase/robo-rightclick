@@ -13,18 +13,25 @@ namespace RoboRightClick.Com;
 /// </param>
 internal sealed record SelectionPaths(IReadOnlyList<string> Paths, int SkippedItems, byte[]? ShellIdList = null);
 
-/// <summary>Converts shell item arrays to and from file-system paths.</summary>
+/// <summary>
+/// The selection is over <see cref="SelectionLimits"/>. <see cref="VerbCommand.Execute"/>
+/// turns it into the <see cref="VerbRefusal.SelectionTooLarge"/> toast.
+/// </summary>
+internal sealed class SelectionTooLargeException : Exception
+{
+    public SelectionTooLargeException()
+        : base("The selection is too large.")
+    {
+    }
+}
+
+/// <summary>
+/// Converts shell item arrays to and from file-system paths. The array may come from any
+/// same-user process that implements IShellItemArray itself, so its size is never trusted:
+/// every <see cref="SelectionLimits"/> check comes before the data is copied or kept.
+/// </summary>
 internal static class ShellSelection
 {
-    /// <summary>Longest path Windows accepts (32,767 UTF-16 units).</summary>
-    private const int MaxPathChars = 32_767;
-
-    /// <summary>
-    /// Total characters accepted across every path of one selection: the same 64 MiB budget
-    /// as the CF_HDROP block, in UTF-16 units. The array may come from any same-user process
-    /// that implements IShellItemArray itself, so its size is never trusted.
-    /// </summary>
-    private const long MaxTotalChars = ClipboardPayload.MaxDropFilesBytes / 2;
 
     /// <summary>
     /// Default path, one cross-process call: BindToHandler(BHID_DataObject, IID_IDataObject),
@@ -36,7 +43,7 @@ internal static class ShellSelection
     /// trip to Explorer, roughly 50k items × 2-3 calls × 30-50 µs ≈ 3-7 s of frozen Explorer,
     /// which is why it is only the fallback. Spike 1 times both on 50k items.
     /// </summary>
-    /// <exception cref="InvalidDataException">The selection exceeds the size limits.</exception>
+    /// <exception cref="SelectionTooLargeException">The selection exceeds <see cref="SelectionLimits"/>.</exception>
     public static SelectionPaths ReadPaths(IShellItemArray array)
     {
         var (viaDataObject, shellIdList) = TryReadDataObject(array);
@@ -222,9 +229,9 @@ internal static class ShellSelection
         {
             return null;
         }
-        if (size > ClipboardPayload.MaxDropFilesBytes)
+        if (SelectionLimits.BlockTooLarge(size))
         {
-            throw new InvalidDataException("The selection is too large.");
+            throw new SelectionTooLargeException();
         }
 
         var locked = ComNative.GlobalLock(handle);
@@ -247,7 +254,7 @@ internal static class ShellSelection
         return decoded.Status switch
         {
             DropFilesStatus.Ok => [.. decoded.Paths],
-            DropFilesStatus.TooLarge => throw new InvalidDataException("The selection is too large."),
+            DropFilesStatus.TooLarge => throw new SelectionTooLargeException(),
             _ => null, // Empty, or ANSI: the per-item path reads those exactly.
         };
     }
@@ -272,9 +279,9 @@ internal static class ShellSelection
     private static SelectionPaths ReadPerItem(IShellItemArray array)
     {
         ComNative.ThrowIfFailed(array.GetCount(out var count), "IShellItemArray.GetCount");
-        if (count > ClipboardPayload.MaxDropFilesPaths)
+        if (SelectionLimits.TooManyItems(count))
         {
-            throw new InvalidDataException("The selection is too large.");
+            throw new SelectionTooLargeException();
         }
 
         var paths = new List<string>((int)count);
@@ -298,9 +305,9 @@ internal static class ShellSelection
                     continue;
                 }
                 totalChars += path.Length;
-                if (path.Length > MaxPathChars || totalChars > MaxTotalChars)
+                if (SelectionLimits.PathTooLong(path.Length, totalChars))
                 {
-                    throw new InvalidDataException("The selection is too large.");
+                    throw new SelectionTooLargeException();
                 }
                 paths.Add(path);
             }

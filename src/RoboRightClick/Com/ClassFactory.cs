@@ -21,6 +21,13 @@ internal interface IVerbHandler
     /// and Robo-Cut put it on the clipboard beside CF_HDROP for Explorer's own paste.
     /// </param>
     void Invoke(ShellVerb verb, IReadOnlyList<string> paths, int skippedItems, byte[]? shellIdList);
+
+    /// <summary>
+    /// Called on the UI thread inside Execute when the selection was refused before any path
+    /// could be handed on (<see cref="VerbRefusal.SelectionTooLarge"/>), so the click does not
+    /// end in silence. Must return quickly: implementations post the toast and return.
+    /// </summary>
+    void RefuseSelection(ShellVerb verb, VerbRefusal refusal);
 }
 
 /// <summary>

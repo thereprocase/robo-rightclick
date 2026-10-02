@@ -59,6 +59,18 @@ internal sealed class VerbDispatcher : IVerbHandler
         Ui.Post(_ => Chain(() => RunAsync(verb, items, skippedItems, shellIdList)), null);
     }
 
+    /// <summary>
+    /// A selection the COM layer refused before reading it (too large). The toast is queued
+    /// behind earlier clicks like any verb, so toasts appear in click order, and Execute
+    /// returns at once.
+    /// </summary>
+    public void RefuseSelection(ShellVerb verb, VerbRefusal refusal) =>
+        Ui.Post(_ => Chain(() =>
+        {
+            Refuse(refusal);
+            return Task.CompletedTask;
+        }), null);
+
     /// <summary>The end of the FIFO. Only touched from <see cref="Ui"/> callbacks.</summary>
     private Task _tail = Task.CompletedTask;
 

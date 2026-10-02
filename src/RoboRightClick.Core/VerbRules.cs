@@ -9,6 +9,39 @@ public sealed record AnsiDropFiles(IReadOnlyList<Range> Names, DropFilesStatus S
 }
 
 /// <summary>
+/// The documented size limits of one selection handed to a verb, by Explorer or by the CLI
+/// (which takes the same COM path). The selection may come from any same-user process, so
+/// its size is never trusted: the host checks each limit before copying or keeping anything,
+/// and refuses the whole selection with <see cref="VerbRefusal.SelectionTooLarge"/>.
+/// The limits are the clipboard's, so a selection that is accepted also fits the CF_HDROP
+/// block Robo-Copy writes and Robo-Paste reads back.
+/// </summary>
+public static class SelectionLimits
+{
+    /// <summary>Most items one click accepts (the CF_HDROP path limit).</summary>
+    public const int MaxItems = ClipboardPayload.MaxDropFilesPaths;
+
+    /// <summary>Largest CF_HDROP block read from the selection's data object.</summary>
+    public const int MaxBlockBytes = ClipboardPayload.MaxDropFilesBytes;
+
+    /// <summary>Longest single path Windows accepts, in UTF-16 units.</summary>
+    public const int MaxPathChars = 32_767;
+
+    /// <summary>All paths together, in UTF-16 units: the CF_HDROP byte budget.</summary>
+    public const long MaxTotalChars = MaxBlockBytes / 2;
+
+    /// <summary>The shell reports more items than one click accepts.</summary>
+    public static bool TooManyItems(long count) => count > MaxItems;
+
+    /// <summary>A CF_HDROP block (from the selection's data object) larger than is read.</summary>
+    public static bool BlockTooLarge(ulong bytes) => bytes > MaxBlockBytes;
+
+    /// <summary>A path read one item at a time is too long, or brings the running total past the budget.</summary>
+    public static bool PathTooLong(int pathChars, long totalCharsIncludingThis) =>
+        pathChars > MaxPathChars || totalCharsIncludingThis > MaxTotalChars;
+}
+
+/// <summary>
 /// The decisions the verb dispatcher makes that need no Windows: which clicks are refused,
 /// which paste is Explorer's no-op, how a clipboard read is classified and how long the
 /// clipboard open is retried. Pure string and number logic: the dispatcher runs on the UI
