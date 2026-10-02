@@ -47,22 +47,25 @@ internal sealed class JobsWindow : Gridline.Window
         Status,
     }
 
+    // Logical widths at 96 dpi. Status takes whatever the window has left (at least its
+    // width here), so at the default size every column is visible without scrolling sideways.
     private static readonly (string Caption, int Width)[] Columns =
     [
-        ("State", 104),
-        ("Job", 220),
-        ("To", 200),
-        ("Progress", 130),
-        ("Done", 170),
-        ("Files", 110),
+        ("State", 100),
+        ("Job", 200),
+        ("To", 180),
+        ("Progress", 110),
+        ("Done", 150),
+        ("Files", 90),
         ("Speed", 90),
-        ("ETA", 70),
+        ("ETA", 64),
         ("Errors", 64),
-        ("Status", 320),
+        ("Status", 220),
     ];
 
     private readonly System.Windows.Forms.Timer _poll;
     private readonly JobList _list;
+    private readonly ColumnHeaderStrip _header;
     private readonly ImageList _rowHeight;
     private readonly Label _empty;
     private readonly CountsBlock _counts;
@@ -80,6 +83,7 @@ internal sealed class JobsWindow : Gridline.Window
 
     private IReadOnlyList<JobSnapshot> _rows = [];
     private IReadOnlyList<JobSnapshot>? _lastAll;
+    private LoggingMode? _lastMode;
     private Guid? _selected;
     private bool _restoringSelection;
     private bool _syncingFilter;
@@ -92,7 +96,7 @@ internal sealed class JobsWindow : Gridline.Window
         BeginBuild();
         Text = "RoboRightClick jobs";
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(1080, 560);
+        ClientSize = new Size(1240, 560);
         MinimumSize = new Size(720, 400);
         ShowInTaskbar = true;
         Padding = new Padding(Gridline.Space3, Gridline.Space3, Gridline.Space3, 0);
@@ -128,9 +132,12 @@ internal sealed class JobsWindow : Gridline.Window
             "Ephemeral mode is on: new jobs write nothing to disk. Names in this list stay in memory and are gone when the app exits.",
             "EphemeralNotice")
         {
-            Dock = DockStyle.Top,
             Visible = false,
         };
+        // In a one-column table, like every other caution strip: docked directly, an
+        // auto-sized label is only as wide as its text and the amber band stopped mid-window.
+        var noticeRow = Gridline.Stack(_ephemeralNotice);
+        noticeRow.Dock = DockStyle.Top;
 
         _rowHeight = new ImageList();
         _list = new JobList
@@ -143,7 +150,9 @@ internal sealed class JobsWindow : Gridline.Window
             MultiSelect = false,
             HideSelection = false,
             BorderStyle = BorderStyle.None,
-            HeaderStyle = ColumnHeaderStyle.Nonclickable,
+            // The ListView's own header ignored owner drawing on Windows 11 and showed the
+            // native white header; ColumnHeaderStrip draws the Gridline one instead.
+            HeaderStyle = ColumnHeaderStyle.None,
             BackColor = Gridline.White,
             ForeColor = Gridline.Ink,
             Name = "Jobs",
@@ -155,7 +164,9 @@ internal sealed class JobsWindow : Gridline.Window
             _list.Columns.Add(caption.ToUpperInvariant(), width);
         }
         _list.RetrieveVirtualItem += OnRetrieveVirtualItem;
-        _list.DrawColumnHeader += OnDrawColumnHeader;
+        _header = new ColumnHeaderStrip(_list, Columns.Select(c => c.Caption).ToArray()) { Dock = DockStyle.Top };
+        _list.HorizontalScrolled += (_, _) => _header.Invalidate();
+        _list.Resize += (_, _) => FitColumns();
         _list.DrawItem += (_, e) => e.DrawDefault = false;
         _list.DrawSubItem += OnDrawSubItem;
         _list.SelectedIndexChanged += OnSelectionChanged;
@@ -172,16 +183,17 @@ internal sealed class JobsWindow : Gridline.Window
         var pane = new Gridline.Pane("Jobs") { Dock = DockStyle.Fill, Padding = Padding.Empty };
         pane.Controls.Add(_list);
         pane.Controls.Add(_empty);
+        pane.Controls.Add(_header);
 
         _status = new Gridline.StatusBar();
 
-        _menu = new ContextMenuStrip { Renderer = new Gridline.MenuRenderer(), ShowImageMargin = false };
+        _menu = new Gridline.ContextMenu { ShowCheckMargin = false };
         _list.ContextMenuStrip = _menu;
         _menu.Opening += OnMenuOpening;
 
         // Docked controls lay out in reverse order of addition: the fill pane goes in first.
         Controls.Add(pane);
-        Controls.Add(_ephemeralNotice);
+        Controls.Add(noticeRow);
         Controls.Add(toolbar);
         Controls.Add(_counts);
         Controls.Add(_status);
@@ -239,10 +251,28 @@ internal sealed class JobsWindow : Gridline.Window
         _list.SmallImageList = null;
         _list.SmallImageList = _rowHeight;
         Gridline.UseFont(_list, Gridline.Face.Sans, Gridline.SizeUi);
-        for (var i = 0; i < Columns.Length; i++)
+        _header.Height = height;
+        FitColumns();
+    }
+
+    /// <summary>Every column at its logical width, and Status filling the rest of the list's width.</summary>
+    private void FitColumns()
+    {
+        if (_list.Columns.Count != Columns.Length)
+        {
+            return;
+        }
+        var used = 0;
+        for (var i = 0; i < Columns.Length - 1; i++)
         {
             _list.Columns[i].Width = Gridline.Scale(this, Columns[i].Width);
+            used += _list.Columns[i].Width;
         }
+        var status = Gridline.Scale(this, Columns[^1].Width);
+        // ClientSize excludes a vertical scroll bar, so a long list does not push Status out.
+        // A total exactly as wide as the list still made the ListView show a horizontal bar.
+        _list.Columns[^1].Width = Math.Max(status, _list.ClientSize.Width - used - 2);
+        _header.Invalidate();
     }
 
     protected override void OnVisibleChanged(EventArgs e)
@@ -299,11 +329,14 @@ internal sealed class JobsWindow : Gridline.Window
             return;
         }
         var all = Jobs.Snapshots();
-        if (!force && ReferenceEquals(all, _lastAll))
+        var mode = Jobs.CurrentSettings().Logging;
+        // The mode is part of what is shown (notice, status bar), and it can change while no job does.
+        if (!force && ReferenceEquals(all, _lastAll) && mode == _lastMode)
         {
             return;
         }
         _lastAll = all;
+        _lastMode = mode;
         var rows = _attentionOnly.Checked ? all.Where(j => j.NeedsAttention).ToList() : all;
 
         _list.BeginUpdate();
@@ -316,7 +349,6 @@ internal sealed class JobsWindow : Gridline.Window
         _list.EndUpdate();
         _list.Invalidate();
 
-        var mode = Jobs.CurrentSettings().Logging;
         _counts.Counts = JobStateText.Counts(all);
         _status.Cells = JobStateText.StatusCells(all, mode);
         _ephemeralNotice.Visible = mode == LoggingMode.Ephemeral;
@@ -583,16 +615,6 @@ internal sealed class JobsWindow : Gridline.Window
         ];
     }
 
-    private void OnDrawColumnHeader(object? sender, DrawListViewColumnHeaderEventArgs e)
-    {
-        if (e.Graphics is null)
-        {
-            return;
-        }
-        var caption = e.ColumnIndex >= 0 && e.ColumnIndex < Columns.Length ? Columns[e.ColumnIndex].Caption : string.Empty;
-        Gridline.DrawHeader(e.Graphics, e.Bounds, caption, Gridline.FontFor(_list, Gridline.Face.MonoSemiBold, Gridline.SizeDense));
-    }
-
     private void OnDrawSubItem(object? sender, DrawListViewSubItemEventArgs e)
     {
         if (e.Graphics is null || e.ItemIndex < 0 || e.ItemIndex >= _rows.Count)
@@ -645,12 +667,76 @@ internal sealed class JobsWindow : Gridline.Window
         }
     }
 
-    /// <summary>A ListView that paints without flicker while rows refresh four times a second.</summary>
+    /// <summary>A ListView that paints without flicker while rows refresh four times a second, and says when it scrolls sideways.</summary>
     private sealed class JobList : ListView
     {
+        private const int WmHScroll = 0x0114;
+        private const int WmMouseHWheel = 0x020E;
+        private const int SbHorz = 0;
+
         public JobList()
         {
             DoubleBuffered = true;
+        }
+
+        public event EventHandler? HorizontalScrolled;
+
+        /// <summary>Pixels the rows are scrolled to the left (report view scrolls horizontally in pixels).</summary>
+        public int HorizontalOffset => IsHandleCreated ? App.AppNative.GetScrollPos(Handle, SbHorz) : 0;
+
+        protected override void WndProc(ref Message m)
+        {
+            base.WndProc(ref m);
+            if (m.Msg is WmHScroll or WmMouseHWheel)
+            {
+                HorizontalScrolled?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+            // Keyboard navigation can scroll a column into view without a WM_HSCROLL.
+            HorizontalScrolled?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// The Gridline column header above the job list: gray cells with Plex Mono UPPERCASE
+    /// captions and rule borders, at the list's column widths and horizontal scroll offset.
+    /// </summary>
+    private sealed class ColumnHeaderStrip : Control
+    {
+        private readonly JobList _list;
+        private readonly string[] _captions;
+
+        public ColumnHeaderStrip(JobList list, string[] captions)
+        {
+            _list = list;
+            _captions = captions;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            SetStyle(ControlStyles.Selectable, false);
+            TabStop = false;
+            BackColor = Gridline.Gray;
+            AccessibleRole = AccessibleRole.ColumnHeader;
+            AccessibleName = "Columns";
+            AccessibleDescription = string.Join(", ", captions);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            var g = e.Graphics;
+            g.Clear(Gridline.Gray);
+            var font = Gridline.FontFor(this, Gridline.Face.MonoSemiBold, Gridline.SizeDense);
+            var x = -_list.HorizontalOffset;
+            for (var i = 0; i < _captions.Length && i < _list.Columns.Count; i++)
+            {
+                var width = _list.Columns[i].Width;
+                Gridline.DrawHeader(g, new Rectangle(x, 0, width, Height), _captions[i], font);
+                x += width;
+            }
+            using var rule = new Pen(Gridline.Rule);
+            g.DrawLine(rule, 0, Height - 1, Width, Height - 1);
         }
     }
 

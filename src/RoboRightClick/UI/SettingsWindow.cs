@@ -39,7 +39,8 @@ internal sealed class SettingsWindow : Gridline.Window
     private readonly Gridline.TextField _threads;
     private readonly Gridline.TextField _retries;
     private readonly Gridline.TextField _retryWait;
-    private readonly ComboBox _conflict;
+    private readonly Gridline.ComboField _conflict;
+    private readonly Label _invalidNote;
     private readonly Gridline.TextField _maxJobs;
     private readonly Gridline.CheckBox _ephemeral;
     private readonly Gridline.TextField _retention;
@@ -94,7 +95,7 @@ internal sealed class SettingsWindow : Gridline.Window
         _threads = Number("threads");
         _retries = Number("retries");
         _retryWait = Number("retryWaitSeconds");
-        _conflict = BuildConflictCombo();
+        _conflict = new Gridline.ComboField(BuildConflictCombo(), logicalWidth: 380);
         _maxJobs = Number("maxConcurrentJobs");
         _ephemeral = new Gridline.CheckBox("Ephemeral: write nothing about new jobs to disk", "logging");
         _retention = Number("logRetentionJobs");
@@ -130,8 +131,8 @@ internal sealed class SettingsWindow : Gridline.Window
             () => IntNode(_retryWait), s => _retryWait.Box.Text = Invariant(s.RetryWaitSeconds));
         AddField(table, "conflictDefault", "When a file already exists", _conflict,
             "Ask shows Explorer's Replace or Skip dialog before copying.",
-            () => JsonValue.Create(JsonName(ConflictChoices[Math.Max(0, _conflict.SelectedIndex)].Policy.ToString())),
-            s => _conflict.SelectedIndex = Array.FindIndex(ConflictChoices, c => c.Policy == s.ConflictDefault));
+            () => JsonValue.Create(JsonName(ConflictChoices[Math.Max(0, _conflict.Box.SelectedIndex)].Policy.ToString())),
+            s => _conflict.Box.SelectedIndex = Array.FindIndex(ConflictChoices, c => c.Policy == s.ConflictDefault));
         AddField(table, "maxConcurrentJobs", "Pastes running at once", _maxJobs,
             "0 = no limit, as Explorer. Up to 64; extra pastes wait in the queue.",
             () => IntNode(_maxJobs), s => _maxJobs.Box.Text = Invariant(s.MaxConcurrentJobs));
@@ -190,6 +191,14 @@ internal sealed class SettingsWindow : Gridline.Window
         cancel.Click += (_, _) => Hide();
         var buttons = Gridline.ButtonRow(_save, cancel);
         buttons.Dock = DockStyle.Bottom;
+        // Says why Save is disabled; the field itself may be scrolled out of view.
+        _invalidNote = Gridline.TextLabel(string.Empty, Gridline.Face.Sans, Gridline.SizeDense, Gridline.Red);
+        _invalidNote.Name = "InvalidNote";
+        _invalidNote.AccessibleName = "InvalidNote";
+        _invalidNote.Anchor = AnchorStyles.Left;
+        _invalidNote.Margin = new Padding(0, Gridline.Space3, Gridline.Space3, 0);
+        _invalidNote.Visible = false;
+        buttons.Controls.Add(_invalidNote);
 
         var notices = Gridline.Stack(_loadNotice, _externalNotice, _saveError);
         notices.Dock = DockStyle.Top;
@@ -333,7 +342,12 @@ internal sealed class SettingsWindow : Gridline.Window
         table.Controls.Add(caption, 0, table.RowStyles.Count - 1);
         table.Controls.Add(cell, 1, table.RowStyles.Count - 1);
 
-        var focus = input is Gridline.TextField text ? text.Box : input;
+        Control focus = input switch
+        {
+            Gridline.TextField text => text.Box,
+            Gridline.ComboField combo => combo.Box,
+            _ => input,
+        };
         _fields.Add(new Field(key, caption, focus, cell, problem, value, load));
 
         switch (focus)
@@ -417,6 +431,14 @@ internal sealed class SettingsWindow : Gridline.Window
         var all = SettingsSerializer.Parse(ToJson(_fields).ToJsonString());
         _valid = !anyProblem && all.Problems.Count == 0 ? all.Settings : null;
         _save.Enabled = _valid is not null;
+        var invalid = _fields.Where(f => f.Problem.Visible).Select(f => f.Label.Text).ToList();
+        _invalidNote.Text = invalid.Count switch
+        {
+            0 => string.Empty,
+            1 => $"Fix {invalid[0]} (marked in red) to save.",
+            _ => $"Fix {invalid.Count} settings marked in red to save: {string.Join(", ", invalid)}.",
+        };
+        _invalidNote.Visible = invalid.Count > 0;
         _saveError.Visible = false;
     }
 

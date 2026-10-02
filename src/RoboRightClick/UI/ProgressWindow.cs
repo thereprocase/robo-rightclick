@@ -130,6 +130,27 @@ internal sealed class ProgressWindow : Gridline.Window
     {
         base.OnLoad(e);
         Poll();
+        FitHeight();
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        FitHeight();
+    }
+
+    /// <summary>As tall as the lines shown, so the pane has no empty block under the rate line.</summary>
+    private void FitHeight()
+    {
+        if (_showingSummary)
+        {
+            return;
+        }
+        var inner = _pane.DisplayRectangle.Width;
+        var body = _progress.GetPreferredSize(new Size(inner, 0)).Height;
+        var pane = body + Gridline.Scale(this, Gridline.TitleStripHeight) + 2 + _pane.Padding.Vertical;
+        var buttons = _buttons.GetPreferredSize(Size.Empty).Height + _buttons.Margin.Vertical;
+        ClientSize = new Size(ClientSize.Width, pane + buttons + Padding.Vertical);
     }
 
     protected override void OnVisibleChanged(EventArgs e)
@@ -244,7 +265,12 @@ internal sealed class ProgressWindow : Gridline.Window
         _bar.Tone = tone;
         _amounts.Text = JobStateText.Amounts(job);
         _rate.Text = JobStateText.Rate(job);
-        _ephemeralNotice.Visible = job.Logging == LoggingMode.Ephemeral;
+        var ephemeral = job.Logging == LoggingMode.Ephemeral;
+        if (_ephemeralNotice.Visible != ephemeral)
+        {
+            _ephemeralNotice.Visible = ephemeral;
+            FitHeight();
+        }
 
         var canControl = !JobStates.IsTerminal(job.State) && !job.CancelRequested && job.State != JobState.Finalizing;
         var showResume = job.State == JobState.Paused || latched;

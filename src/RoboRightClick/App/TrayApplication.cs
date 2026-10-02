@@ -96,6 +96,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _pauseAllItem;
     private readonly ToolStripMenuItem _ephemeralItem;
     private readonly ToolStripMenuItem _openLogsItem;
+    private readonly ToolStripMenuItem _resumeAllItem;
     private readonly JobsWindow _jobsWindow;
     private readonly ProgressWindowHost _progressWindows;
     private readonly SessionEndWindow _sessionWindow;
@@ -165,6 +166,7 @@ internal sealed class TrayApplication : ApplicationContext
             _pauseAllItem = new ToolStripMenuItem("Pause all", null, (_, _) => TogglePauseAll());
             _ephemeralItem = new ToolStripMenuItem("Ephemeral mode", null, (_, _) => ToggleEphemeral());
             _openLogsItem = new ToolStripMenuItem("Open logs", null, (_, _) => OpenLogs());
+            _resumeAllItem = new ToolStripMenuItem("Resume all", null, (_, _) => ResumeAll());
             _menu = Own(BuildMenu());
             _icon.ContextMenuStrip = _menu;
             _jobsWindow = Own(new JobsWindow(_jobs, _logStore) { Prompts = _prompts });
@@ -253,13 +255,13 @@ internal sealed class TrayApplication : ApplicationContext
 
     private ContextMenuStrip BuildMenu()
     {
-        var menu = new ContextMenuStrip { Renderer = new Gridline.MenuRenderer() };
+        var menu = new Gridline.ContextMenu();
         menu.Items.AddRange(
         [
             new ToolStripMenuItem("Jobs…", null, (_, _) => ShowJobs()),
             new ToolStripSeparator(),
             _pauseAllItem,
-            new ToolStripMenuItem("Resume all", null, (_, _) => ResumeAll()),
+            _resumeAllItem,
             new ToolStripSeparator(),
             _ephemeralItem,
             new ToolStripMenuItem("Settings…", null, (_, _) => ShowSettings()),
@@ -437,7 +439,7 @@ internal sealed class TrayApplication : ApplicationContext
             previous?.Dispose();
         }
 
-        var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive);
+        var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive, _jobs.Snapshots());
         _pauseAllItem.Checked = state.PauseAllChecked;
         _ephemeralItem.Checked = state.EphemeralChecked;
         _openLogsItem.Visible = state.OpenLogsVisible;
@@ -445,6 +447,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             item.Enabled = !_shuttingDown;
         }
+        _resumeAllItem.Enabled = !_shuttingDown && state.ResumeAllEnabled;
     }
 
     private void OnTrayClicked(MouseButtons button)

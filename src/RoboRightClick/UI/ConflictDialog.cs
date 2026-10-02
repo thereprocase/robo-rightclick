@@ -36,8 +36,9 @@ internal sealed class ConflictDialog : Gridline.Window
     private const int ColDestinationDate = 7;
     private const int ColNote = 8;
 
-    // Logical widths at 96 dpi; the name and note columns fill what is left.
-    private static readonly int[] ColumnWidths = [34, 0, 220, 90, 140, 34, 90, 140, 0];
+    // Logical widths at 96 dpi; the name and note columns fill what is left. The check columns
+    // are as wide as their captions, so SOURCE and DESTINATION are never cut to "S..".
+    private static readonly int[] ColumnWidths = [76, 0, 180, 90, 150, 108, 90, 150, 0];
 
     private readonly bool[] _source;
     private readonly bool[] _destination;
@@ -74,23 +75,27 @@ internal sealed class ConflictDialog : Gridline.Window
         var verb = job.Verb == TransferVerb.Move ? "Moving" : "Copying";
         var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
         var context = $"{verb} {DisplayText.Items(job.Sources.Count)} to {into}";
-        var files = count == 1 ? "the file" : string.Create(CultureInfo.InvariantCulture, $"the {count:N0} files");
+        var words = ConflictSelection.ChoiceText(count);
 
         // The three big choices.
-        var replace = BigChoice("Replace the files in the destination", "Replace", $"Overwrites {files} with the ones being pasted");
+        var replace = BigChoice(words.Replace, "Replace", words.ReplaceNote);
         replace.Click += (_, _) => Finish(new ConflictChoice.ReplaceAll());
-        _skip = BigChoice("Skip these files", "Skip", $"Leaves {files} in the destination as they are");
+        _skip = BigChoice(words.Skip, "Skip", words.SkipNote);
         _skip.Click += (_, _) => Finish(new ConflictChoice.SkipAll());
-        var decide = BigChoice("Let me decide for each file", "Decide", "Tick the files to keep; tick both to keep both");
+        var decide = BigChoice(words.Decide, "Decide", words.DecideNote);
         decide.Click += (_, _) => ShowDecideView();
 
-        var choicePane = new Gridline.Pane("Replace or skip files") { Dock = DockStyle.Fill };
-        choicePane.Controls.Add(Gridline.Stack(
+        var choicePane = new Gridline.Pane(count == 1 ? "Replace or skip the file" : "Replace or skip files") { Dock = DockStyle.Fill };
+        var choices = Gridline.Stack(
             Gridline.TextLabel(heading, Gridline.Face.SansSemiBold, Gridline.SizeHeading),
             Gridline.TextLabel(context, Gridline.Face.Sans, Gridline.SizeUi, Gridline.TextSecondary),
             replace,
             _skip,
-            decide));
+            decide);
+        // Top, not Fill: a filled table hands its spare height to the last row, which made the
+        // third choice taller than the other two.
+        choices.Dock = DockStyle.Top;
+        choicePane.Controls.Add(choices);
         _choiceView = new Panel { Dock = DockStyle.Fill, BackColor = Gridline.Transparent };
         _choiceView.Controls.Add(choicePane);
 
@@ -112,7 +117,7 @@ internal sealed class ConflictDialog : Gridline.Window
         selectAll.Controls.Add(_allDestination);
 
         _grid = BuildGrid(count);
-        var gridPane = new Gridline.Pane(heading) { Dock = DockStyle.Fill, Padding = Padding.Empty };
+        var gridPane = new Gridline.Pane(ConflictSelection.ListTitle(count)) { Dock = DockStyle.Fill, Padding = Padding.Empty };
         gridPane.Controls.Add(_grid);
 
         _summary = Gridline.TextLabel(string.Empty, Gridline.Face.Mono, Gridline.SizeUi);
@@ -179,6 +184,9 @@ internal sealed class ConflictDialog : Gridline.Window
                 _grid.Columns[i].Width = Gridline.Scale(this, ColumnWidths[i]);
             }
         }
+        // A narrow window scrolls sideways rather than squeezing the file name to nothing.
+        _grid.Columns[ColName].MinimumWidth = Gridline.Scale(this, 120);
+        _grid.Columns[ColNote].MinimumWidth = Gridline.Scale(this, 160);
         // Row height comes from the template; existing virtual rows are rebuilt to pick it up.
         _grid.RowTemplate.Height = rowHeight;
         var count = _grid.RowCount;
@@ -234,14 +242,14 @@ internal sealed class ConflictDialog : Gridline.Window
         grid.DefaultCellStyle.SelectionForeColor = Gridline.White;
 
         grid.Columns.Add(CheckColumn("Source"));
-        grid.Columns.Add(TextColumn("Name", fill: 40));
+        grid.Columns.Add(TextColumn("Name", fill: 50));
         grid.Columns.Add(TextColumn("In folder"));
         grid.Columns.Add(TextColumn("Size", right: true));
         grid.Columns.Add(TextColumn("Modified"));
         grid.Columns.Add(CheckColumn("Destination"));
         grid.Columns.Add(TextColumn("Size", right: true));
         grid.Columns.Add(TextColumn("Modified"));
-        grid.Columns.Add(TextColumn("Note", fill: 60));
+        grid.Columns.Add(TextColumn("Note", fill: 50));
 
         grid.CellValueNeeded += OnCellValueNeeded;
         grid.CellValuePushed += OnCellValuePushed;
@@ -299,21 +307,18 @@ internal sealed class ConflictDialog : Gridline.Window
             ColSource => _source[e.RowIndex],
             ColName => WinPath.GetFileName(c.DestinationPath),
             ColFolder => WinPath.GetParent(c.DestinationPath),
-            ColSourceSize => SizeText(c.Source.Size, c.Source.Size > c.Existing.Size),
-            ColSourceDate => DateText(c.Source.LastWriteUtc, c.SourceIsNewer),
+            ColSourceSize => DisplayText.Bytes(c.Source.Size),
+            ColSourceDate => DateText(c.Source.LastWriteUtc),
             ColDestination => _destination[e.RowIndex],
-            ColDestinationSize => SizeText(c.Existing.Size, c.Existing.Size > c.Source.Size),
-            ColDestinationDate => DateText(c.Existing.LastWriteUtc, c.Existing.LastWriteUtc > c.Source.LastWriteUtc),
-            ColNote => !c.KeepBothAllowed ? ConflictSelection.KeepBothUnavailableReason
-                : c.LooksIdentical ? "Same size and date" : string.Empty,
+            ColDestinationSize => DisplayText.Bytes(c.Existing.Size),
+            ColDestinationDate => DateText(c.Existing.LastWriteUtc),
+            ColNote => ConflictSelection.Note(c),
             _ => null,
         };
     }
 
-    private static string SizeText(long bytes, bool larger) => DisplayText.Bytes(bytes) + (larger ? " (larger)" : string.Empty);
-
-    private static string DateText(DateTimeOffset utc, bool newer) =>
-        utc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) + (newer ? " (newer)" : string.Empty);
+    // Which side is newer or larger is in the note column, so these stay short enough to fit.
+    private static string DateText(DateTimeOffset utc) => utc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture);
 
     private void OnCellValuePushed(object? sender, DataGridViewCellValueEventArgs e)
     {
@@ -388,11 +393,21 @@ internal sealed class ConflictDialog : Gridline.Window
             Gridline.DrawCheckBox(e.Graphics, box, ticked, enabled: true);
             e.Handled = true;
         }
-        else if (e.ColumnIndex == ColNote && !Conflicts[e.RowIndex].KeepBothAllowed)
+        else if (e.ColumnIndex == ColFolder)
         {
+            // Cut in the middle, so the end of the path, where folders differ, stays visible.
             Gridline.DrawRow(e.Graphics, e.CellBounds, selected);
-            Gridline.DrawCellText(e.Graphics, ConflictSelection.KeepBothUnavailableReason,
-                Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense), e.CellBounds, Gridline.RowText(selected, Gridline.Amber));
+            Gridline.DrawCellText(e.Graphics, WinPath.GetParent(Conflicts[e.RowIndex].DestinationPath),
+                Gridline.FontFor(this, Gridline.Face.Mono, Gridline.SizeDense), e.CellBounds, Gridline.RowText(selected, Gridline.Ink), path: true);
+            e.Handled = true;
+        }
+        else if (e.ColumnIndex == ColNote)
+        {
+            // Amber where keep-both is not offered: that row has a qualification to read.
+            Gridline.DrawRow(e.Graphics, e.CellBounds, selected);
+            var color = Conflicts[e.RowIndex].KeepBothAllowed ? Gridline.TextSecondary : Gridline.Amber;
+            Gridline.DrawCellText(e.Graphics, ConflictSelection.Note(Conflicts[e.RowIndex]),
+                Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense), e.CellBounds, Gridline.RowText(selected, color));
             e.Handled = true;
         }
     }
@@ -414,7 +429,7 @@ internal sealed class ConflictDialog : Gridline.Window
         _choiceView.Visible = false;
         _decideView.Visible = true;
         AcceptButton = _continue;
-        var wanted = new Size(Gridline.Scale(this, 980), Gridline.Scale(this, 560));
+        var wanted = new Size(Gridline.Scale(this, 1180), Gridline.Scale(this, 560));
         var area = Screen.FromControl(this).WorkingArea;
         Size = new Size(Math.Min(Math.Max(Width, wanted.Width), area.Width), Math.Min(Math.Max(Height, wanted.Height), area.Height));
         if (!area.Contains(Bounds))

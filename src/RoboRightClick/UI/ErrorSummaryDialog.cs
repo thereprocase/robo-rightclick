@@ -314,9 +314,15 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         return pane;
     }
 
-    /// <summary>Ruled 26 px rows: the path in Plex Mono, then the Windows message and code or another short note.</summary>
+    /// <summary>
+    /// Ruled two-line rows: the path in Plex Mono, and under it the Windows message and code or
+    /// another short note across the full width. One line each was too narrow: the reason, the
+    /// part the user needs, was cut off after a few words.
+    /// </summary>
     private sealed class DetailList : ListBox
     {
+        private const int RowHeight = 44;
+
         public DetailList(IEnumerable<DetailRow> rows, string automationId)
         {
             DrawMode = DrawMode.OwnerDrawFixed;
@@ -325,7 +331,7 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             BackColor = Gridline.White;
             Name = automationId;
             AccessibleName = automationId;
-            ItemHeight = Gridline.Scale(this, Gridline.RowHeight);
+            ItemHeight = Gridline.Scale(this, RowHeight);
             BeginUpdate();
             foreach (var row in rows)
             {
@@ -337,7 +343,7 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         protected override void OnDpiChangedAfterParent(EventArgs e)
         {
             base.OnDpiChangedAfterParent(e);
-            ItemHeight = Gridline.Scale(this, Gridline.RowHeight);
+            ItemHeight = Gridline.Scale(this, RowHeight);
         }
 
         protected override void OnDrawItem(DrawItemEventArgs e)
@@ -350,11 +356,12 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             var g = e.Graphics;
             var r = e.Bounds;
             Gridline.DrawRow(g, r, selected);
-            var pathWidth = (int)(r.Width * 0.55);
+            var pad = Gridline.Scale(this, 4);
+            var half = (r.Height - pad * 2) / 2;
             Gridline.DrawCellText(g, row.Path, Gridline.FontFor(this, Gridline.Face.Mono, Gridline.SizeDense),
-                new Rectangle(r.X, r.Y, pathWidth, r.Height), Gridline.RowText(selected, Gridline.Ink), path: true);
+                new Rectangle(r.X, r.Y + pad, r.Width, half), Gridline.RowText(selected, Gridline.Ink), path: true);
             Gridline.DrawCellText(g, row.Note, Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense),
-                new Rectangle(r.X + pathWidth, r.Y, r.Width - pathWidth, r.Height), Gridline.RowText(selected, Gridline.TextSecondary));
+                new Rectangle(r.X, r.Y + pad + half, r.Width, half), Gridline.RowText(selected, Gridline.TextSecondary));
             if ((e.State & DrawItemState.Focus) != 0 && Focused)
             {
                 Gridline.DrawFocus(g, r);

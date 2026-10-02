@@ -57,6 +57,10 @@ internal static partial class AppNative
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ShutdownBlockReasonDestroy(nint hWnd);
 
+    /// <summary>Position of a window's scroll bar (SB_HORZ = 0); for a report-view ListView, horizontal pixels.</summary>
+    [LibraryImport("user32.dll")]
+    public static partial int GetScrollPos(nint hWnd, int nBar);
+
     /// <summary>
     /// Makes a font in memory available to GDI in this process only. GDI+'s
     /// PrivateFontCollection does not: TextRenderer and every standard control draw with GDI,
