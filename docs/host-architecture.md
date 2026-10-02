@@ -690,7 +690,8 @@ Known gaps carried into the Windows phase:
 - No COM call timeout guards against a hostile `IShellItemArray` that blocks. (An oversized
   selection is now refused with a toast, section 5; unverified on Windows.)
 - The first-run install offer (`Installer.OfferInstall`) uses the native TaskDialog, before any
-  Gridline font is loaded.
+  Gridline font is loaded. Resolved: it is a Gridline `MessageDialog` (testlog 2026-10-02, user
+  experience entry).
 - Hand edits of `startWithWindows` reload the setting but do not rewrite the Run value; only a
   save from the app does.
 - `scripts/publish.sh` publishes without `-r win-x64` and with the single-file analyzer off,

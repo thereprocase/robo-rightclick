@@ -16,8 +16,13 @@ tokens win.
   qualification note. Red = failure or danger. Green = completed successfully. Never decorative.
 - **Typography:** IBM Plex Sans for UI text and IBM Plex Mono for every measured value, caption,
   status line and path. Fonts are embedded (`src/RoboRightClick/Fonts/`, SIL OFL, licence
-  file shipped alongside) and loaded with `PrivateFontCollection.AddMemoryFont`. Fallbacks are
-  Segoe UI and Consolas if loading fails. Numbers use tabular figures (Plex Mono already has them).
+  file shipped alongside) and loaded twice: `PrivateFontCollection.AddMemoryFont` for GDI+
+  `Font` objects and `AddFontMemResourceEx` for GDI, which draws all text (TextRenderer and the
+  standard controls) and never sees a private collection. Each cut is requested by its legacy
+  family name (`IBM Plex Sans Medm`, `IBM Plex Sans SmBld`, …; Core `GridlineFonts`, checked
+  against the TTF files by a test) in its Regular style. At start-up each cut is checked through
+  GDI; a cut GDI does not resolve falls back to Segoe UI or Consolas. Numbers use tabular figures
+  (Plex Mono already has them).
 - **Visible structure:** title strips, ruled rows, status bars. No hidden-until-hover controls.
 - **Text states facts.** No slogans, taglines or marketing copy in any window, tooltip or toast.
 
@@ -60,8 +65,9 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   minimum height 34, padding 6/12. The default button gets a 1 px `gl-blue` outer border.
   Disabled text is `#7A7A7A`. Focus is a 1 px dotted ink rectangle inset 3 px. Owner-draw these;
   don't use FlatStyle defaults that round corners or add system visual styles.
-- **Text fields / numeric inputs / combo boxes:** white field, inset bevel (top/left `#8A8A8A`,
-  bottom/right `#FFFFFF`), square.
+- **Text fields / numeric inputs / combo boxes:** white field, inset bevel (top/left `#8A8A8A`
+  with a `#4A4A4A` inner line), square. On a white pane the bevel's white bottom/right edge would
+  vanish, so fields use `#DFDFDF` there (`Gridline.DrawField`); check boxes use `#8A8A8A`.
 - **Lists (Jobs register):** owner-drawn rows of 26 px, white background, 1 px `gl-rule-light`
   separators. Header row in `gl-gray` with Plex Mono 12 UPPERCASE captions and a `gl-rule` bottom
   border. Selected row is `gl-blue` background with white text. Numbers, sizes, speeds, ETAs and
@@ -79,9 +85,18 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   UPPERCASE, value in Plex Mono 500 28 px tabular.
 - **Context menus (tray):** native menus are acceptable, but where the app owns the renderer
   (`ToolStripProfessionalRenderer` subclass), use square edges, a `gl-gray` background, `gl-blue`
-  selection with white text, and no image-margin gradient.
+  selection with white text, and no image-margin gradient. `Gridline.ContextMenu` also removes
+  the drop shadow Windows adds to every menu window (`CS_DROPSHADOW`).
 - **Dialogs** (conflict, error summary, settings, confirmations) follow the same pane, button and
-  field rules. The primary action is the default button.
+  field rules. The primary action is the default button. Messages and questions, including the
+  first-run install offer and the install and uninstall results, use `MessageDialog`: one pane,
+  an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports
+  use `MessageDialog.Notice`. A plain message box appears only as a fallback when a Gridline
+  window cannot be built, and for an unhandled exception (`CrashPolicy`), where building
+  windows is not safe.
+- **Window size:** sizes are logical pixels, so a window can outgrow a small screen at 150% or
+  more. Every Gridline window keeps itself inside the screen's working area on load and after a
+  DPI change.
 - **Tray icon:** 16/20/24/32 px square glyph drawn at runtime: a gray `#C6C6C6` tile with a 1 px
   ink frame and a two-arrow copy mark in ink. State is shown by the tile color or a corner block,
   using only Gridline colors: idle gray, running cyan, paused amber, attention red. Ephemeral mode
@@ -118,6 +133,11 @@ list.
 | `app` | The app as a Gridline window: framed System Gray tile, Active Blue title strip, two panes. |
 | `tray-{idle,running,paused,attention}` | The app tile with the title strip in the state color: blue, cyan, amber (plus a pause mark), red. |
 | `tray-*-ephemeral` | The same tile inverted to ink, so ephemeral mode is never mistaken for normal mode. |
+
+The running tray does not use the `tray-*` files yet: `App/TrayIcons.cs` draws its icon at
+runtime (state-coloured tile with a two-page mark plus a non-colour state mark: arrow, pause bars,
+`!`; ink tile in ephemeral mode). Both follow the tray rule above; switching to the generated files
+would lose the non-colour marks for running and attention.
 
 ICO files hold one hand-fitted frame per common display scale: 16, 20, 24, 28, 32, 36, 40 and
 48 px (100–300%), plus 64 and 256 px (tray icons 16–32). Sizes below
