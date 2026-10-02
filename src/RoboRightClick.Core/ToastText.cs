@@ -183,7 +183,7 @@ public static class ToastText
             ToastKind.Warning),
         VerbRefusal.DestinationNotFileSystem => new(
             "Can't Robo-Paste here",
-            "Robo-Paste works in folders on a drive or network share.",
+            "Robo-Paste works in folders on a drive or network share, not in libraries, zip files or other virtual folders.",
             ToastKind.Warning),
         VerbRefusal.NotOneDestination => new("Can't Robo-Paste here", "Select one destination folder.", ToastKind.Warning),
         VerbRefusal.SelectionNotFiles => new(
@@ -204,9 +204,12 @@ public static class ToastText
             "Can't tell which folder is open",
             "Nothing was pasted. Click in the folder's file list and try again, or right-click its background and use Robo-Paste.",
             ToastKind.Warning),
+        // The guard cannot tell a slow copy from a Ctrl+C that copied nothing (no selection),
+        // so the text blames neither; after RecentMs the guard no longer applies.
         VerbRefusal.ClipboardNotReady => new(
             "Clipboard not ready",
-            "The copy or cut you just made hadn't reached the clipboard yet, so nothing was pasted. Try again.",
+            "The clipboard hasn't changed since the Ctrl+C or Ctrl+X just before, so nothing was pasted. "
+                + $"Wait {ClipboardGuard.RecentMs / 1000} seconds and try again to paste what the clipboard holds then.",
             ToastKind.Warning),
         VerbRefusal.Failed => new("Something went wrong", "Robo-Copy, Robo-Cut or Robo-Paste could not finish. Try again.", ToastKind.Warning),
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),

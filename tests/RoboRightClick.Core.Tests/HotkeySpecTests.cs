@@ -373,6 +373,28 @@ public class HotkeySpecTests
         Assert.Contains(HotkeySpec.DefaultText, ToastText.ForTrayHint(upgraded).Body, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// A Ctrl+C with nothing selected changes nothing, and the guard refuses the hotkey after
+    /// it all the same; the text must not claim a copy was made, and must say how long to wait.
+    /// </summary>
+    [Fact]
+    public void Clipboard_not_ready_blames_no_copy_and_says_when_to_try_again()
+    {
+        var body = ToastText.ForRefusal(VerbRefusal.ClipboardNotReady).Body;
+        Assert.DoesNotContain("you just made", body, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hasn't changed", body, StringComparison.Ordinal);
+        Assert.Contains($"Wait {ClipboardGuard.RecentMs / 1000} seconds", body, StringComparison.Ordinal);
+        Assert.True(body.Length <= ToastText.MaxBalloonText, $"{body.Length} characters");
+    }
+
+    [Fact]
+    public void Not_a_file_system_folder_names_zip_files_and_libraries()
+    {
+        var body = ToastText.ForRefusal(VerbRefusal.DestinationNotFileSystem).Body;
+        Assert.Contains("zip files", body, StringComparison.Ordinal);
+        Assert.Contains("libraries", body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void The_hotkey_refusals_are_path_free_and_distinct()
     {

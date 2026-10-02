@@ -122,7 +122,7 @@ this section is verified on Windows yet; the checks that will verify it are list
 - Ctrl+Z does not undo a Robo-Paste.
 - Pressed right after a Ctrl+C or Ctrl+X, it waits up to a second for that copy or cut to
   reach the clipboard, and otherwise does nothing and says so, rather than paste what was on
-  the clipboard before.
+  the clipboard before. A Ctrl+C with nothing selected counts too: wait 2 seconds after it.
 - Libraries, This PC, the Recycle Bin, search results, Control Panel and zip folders are
   refused with a notification, as with the right-click.
 - In ephemeral mode, keep using Robo-Copy and Robo-Cut: a plain Ctrl+C or Ctrl+X puts the

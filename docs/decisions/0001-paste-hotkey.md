@@ -73,8 +73,9 @@ Explorer view the gate accepts: one tick and `GetClipboardSequenceNumber` at tha
 stores no key and never takes or alters those keys. When such a copy or cut came within 2 s
 before the hotkey, the locator waits, up to 1 s after the hotkey, for the sequence number to
 move past the noted one, and otherwise refuses with a path-free "Clipboard not ready" toast
-(Core `ClipboardGuard`). A Ctrl+C with nothing selected writes nothing, so a hotkey right
-after it is refused once; that is the price of never pasting a stale cut.
+(Core `ClipboardGuard`). A Ctrl+C with nothing selected writes nothing, so a hotkey within
+2 s of it is refused (each try in that time); that is the price of never pasting a stale cut.
+The toast therefore says the clipboard has not changed, not that a copy is late.
 
 Ctrl+Insert and a Copy or Cut chosen from a menu are not noted; the race needs a keyboard
 copy or cut within 2 s of the hotkey, and those paths are far less common. They remain a
