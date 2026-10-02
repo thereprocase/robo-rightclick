@@ -52,6 +52,15 @@ cp "$publish_dir/RoboRightClick.exe" "$staging/RoboRightClick.exe"
 cp "$publish_dir/$font_license" "$staging/$font_license"
 cp LICENSE README.md "$staging/"
 
+# The exe is deterministic (ContinuousIntegrationBuild), but a zip records each file's
+# modified time. Pinning those times to the commit makes the zip, and so the published
+# SHA256, reproducible: anyone can rebuild the same commit and compare hashes.
+# SOURCE_DATE_EPOCH (the reproducible-builds convention) overrides the commit time.
+stamp="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
+find "$staging" -exec touch -h -d "@${stamp}" {} +
+# Zip entries store local time; a fixed zone keeps the bytes the same on every builder.
+export TZ=UTC
+
 # Entry names are relative to the staging folder so the zip has no leading directories.
 entries=(RoboRightClick.exe LICENSE README.md "$font_license")
 if command -v zip >/dev/null 2>&1; then
