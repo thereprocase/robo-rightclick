@@ -97,3 +97,28 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   `LICENSE-IBM-Plex-OFL.txt` next to the exe (and mention it in the README).
 - Respect DPI: compute pixel sizes from logical units with `DeviceDpi / 96f`.
 - Contrast: white on `#0000A8` and ink on `#C6C6C6` both pass WCAG AA. Keep it that way.
+
+## Icons
+
+`tools/icons/render_icons.py` generates every icon deterministically. It uses stdlib Python
+only, with no external renderer, so the same input always gives byte-identical files:
+`python3 tools/icons/render_icons.py` writes `branding/icons/{svg,png,ico}/`.
+
+Each glyph is a list of axis-aligned rectangles on a 16-unit grid. For each size, the grid
+is mapped to pixels with integer rounding, and the line weight is `max(1, round(size/20))`.
+Edges therefore land on whole pixels at 16, 20, 24 and 32 px (100–200% DPI) rather than
+being scaled and blurred. The SVG, PNG and ICO for an icon all come from the same rectangle
+list.
+
+| Icon | Glyph |
+|---|---|
+| `robo-copy` | Two solid panes: the original stays and a copy appears. |
+| `robo-cut` | A dashed ghost pane (the source leaves) behind a solid pane. |
+| `robo-paste` | A pane set into an in-tray. The tray's front face overlaps the pane. |
+| `app` | The app as a Gridline window: framed System Gray tile, Active Blue title strip, two panes. |
+| `tray-{idle,running,paused,attention}` | The app tile with the title strip in the state color: blue, cyan, amber (plus a pause mark), red. |
+| `tray-*-ephemeral` | The same tile inverted to ink, so ephemeral mode is never mistaken for normal mode. |
+
+ICO files hold 16, 20, 24, 32, 48, 64 and 256 px images (tray icons up to 32). Sizes below
+256 are stored as classic 32-bit DIBs and 256 is stored as PNG. Every Windows icon consumer
+(shell, LoadImage, System.Drawing) accepts that layout.
