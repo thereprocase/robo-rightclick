@@ -245,3 +245,130 @@ cleanup through the app on an SMB share; a cancel where robocopy cannot be suspe
 **VM housekeeping:** app uninstalled (install and data folders, CLSID keys gone), the four
 virtual disks detached and deleted, the scratch folder, scheduled tasks and the listener
 removed. The pre-existing `RrcParityExplorer` task was left alone.
+
+## 2026-10-02 · build 26200 (robocopy 10.0.26100.1) · VM · user experience: every e2e script, every surface, 100% and 150%
+
+Same disposable Windows 11 Enterprise evaluation VM, no network egress, test account signed in
+to the desktop, screen 1280 x 800. Scripts and the app ran on the desktop through one-shot
+scheduled tasks; the UI was driven with injected mouse and keyboard input and read from
+screendumps. Display scale was switched live between 100% and 150% with
+`DisplayConfigSetDeviceInfo` (the Settings app's method; no sign-out), so open windows also
+received a DPI change. Test volumes: 300 MB and 40 MB NTFS virtual disks. Every package's zip
+SHA256 was checked on Windows and the installed exe's hash compared with the package. A
+debug-output listener recorded the app's path-free debug lines, including a new start-up line
+for fonts. Builds (exe SHA256):
+- **B1** `21572bb7…` = commits 534302e…6c38214; **B2** `08cff485…` = B1 + the low-integrity fix
+  (later 4b8b677); **B3** `795c280a…` = f1689ff; **B4** `87dc09f3…` = 2b037da; **B5**
+  `7d0e91b8…` = 09bbb16; **B6** `95ce781d…` = f647d68;
+  **final** `1021f67045e6c0879e0a1a2ff42d9bb57766a8dfad862142e16e165191497069` = 4cda9de
+  (zip `fbaa8e7e…`). The exe embeds the commit, so B4…final differ also where sources did not.
+- Five earlier builds of this session were used only to find defects (screenshots not kept).
+
+**`Run-All.ps1`** (`-SecondVolume` 300 MB disk, `-SmallVolume` 40 MB disk)
+- Before this session's changes (exe of commit 02e7432): Install, CutSafety, Cancel PASS; Verbs,
+  Ephemeral, Security, Uninstall FAIL, each traced below.
+- B1: Install, Verbs, CutSafety, Cancel, Uninstall PASS. Ephemeral FAIL (Windows noise, below).
+  Security FAIL: the low-integrity copy exited `-532462766` (0xE0434352). Repeated by hand with
+  stderr captured: `UnauthorizedAccessException: Access to the path
+  'C:\Users\<user>\AppData\Local\Temp\<random>' is denied` in
+  `ThemingScope.CreateActivationContext` ← `Application.EnableVisualStyles` ←
+  `ApplicationConfiguration.Initialize`. Fixed in 4b8b677.
+- B2: Security PASS: control exit 0, low-integrity copy exit 1 (refused).
+- B3: **all seven PASS** (145 checks), with `-AllowPath` for the noise judged below.
+- B6: six PASS; Ephemeral FAIL: "could not search for the marker" for an ActionCenterCache PNG
+  Explorer had already deleted. Script fixed in 4cda9de.
+- **final**: Install 6, Verbs 18, CutSafety 75, Cancel 26, Security 2, Uninstall 7 checks, PASS.
+  Ephemeral listed only `Packages\Microsoft.MicrosoftOfficeHub_8wekyb3d8bbwe\Settings\settings.dat*`
+  (another app's settings; no marker in them). Install, Ephemeral (with that path judged) and
+  Uninstall then ran again on the final exe: **PASS**, 10 Ephemeral checks.
+- Noise judged unrelated in Ephemeral runs, each searched for the marker and none containing
+  it: `Microsoft\Windows\WebCache\*`, `Microsoft\Windows\UsrClass.dat.LOG2`,
+  `…\EBWebView\…` (Windows client web view cache), PowerShell's own
+  `StartupProfileData-NonInteractive`, the Office Hub settings above, and
+  `%TEMP%\{GUID}.png`: caught with a file watcher, it is Windows' stock blue "i" balloon icon
+  (306 x 306), written while an Info toast shows. Explorer's ActionCenterCache images are
+  searched like the notification database.
+
+**Script defects fixed** (bc07ff5, 4cda9de): hidden files need `Get-Item -Force` to list
+streams (Verbs); `.Count` on an empty pipeline under strict mode (Uninstall); icacls needs
+WRITE_OWNER to lower a label, which a `-Root` under an admin-created `C:\` folder does not give
+(Security; the script now grants the user full control of its own work folder); the toast
+images above (Ephemeral); `-AllowPath` through `-File` arrives as one string.
+
+**Fonts.** Before 534302e every window drew Arial: the Plex faces were only in a GDI+
+PrivateFontCollection, which GDI (TextRenderer, standard controls) never sees, and the Medium and
+SemiBold cuts were requested by names Windows does not use. After it the debug line read
+"6 of 6 Plex cuts resolved by GDI" in 39 of 55 starts and "5 of 6", always without
+`IBM Plex Sans SmBld`, in 16; headings then fell back to Segoe UI Semibold, which is what shots
+15 and 18 show for their headings (that tray started with 5 of 6). With c3c8a05 (fonts
+added per cut, GDI first, a missing family added again): 10 of 10 starts "6 of 6", no retry
+needed, so the retry path itself is **unverified**. Plex Sans, Sans SemiBold and Mono rendering
+were checked by eye on zoomed screendumps (shapes of `a`, `g`, `0`, Mono advance).
+
+**Surfaces** (`docs/evidence/2026-10-02/`, build in brackets)
+- First-run offer, now a Gridline dialog: version, install folder, settings file, how to remove,
+  "Start with Windows" box; Install default. `12-install-offer-gridline.png` (B3). Install
+  result `13-installed-notice.png` (B3); uninstall result `30-uninstalled-notice.png` (B6),
+  then install, data and config folders gone.
+- Progress window running, sized to its lines: `14-progress-window-running.png` (B3). Queued
+  ("Waiting for another paste into this folder"), latched pause, paused (amber bar) and the
+  ephemeral caution strip seen on earlier builds of this session.
+- Conflict dialog: three equal choices, Skip focused, worded for 1 or N files
+  `15-conflict-choices.png` (B4); per-file list with SOURCE/DESTINATION readable, mixed
+  Replace / keep both / skip, summary "1 file replaced, 1 file pasted under a new name, 3 files
+  skipped", full note in a tooltip `16-conflict-decide-replace-keepboth-skip.png` (B4). On disk
+  part-1.bin was being rewritten and part-2 to part-4 were unchanged; the keep-both copy was not
+  checked by hand (CutSafety checks keep-both). A tray left-click with a
+  question waiting brought the dialog to the front.
+- Jobs window with five jobs (awaiting decision, queued, paused, two running), Gridline header,
+  every column visible at the default size, focus kept on the list after Pause:
+  `17-jobs-window-several-jobs.png` (B5).
+- Error summary from a locked source (error 32), full message on its own line, coalesced toast
+  "2 pastes finished, 1 with errors" seen on an earlier build; `18-error-summary-try-again-and-toast.png` (B4).
+  Try again after the lock was released: a 1-file job, Done, toast "Copy finished, 1 item
+  (48.0 MB) to Backup E" `21-try-again-done-and-toast.png` (B4).
+- Settings with an invalid value: red line under the field, Save disabled, "Fix Retries per failed
+  file (marked in red) to save." beside it `20-settings-validation.png` (B4).
+- Tray menu: no shadow, Resume all disabled when nothing is paused (B4, B6), Pause all
+  checked `19-tray-menu-pause-all-on-old-check-glyph.png` (B4, the system check glyph fixed in
+  c0d9514); Gridline check box and "Open logs" hidden in ephemeral mode
+  `28-150pct-tray-menu-ephemeral-checked.png` (B6).
+- Ephemeral on from the tray: Gridline question (Keep default), full-width notice, EPHEMERAL
+  status cell, toast "applies to new jobs" `22-ephemeral-on-confirm-notice-toast.png` (B4);
+  ephemeral job toast "Job finished / Open Jobs from the tray icon for details."
+  `23-toast-ephemeral.png` (B4).
+- Tray icons idle, running, paused (all jobs paused), attention, ephemeral idle, ephemeral
+  running `24-tray-icons-idle-running-paused-attention-ephemeral.png` (B4).
+- 150%: open windows rescaled live; Jobs window kept on screen; conflict dialog
+  `25-150pct-jobs-and-conflict.png` (B5); "Let me decide" opened after the switch
+  `26-150pct-decide-after-dpi-change.png` (B6; on B5 its summary line was twice the size,
+  fixed in f647d68); question dialog `27-150pct-confirm-dialog.png` (B6); Settings with Save
+  on screen `29-150pct-settings-save-on-screen.png` (B6; on an earlier build of this session its Save
+  button was below the taskbar).
+- Gridline rules, checked on these shots: square corners on every app-drawn control; System Gray
+  window surfaces; white panes and fields with closed frames; blue title strips (cyan on a running
+  progress pane); cyan running, amber paused or deciding, red errors, green done; no gradients,
+  no emoji; no app-drawn shadows (the native window frame's shadow is Windows').
+
+**Product defects found and fixed this session:** Arial instead of Plex and wrong weights
+(534302e); pane padding ignored, white behind check boxes, open field frames, menu shadow,
+windows taller than the screen at 150% (ee49b89); TaskDialog and message boxes (cf03d93,
+f1689ff); conflict wording for one file, file name upper-cased in a title, "kept both", latched
+pause text, Resume all always enabled (288414c, 2b037da); native Jobs header, hidden Status
+column, stale ephemeral notice, uneven conflict choices, cut-off check-column captions, dates,
+sizes and error messages, fixed-height progress window, unexplained disabled Save (6c38214);
+low-integrity crash (4b8b677); focus jumping to Cancel after Pause (1d3a674); system check
+glyph (c0d9514); truncated Speed and Errors (09bbb16); doubled font after a DPI change
+(f647d68); intermittent missing SemiBold (c3c8a05).
+
+**Not run or still open:** 125%, 175% and higher scales and a second monitor; Explorer's own
+right-click path for these surfaces (verbs came from the CLI, which uses the same COM call);
+whether a conflict dialog takes the foreground when Explorer starts the paste; the four tray
+error notices of f1689ff (their error paths were not provoked); keyboard-only use of the
+conflict list; screen readers. The running tray draws its icon at runtime; the generated
+`tray-*.ico` files are not used (docs/gridline.md).
+
+**VM housekeeping:** app uninstalled (folders and keys gone, checked by Uninstall.Tests), both
+virtual disks detached, the scratch folder, this session's scheduled tasks, the debug listener
+and the tray icon's "show on taskbar" setting removed, scale back at 100%. The pre-existing
+`RrcParityExplorer` task was left alone.
