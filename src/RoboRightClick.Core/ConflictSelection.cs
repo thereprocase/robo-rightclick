@@ -104,7 +104,8 @@ public static class ConflictSelection
             // -1: the existing file is newer (larger), 0: the same, 1: the pasted file is.
             var newer = conflict.Source.LastWriteUtc.CompareTo(conflict.Existing.LastWriteUtc);
             var larger = conflict.Source.Size.CompareTo(conflict.Existing.Size);
-            static string Side(int sign) => sign > 0 ? "The pasted file" : "The existing file";
+            // Short: the note column shares the row with eight others.
+            static string Side(int sign) => sign > 0 ? "Pasted file" : "Existing file";
             parts.Add((Math.Sign(newer), Math.Sign(larger)) switch
             {
                 (0, _) => $"{Side(larger)} is larger; same date",

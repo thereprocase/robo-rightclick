@@ -281,13 +281,13 @@ public class ConflictSelectionTests
     public void The_note_says_which_file_is_newer_and_larger()
     {
         Assert.Equal("Same size and date", ConflictSelection.Note(Compare(10, 2, 10, 2)));
-        Assert.Equal("The pasted file is newer and larger", ConflictSelection.Note(Compare(20, 3, 10, 2)));
-        Assert.Equal("The existing file is newer and larger", ConflictSelection.Note(Compare(10, 2, 20, 3)));
-        Assert.Equal("The pasted file is newer; the existing file is larger", ConflictSelection.Note(Compare(10, 3, 20, 2)));
-        Assert.Equal("The existing file is newer; same size", ConflictSelection.Note(Compare(10, 2, 10, 3)));
-        Assert.Equal("The pasted file is larger; same date", ConflictSelection.Note(Compare(20, 2, 10, 2)));
+        Assert.Equal("Pasted file is newer and larger", ConflictSelection.Note(Compare(20, 3, 10, 2)));
+        Assert.Equal("Existing file is newer and larger", ConflictSelection.Note(Compare(10, 2, 20, 3)));
+        Assert.Equal("Pasted file is newer; existing file is larger", ConflictSelection.Note(Compare(10, 3, 20, 2)));
+        Assert.Equal("Existing file is newer; same size", ConflictSelection.Note(Compare(10, 2, 10, 3)));
+        Assert.Equal("Pasted file is larger; same date", ConflictSelection.Note(Compare(20, 2, 10, 2)));
         Assert.Equal(
-            "The pasted file is newer; same size. " + ConflictSelection.KeepBothUnavailableReason,
+            "Pasted file is newer; same size. " + ConflictSelection.KeepBothUnavailableReason,
             ConflictSelection.Note(Compare(10, 3, 10, 2, keepBoth: false)));
     }
 
