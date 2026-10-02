@@ -72,11 +72,14 @@ Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /N
   "startWithWindows": true,
   "notifyOnComplete": true,
   "showProgressWindow": true,        // per-job progress window, like Explorer's copy dialog
-  "extraArgs": { "copy": "", "move": "" }
+  "extraArgs": { "copy": "", "move": "" },
+  "pasteHotkey": "Ctrl+Shift+V"      // Robo-Paste in a folder's file list or on the desktop; "" = off
 }
 ```
 
 `extraArgs` accepts only an allow-list of switches that change how each selected file is copied, not which files are selected or where output goes: `/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n` (n with an optional K/M/G), at most 1,024 characters. Anything else is refused: a deny-list could be bypassed by quoting, and selection switches would break the app's accounting of which files a run touches. An invalid field falls back to its default and shows a one-line tray warning naming the setting.
+
+`pasteHotkey` is the one exception: an invalid value (not a string, over 32 characters, a reserved or malformed combination) means **off**, with the same warning, because its default is a keyboard hook the user may have been trying to switch off (docs/decisions/0001-paste-hotkey.md). A missing field means the default, so an upgrade turns the hotkey on; the format version stays 1, and an older build reports the field as unknown and drops it when it saves. The grammar: `Ctrl` (or `Control`), an optional `Shift`, and one key last, `A`-`Z`, `0`-`9` or `F1`-`F12` except `F10`, joined by `+`, case and spaces ignored; Alt, AltGr and the Windows key are refused, and so are combinations Explorer or its text fields already use (Core `HotkeySpec.Reserved`, each with its reason). The saved form is canonical, `Ctrl+Shift+V`.
 
 ## Queue states and tracking
 
@@ -97,7 +100,9 @@ Queued → Scanning → [AwaitingDecision] → Running ⇄ Paused → Finalizing
 
 **Tray icon** has four states (idle, running, paused, needs attention) plus a distinct tint in ephemeral mode. The tooltip shows a summary such as "3 jobs · 1.2 GB/s · 4 min".
 
-**Tray menu:** Jobs…, Pause all, Resume all, ✓ Ephemeral mode, Settings…, Open logs (hidden in ephemeral), Exit. Exit asks for confirmation if jobs are still running.
+**Tray menu:** Jobs…, Pause all, Resume all, ✓ Ephemeral mode, Robo-Paste hotkey: Ctrl+Shift+V… (or "off…", "off (setting invalid)…", "not active…"; opens Settings), Settings…, Open logs (hidden in ephemeral), Exit. Exit asks for confirmation if jobs are still running.
+
+**Robo-Paste hotkey.** In a File Explorer folder's file list or on the desktop, `pasteHotkey` (default Ctrl+Shift+V) runs Robo-Paste into the open folder, through the same path as a right-click on its background. It is a low-level keyboard hook that exists only while File Explorer or the desktop is in front and takes the key only in the file list; everywhere else the key passes untouched. The decision, its limits and its release gate are in docs/decisions/0001-paste-hotkey.md.
 
 ## Logging and ephemeral mode
 
@@ -162,6 +167,11 @@ All job output goes through one `IJobSink` interface:
 - **Physical machine:** a final smoke test of install, three verbs, uninstall, and checking that the HKCU keys are gone. It's recorded as a separate testlog entry, not assumed from the VM run.
 
 ## Decided for after the beta
+
+- **Optional copy and cut hotkeys.** Not in v1: Explorer's own Ctrl+C and Ctrl+X write the
+  formats Robo-Paste reads, and Ctrl+X even dims the icons. One difference is listed in the
+  README: in ephemeral mode a Ctrl+C reaches clipboard history, a Robo-Copy does not. Copy and
+  cut hotkeys would follow docs/decisions/0001-paste-hotkey.md (same hook, same gate).
 
 - **Opt-in verified cut (`cutVerify: "hash"`).** The default cut stays robocopy `/MOV`/`/MOVE`.
   Robocopy deletes each source only after that file's copy succeeded, which matches Explorer
