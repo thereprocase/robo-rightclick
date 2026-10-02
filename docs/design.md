@@ -107,6 +107,10 @@ All job output goes through one `IJobSink` interface:
   - `robocopy.log`: a copy of the pipe output, written by us, not by robocopy.
 
   It also appends to `history.jsonl`. Retention prunes to the last `logRetentionJobs` jobs.
+  An unhandled exception in the tray appends to `%LOCALAPPDATA%\RoboRightClick\crash.log`
+  (exception types, path-scrubbed messages, stack traces; rotated at 256 KB), in normal mode
+  only and never once an ephemeral job has existed in the session (host-architecture.md
+  section 11).
 - **Ephemeral mode** composes a `NullJobSink` and keeps history in memory only, cleared on exit. Guarantees:
   - Nothing about a job is written to disk: no job files, no history, and no temp files (none are needed at all). Robocopy's own log goes only into the in-memory pipe.
   - Completion toasts are generic ("Job finished") and contain **no paths**, because Windows keeps toast text in the notification center.

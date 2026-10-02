@@ -38,7 +38,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 |---|---|
 | `Program.cs` | `[STAThread]` entry; DLL search hardening; `CommandLine.Parse` and dispatch. |
 | `App/TrayApplication.cs` | Composition root, tray icon and menu, start/exit/session-end order (doc comment is the spec). |
-| `App/CrashPolicy.cs` | Unhandled-exception handling; no WER report while ephemeral jobs run. |
+| `App/CrashPolicy.cs` | Unhandled-exception handling; crash.log in normal mode; no WER report while ephemeral jobs run. |
 | `App/SingleInstance.cs` | Session mutex, exit-request and ready events, all with a current-user DACL. |
 | `App/SettingsStore.cs` | config.json load (per-field fallback), watch, atomic save, `.bad` copy, change event. |
 | `App/TrayIcons.cs` | GDI+-drawn icons per `TrayIconState` × ephemeral tint. |
@@ -104,7 +104,8 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `ConflictDecisions.cs` | `ExecutionPlan`; `ExecutionPlanner.Apply` (exclusion by construction); the one command-line chunking rule. | implemented, tested, sabotage-checked |
 | `StepLedger.cs` | Planned vs reported reconciliation for progress, cancel, retry, summary; in-process completed / re-planned / refused. | implemented, tested, sabotage-checked |
 | `JobOutcome.cs` | `StepOutcome`, `FinalState`, `FailureText`, `RetryPlanner`. | implemented, tested, sabotage-checked |
-| `JobRecords.cs` | job.json and history.jsonl formats; `LastState`. | implemented, tested |
+| `JobRecords.cs` | job.json and history.jsonl formats (with a format version); `LastState`; the interrupted-job check and marker. | implemented, tested, sabotage-checked |
+| `CrashLog.cs`, `PathHeuristic.cs` | crash.log entries, when they may be written, rotation; the path heuristic shared with `FailureText`. | implemented, tested, sabotage-checked |
 | `Utf16Lines.cs` | Incremental UTF-16LE line splitter for the pipe (`MaxLineChars`, shared with `RobocopyPipe`). | implemented, tested |
 | `JobScheduler.cs` | Which queued jobs start, in click order (`JobQueuePolicy` over the manager's states). | implemented, tested |
 | `VerbRules.cs` | Selection, paste-destination and clipboard refusals; bounded ANSI `DROPFILES` splitter. | implemented, tested |
@@ -445,7 +446,8 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
   → start the installed tray → message.
 - `--uninstall`: stop the tray → remove `Registration.UninstallRemovals()` → delete exactly the
   known files (`UninstallPlan`: config.json and its `.bad` and `.tmp`, history and its rotated
-  file, each job folder's job.json, robocopy.log and a leftover job.json.tmp), then
+  file, crash.log and crash.1.log, each job folder's job.json, robocopy.log and a leftover
+  job.json.tmp), then
   `RemoveDirectory` on each folder after checking its leaf name and that it is not a reparse
   point → the install folder via `%SystemRoot%\System32\cmd.exe` (absolute path, validated
   arguments, its one-second sleep `PING.EXE` also by absolute path) when running from it.
@@ -467,8 +469,20 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
    sizes (Core decoders), pipe client PID, COM caller integrity, config fields (per-field
    fallback), extraArgs (allow-list), CLI arguments.
 5. Logging and toasts are best-effort and never change a job's outcome.
-6. No crash log in the beta. While ephemeral jobs run, a crash ends the process without a WER
-   report (`CrashPolicy`).
+6. Crash log in normal mode only. An unhandled exception, on the UI thread
+   (`Application.ThreadException`) or any other (`AppDomain.UnhandledException`), appends one
+   entry to `%LOCALAPPDATA%\RoboRightClick\crash.log` (`AppPaths.CrashLogFile`): exception
+   types outermost first, messages with path-looking parts replaced by `[path]` (Core
+   `PathHeuristic.Scrub`, the heuristic `FailureText` uses), stack traces, app version, UTC
+   time, Windows build. No job data is added; a stack trace is written as the runtime reports
+   it. The file is rotated to `crash.1.log` (one kept) before it would pass 256 KB, an entry
+   is at most 32K characters, and one run writes at most 20 entries. Nothing is written in
+   ephemeral mode, once any ephemeral job has existed in this session, or outside a running
+   tray (install, uninstall, CLI) (`CrashLog.MayWrite`). While ephemeral jobs run, a crash
+   ends the process without a WER report, as before (`CrashPolicy`). Uninstall deletes both
+   files. This reverses the beta's original "no crash log" rule, with the owner's approval:
+   without one, a beta bug report depends on the tester remembering a message box, which is
+   not enough to find a fault. Cross-compiles; unverified on Windows.
 7. Sign-out with active jobs: shutdown is vetoed with a reason; if Windows ends the session
    anyway, jobs are canceled with cleanup within 5 s. A job.json left non-terminal is reported
    once at the next start (normal mode).

@@ -35,6 +35,7 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
 
     private int _activeCount;
     private int _ephemeralActiveCount;
+    private volatile bool _ephemeralJobsThisSession;
     private volatile bool _pauseAll;
     private volatile bool _shuttingDown;
 
@@ -75,6 +76,13 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     /// thread that may hold any lock.
     /// </summary>
     public bool EphemeralJobsActive => Volatile.Read(ref _ephemeralActiveCount) > 0;
+
+    /// <summary>
+    /// For <see cref="App.CrashPolicy"/>'s crash log: whether any ephemeral job has been
+    /// created in this session, finished or not, including ones since dropped from history.
+    /// Set before such a job exists and never cleared, so it errs towards "yes". Lock-free.
+    /// </summary>
+    public bool EphemeralJobsThisSession => _ephemeralJobsThisSession;
 
     /// <summary>
     /// For <see cref="App.CrashPolicy"/>: best-effort, lock-free kill of every robocopy process
@@ -351,6 +359,12 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         if (_shuttingDown)
         {
             return null;
+        }
+
+        if (mode == LoggingMode.Ephemeral)
+        {
+            // Before the job holds any path in memory: a crash from here on writes no crash log.
+            _ephemeralJobsThisSession = true;
         }
 
         var id = Guid.NewGuid();

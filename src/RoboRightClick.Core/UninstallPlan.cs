@@ -73,6 +73,8 @@ public sealed record UninstallPlan(
 
         files.Add(paths.HistoryFile);
         files.Add(WinPath.Combine(paths.DataDirectory, RotatedHistoryFileName));
+        files.Add(paths.CrashLogFile);
+        files.Add(paths.RotatedCrashLogFile);
         AddDirectory(paths.DataDirectory, AppInfo.Name);
 
         files.Add(paths.ConfigFile);

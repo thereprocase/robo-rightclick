@@ -33,7 +33,10 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         CrashPolicy.Install(
             ephemeralJobsActive: () => Volatile.Read(ref s_jobs)?.EphemeralJobsActive ?? false,
-            killChildren: () => Volatile.Read(ref s_jobs)?.KillRunningProcesses());
+            killChildren: () => Volatile.Read(ref s_jobs)?.KillRunningProcesses(),
+            // Only a running tray knows the logging mode; install, uninstall and the CLI write no crash log.
+            crashLogAllowed: () => Volatile.Read(ref s_jobs) is { } jobs
+                && CrashLog.MayWrite(jobs.CurrentSettings().Logging, jobs.EphemeralJobsThisSession));
 
         return CommandLine.Parse(args) switch
         {

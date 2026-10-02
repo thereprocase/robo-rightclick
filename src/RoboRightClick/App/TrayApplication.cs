@@ -26,7 +26,9 @@ namespace RoboRightClick.App;
 /// <para>Unhandled exceptions (<see cref="CrashPolicy"/>): Application.ThreadException and
 /// AppDomain.UnhandledException are handled. While any ephemeral job is active the process
 /// kills its robocopy children and ends with TerminateProcess, so Windows Error Reporting
-/// never snapshots memory holding job paths (Environment.FailFast would report to WER).</para>
+/// never snapshots memory holding job paths (Environment.FailFast would report to WER).
+/// Otherwise, in normal mode with no ephemeral job this session, the exception is appended
+/// to crash.log first.</para>
 /// <para>Session end: on WM_QUERYENDSESSION with active jobs, ShutdownBlockReasonCreate
 /// ("Copying files…") and veto, so Windows shows its standard "an app is preventing
 /// shutdown" screen. On WM_ENDSESSION(true), JobManager.CancelAllAndWaitAsync with a 5 s

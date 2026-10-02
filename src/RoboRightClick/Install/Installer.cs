@@ -132,7 +132,7 @@ internal static class Installer
     /// <summary>
     /// 1. Stop the running tray as in install (refuse while jobs run). 2.
     /// RegistryWriter.Remove(Registration.UninstallRemovals()). 3. Delete exactly the files
-    /// <see cref="UninstallPlan"/> lists (config.json, config.json.bad, history.jsonl, each
+    /// <see cref="UninstallPlan"/> lists (config.json, config.json.bad, history.jsonl, crash.log, each
     /// job folder's job.json and robocopy.log) and then remove those folders with
     /// RemoveDirectory, which fails on anything unexpected left inside: never a blind
     /// recursive delete. Every folder is checked first: its leaf name is the expected one
