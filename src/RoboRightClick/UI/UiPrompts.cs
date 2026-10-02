@@ -13,12 +13,16 @@ namespace RoboRightClick.UI;
 /// </summary>
 internal sealed class UiPrompts : IJobPrompts
 {
-    public UiPrompts(SynchronizationContext ui)
+    public UiPrompts(SynchronizationContext ui, Func<ProgressWindowHost?> progressWindows)
     {
         Ui = ui;
+        ProgressWindows = progressWindows;
     }
 
     public SynchronizationContext Ui { get; }
+
+    /// <summary>Late-bound: the host is created after the job manager, which needs these prompts.</summary>
+    public Func<ProgressWindowHost?> ProgressWindows { get; }
 
     public Task<ConflictChoice?> ResolveConflictsAsync(
         JobSnapshot job,

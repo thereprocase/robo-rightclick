@@ -160,6 +160,30 @@ public static class ToastText
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };
 
+    /// <summary>At startup (normal mode): job logs show pastes that never finished because the app ended.</summary>
+    public static Toast ForInterrupted(int count) => new(
+        count == 1 ? "A paste was interrupted" : $"{count} pastes were interrupted",
+        "RoboRightClick ended while copying. Some files at the destination may be incomplete. Open Jobs for details.",
+        ToastKind.Warning);
+
+    /// <summary>Ephemeral mode was switched while normal-mode jobs run.</summary>
+    public static Toast ForModeAppliesToNewJobs(LoggingMode newMode) => new(
+        newMode == LoggingMode.Ephemeral ? "Ephemeral mode on" : "Ephemeral mode off",
+        "The change applies to new jobs. Jobs already running keep their mode.",
+        ToastKind.Info);
+
+    /// <summary>Another process (install, uninstall) asked the tray to exit while jobs run.</summary>
+    public static Toast ForExitRefused() => new(
+        "RoboRightClick is busy",
+        "It was asked to close, but jobs are still running. Try again when they finish.",
+        ToastKind.Warning);
+
+    /// <summary>First tray start: Windows 11 puts new tray icons in the hidden overflow.</summary>
+    public static Toast ForTrayHint() => new(
+        "RoboRightClick is running",
+        "Right-click files, then Show more options, for Robo-Copy, Robo-Cut and Robo-Paste. Drag this icon out of the overflow to keep it visible.",
+        ToastKind.Info);
+
     /// <summary>
     /// Path-free in every mode: setting names only. Shows the first problem so the user
     /// knows what to fix; Settings lists the rest.

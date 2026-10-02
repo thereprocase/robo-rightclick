@@ -67,6 +67,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `Logging/JobLogStore.cs` | Log folder layout, history, pruning, delete-all, interrupted-job check. |
 | `Logging/FileJobSink.cs` | Normal-mode `IJobSink`: job.json, robocopy.log, history line. |
 | `UI/ProgressWindow.cs` | Per-job progress (Explorer's copy dialog counterpart). |
+| `UI/ProgressWindowHost.cs` | Opens and tracks progress windows; owner for conflict dialogs. |
 | `UI/JobsWindow.cs` | Jobs list with progress and row actions. |
 | `UI/SettingsWindow.cs` | Single-page settings editor. |
 | `UI/ConflictDialog.cs` | Replace / Skip / Let me decide (per-file list). |

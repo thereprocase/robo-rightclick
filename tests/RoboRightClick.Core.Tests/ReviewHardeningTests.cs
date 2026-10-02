@@ -418,6 +418,21 @@ public class SnapshotAndToastTests
     }
 
     [Fact]
+    public void Tray_notices_name_no_path()
+    {
+        foreach (var toast in new[]
+        {
+            ToastText.ForInterrupted(1), ToastText.ForInterrupted(3), ToastText.ForExitRefused(), ToastText.ForTrayHint(),
+            ToastText.ForModeAppliesToNewJobs(LoggingMode.Ephemeral), ToastText.ForModeAppliesToNewJobs(LoggingMode.Normal),
+        })
+        {
+            Assert.DoesNotContain(@":\", toast.Title + toast.Body, StringComparison.Ordinal);
+            Assert.False(string.IsNullOrWhiteSpace(toast.Body));
+        }
+        Assert.StartsWith("3 pastes", ToastText.ForInterrupted(3).Title);
+    }
+
+    [Fact]
     public void Settings_toast_names_the_first_problem()
     {
         var toast = ToastText.ForSettingsProblems(["'threads' must be an integer from 1 to 128; using 32", "x", "y"]);

@@ -38,6 +38,16 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
 
     public bool HasActiveJobs => throw new NotImplementedException();
 
+    /// <summary>
+    /// For <see cref="App.CrashPolicy"/>: whether any non-terminal job is ephemeral. Lock-free
+    /// (a volatile counter maintained on state changes), because it is read from a crashing
+    /// thread that may hold any lock.
+    /// </summary>
+    public bool EphemeralJobsActive => throw new NotImplementedException();
+
+    /// <summary>For <see cref="App.CrashPolicy"/>: best-effort, lock-free kill of every robocopy process the app started.</summary>
+    public void KillRunningProcesses() => throw new NotImplementedException();
+
     /// <summary>"Pause all" is on: running jobs are paused and new or queued jobs start paused.</summary>
     public bool PauseAllActive => throw new NotImplementedException();
 

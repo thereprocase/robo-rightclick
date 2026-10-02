@@ -15,6 +15,19 @@ namespace RoboRightClick.UI;
 /// rather than one remembered job, because clicks from the notification center may arrive
 /// for older toasts.
 /// </remarks>
+/// <summary>What a click on a toast opens.</summary>
+internal enum ToastTarget
+{
+    /// <summary>The Jobs window, filtered to jobs needing attention.</summary>
+    Jobs,
+
+    /// <summary>The Settings window (settings-problem toast).</summary>
+    Settings,
+
+    /// <summary>Nothing (informational toasts such as the tray hint).</summary>
+    None,
+}
+
 internal sealed class Notifier
 {
     public Notifier(NotifyIcon icon)
@@ -24,14 +37,14 @@ internal sealed class Notifier
 
     public NotifyIcon Icon { get; }
 
-    /// <summary>Raised when the user clicks a balloon.</summary>
-    public event EventHandler? Clicked;
+    /// <summary>Raised when the user clicks a balloon; carries what the clicked toast was about.</summary>
+    public event EventHandler<ToastTarget>? Clicked;
 
-    /// <summary>Immediate toast (refusals, settings, interrupted jobs).</summary>
-    public void Show(Toast toast) => throw new NotImplementedException();
+    /// <summary>Immediate toast (refusals, settings, interrupted jobs, tray notices).</summary>
+    public void Show(Toast toast, ToastTarget target = ToastTarget.None) => throw new NotImplementedException();
 
     /// <summary>A job finished: queued for the ~2 s coalescing window described above.</summary>
     public void JobFinished(JobSnapshot job, bool notifyOnComplete) => throw new NotImplementedException();
 
-    private void OnClicked() => Clicked?.Invoke(this, EventArgs.Empty);
+    private void OnClicked(ToastTarget target) => Clicked?.Invoke(this, target);
 }
