@@ -405,6 +405,12 @@ Step execution:
   truncation line), `history.jsonl` (rotated past 10,000 lines). After a normal-mode job
   finishes, the manager prunes off the UI thread to `logRetentionJobs`, never touching folders
   of running jobs. Log write failures never fail a job.
+- Interrupted jobs (normal mode): at start, `JobLogStore.MarkInterrupted` reads each job.json;
+  one whose last state is not terminal (`JobRecords.CheckInterrupted`) was left by a run that
+  ended mid-paste. It is counted for the one startup toast and rewritten, through the same
+  temp-file-then-replace writer, with a final `"interrupted"` state, so the next start does
+  not report it again. Jobs created at or after this process started, and folders of active
+  jobs, are skipped; a record of a newer format version is reported but never rewritten.
 - Ephemeral: `NullJobSink`, in-memory history only (`JobManager.InMemoryHistoryLimit`),
   path-free toasts, clipboard exclusion formats, no temp files. The one write is config.json.
 - Turning ephemeral on while job logs exist asks whether to delete them; Settings also has

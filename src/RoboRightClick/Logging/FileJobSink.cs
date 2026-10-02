@@ -205,9 +205,18 @@ internal sealed class FileJobSink : IJobSink, IDisposable
         }
         EnsureFolder();
         var json = JobRecords.ToJson(new JobRecord(_job, _states.ToArray(), _commands.ToArray(), _summary));
-        var target = WinPath.Combine(JobFolder, AppPaths.JobRecordFileName);
+        WriteJobRecord(JobFolder, json);
+    }
+
+    /// <summary>
+    /// Writes a job folder's job.json beside the target, then swaps it in: a crash leaves the
+    /// previous complete file, or at most a job.json.tmp that uninstall and pruning delete.
+    /// Also used by <see cref="JobLogStore.MarkInterrupted"/>.
+    /// </summary>
+    internal static void WriteJobRecord(string jobFolder, string json)
+    {
+        var target = WinPath.Combine(jobFolder, AppPaths.JobRecordFileName);
         var temp = target + TempSuffix;
-        // Write beside the target, then swap: a crash leaves the previous complete file.
         File.WriteAllText(temp, json, Utf8NoBom);
         if (File.Exists(target))
         {

@@ -143,28 +143,32 @@ internal sealed class JobLogStore
     }
 
     /// <summary>
-    /// Job folders whose job.json ends in a non-terminal state (<see cref="JobRecords.LastState"/>):
-    /// the app ended mid-paste. Checked once at startup in normal mode.
+    /// Finds the jobs a previous run left mid-paste (crash, power loss, a session end that
+    /// outran cleanup) and returns how many, for the one startup toast. Each such job.json is
+    /// rewritten through <see cref="FileJobSink.WriteJobRecord"/> with a terminal
+    /// "interrupted" state (<see cref="JobRecords.MarkInterrupted"/>), so the next start does
+    /// not report it again. Normal mode only: the tray never calls this in ephemeral mode.
     /// </summary>
-    public int CountInterrupted()
+    /// <param name="processStartedAt">
+    /// Taken before the COM class objects were registered: a job created at or after it
+    /// belongs to this run (<see cref="InterruptedCheck.CurrentRun"/>) and is not touched.
+    /// </param>
+    /// <param name="activeFolders">
+    /// Asked once the folder names are listed; a second guard for live jobs, in case the clock
+    /// moved backwards since <paramref name="processStartedAt"/>.
+    /// </param>
+    public int MarkInterrupted(DateTimeOffset processStartedAt, Func<IReadOnlySet<string>> activeFolders, TimeProvider time)
     {
         var count = 0;
         try
         {
-            foreach (var name in JobFolderNames().Where(JobLogNames.IsJobFolderName))
+            var names = JobFolderNames().Where(JobLogNames.IsJobFolderName).ToList();
+            var active = activeFolders();
+            foreach (var name in names.Where(n => !active.Contains(n)))
             {
                 try
                 {
-                    var folder = WinPath.Combine(Paths.JobsDirectory, name);
-                    // A link planted in the logs folder is never followed.
-                    if (IsReparsePoint(folder))
-                    {
-                        continue;
-                    }
-                    var record = WinPath.Combine(folder, AppPaths.JobRecordFileName);
-                    if (File.Exists(record)
-                        && JobRecords.LastState(File.ReadAllText(record, Encoding.UTF8)) is { } last
-                        && !JobStates.IsTerminal(last))
+                    if (MarkIfInterrupted(WinPath.Combine(Paths.JobsDirectory, name), processStartedAt, time))
                     {
                         count++;
                     }
@@ -180,6 +184,50 @@ internal sealed class JobLogStore
             RecordFailure(ex);
         }
         return count;
+    }
+
+    /// <summary>True when the folder's job is one a previous run left mid-paste (counted whether or not the rewrite succeeds).</summary>
+    private bool MarkIfInterrupted(string folder, DateTimeOffset processStartedAt, TimeProvider time)
+    {
+        // Under the store's lock, so pruning cannot delete the folder between the read and
+        // the replace and leave a stray job.json.tmp behind.
+        lock (_gate)
+        {
+            // A link planted in the logs folder is never followed.
+            if (!Directory.Exists(folder) || IsReparsePoint(folder))
+            {
+                return false;
+            }
+            var record = WinPath.Combine(folder, AppPaths.JobRecordFileName);
+            if (!File.Exists(record))
+            {
+                return false;
+            }
+            var json = File.ReadAllText(record, Encoding.UTF8);
+            switch (JobRecords.CheckInterrupted(json, processStartedAt))
+            {
+                case InterruptedCheck.MarkAndReport:
+                    try
+                    {
+                        if (JobRecords.MarkInterrupted(json, time.GetUtcNow()) is { } marked)
+                        {
+                            FileJobSink.WriteJobRecord(folder, marked);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Still reported now; the next start finds it again.
+                        RecordFailure(ex);
+                    }
+                    return true;
+                case InterruptedCheck.ReportOnly:
+                    // A newer version's record is never rewritten, so it is reported on
+                    // every start of this (older) version.
+                    return true;
+                default:
+                    return false;
+            }
+        }
     }
 
     /// <summary>The job's folder if it exists on disk (for "Open log"), else null.</summary>

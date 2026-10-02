@@ -68,6 +68,12 @@ internal sealed class TrayApplication : ApplicationContext
 
     private readonly SingleInstance _instance;
     private readonly bool _afterInstall;
+
+    /// <summary>
+    /// Read before the COM class objects are registered, so every job of this run is created
+    /// at or after it; the interrupted-jobs check leaves those alone.
+    /// </summary>
+    private readonly DateTimeOffset _startedAt = TimeProvider.System.GetUtcNow();
     private readonly Action<JobManager?> _publishJobs;
 
     // Everything the tray creates, in creation order; teardown disposes it in reverse, so
@@ -315,7 +321,11 @@ internal sealed class TrayApplication : ApplicationContext
         int interrupted;
         try
         {
-            interrupted = mode == LoggingMode.Normal ? await Task.Run(_logStore.CountInterrupted) : 0;
+            // Ephemeral mode writes nothing about jobs, so the check, which rewrites the job
+            // logs it reports, runs in normal mode only.
+            interrupted = mode == LoggingMode.Normal
+                ? await Task.Run(() => _logStore.MarkInterrupted(_startedAt, _jobs.ActiveLogFolders, TimeProvider.System))
+                : 0;
         }
         catch (Exception)
         {
