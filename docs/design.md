@@ -27,9 +27,9 @@ The Windows host's components, threading, COM contracts and work split are in do
 - `AllFilesystemObjects\shell\RoboCopy` and `…\RoboCut`
 - `Directory\Background\shell\RoboPaste`, `Directory\shell\RoboPaste`, `Drive\shell\RoboPaste`
 
-Each item is registered with `DelegateExecute={its own CLSID}` and `MultiSelectModel=Player`, plus an icon and a display label. With DelegateExecute, Explorer hands over the **entire selection in one call** through `IObjectWithSelection` → `IShellItemArray`, giving real filesystem paths rather than display names. That removes the per-item process spawn, the 15-item cap, and the dependence on whether file extensions are shown. COM interfaces use .NET's `[GeneratedComInterface]`/`[GeneratedComClass]` source generators, with no NuGet dependency. `Execute()` only enqueues the job and returns, so Explorer never waits on a copy.
+Each item is registered with `DelegateExecute={its own CLSID}` and a display label; Robo-Copy and Robo-Cut with `MultiSelectModel=Player`, Robo-Paste with `Single` on folders and drives and with none on the folder background, where nothing is selected (Explorer passes that folder through `IExecuteCommand::SetDirectory`). A menu icon is an open question (host-architecture.md section 14). With DelegateExecute, Explorer hands over the **entire selection in one call** through `IObjectWithSelection` → `IShellItemArray`, giving real filesystem paths rather than display names. That removes the per-item process spawn, the 15-item cap, and the dependence on whether file extensions are shown. COM interfaces use .NET's `[GeneratedComInterface]`/`[GeneratedComClass]` source generators, with no NuGet dependency. `Execute()` only enqueues the job and returns, so Explorer never waits on a copy.
 
-**Clipboard is the real Windows clipboard.** Robo-Copy and Robo-Cut write `CF_HDROP` plus `Preferred DropEffect` (copy or move), exactly as Explorer does. So both of these work in either direction:
+**Clipboard is the real Windows clipboard.** Robo-Copy and Robo-Cut write `CF_HDROP` plus `Preferred DropEffect` (copy or move) and the selection's `Shell IDList Array`, the formats Explorer's own paste reads. So both of these work in either direction:
 - Robo-Copy, then a plain Ctrl+V.
 - A plain Ctrl+C/Ctrl+X, then Robo-Paste.
 
@@ -118,7 +118,7 @@ All job output goes through one `IJobSink` interface:
 
 ## Milestones (each gated, recorded in `docs/testlog.md`)
 
-**M0: spikes on a disposable Windows 11 test VM** (spikes 2–4 done 2026-10-02, see docs/testlog.md; 1 and 5 need the host) with no network access. Gate for M2 and later. Machine-specific wrappers for the VM live in the gitignored `scripts/local/`; VM details never go into this repo.
+**M0: spikes on a disposable Windows 11 test VM** (spikes 1–5 done 2026-10-02, see docs/testlog.md) with no network access. Gate for M2 and later. Machine-specific wrappers for the VM live in the gitignored `scripts/local/`; VM details never go into this repo.
 1. Out-of-process DelegateExecute with a multi-use server: a 500-item selection from the classic menu arrives in **one** call to an already-running process. Repeat for the background, folder and drive items.
 2. Redirected `robocopy /UNICODE /MT:32` stdout decodes correctly as UTF-16, with emoji and CJK filenames. Record exactly which lines appear, and when, for files that are starting versus finishing.
 3. `NtSuspendProcess` reliably pauses an `/MT:32` robocopy and resumes it cleanly.

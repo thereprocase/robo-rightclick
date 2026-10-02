@@ -5,9 +5,9 @@ implements is docs/design.md; the decisions there are fixed. This document makes
 precise enough that several people can each own a set of files and build in parallel.
 
 **Status:** the host is implemented end to end (the nine work packages of section 13 are
-merged) and cross-compiles. Nothing in the host has run on Windows. Runtime facts cited below
-come from docs/testlog.md (2026-10-02, M0 spikes 2-4). Everything else is a design claim until
-a testlog entry says otherwise. Section 15 records the architecture review of 2026-10-02:
+merged) and cross-compiles. Activation, the three verbs and the clipboard have run on a
+Windows 11 VM (docs/testlog.md 2026-10-02, M0 spikes 1-5); section 12 lists which claims that
+covers. Everything else is a design claim until a testlog entry says otherwise. Section 15 records the architecture review of 2026-10-02:
 which findings changed this design and which were declined, with reasons. Section 16 records
 where the merged implementation settled questions the packages raised.
 
@@ -180,7 +180,10 @@ medium-integrity tray copy or move files of its choosing, a sandbox escape. Thre
    to the AppID key as `AccessPermission` / `LaunchPermission` (REG_BINARY).
 3. `VerbCommand.Execute` impersonates the caller and refuses (`E_ACCESSDENIED`) below medium.
 
-All three are design claims until the spike in section 12 runs.
+Layer 1 is in effect: the tray starts with it (after a fix: `CoInitializeSecurity` takes only
+an absolute-format descriptor, so the SDDL result is converted with `MakeAbsoluteSD`), and
+medium-integrity callers, Explorer and the CLI, are served (testlog 2026-10-02). That a
+low-integrity caller is refused, by any of the three layers, is still unverified.
 
 ### Activation and call sequence
 
@@ -193,7 +196,11 @@ All three are design claims until the spike in section 12 runs.
    other tray's ready event set means exit 0; the mutex released (that tray was shutting down
    and cleared its ready event when it revoked) means take it and become the server.
 3. Explorer: `CreateInstance` → (`IInitializeCommand::Initialize`) → `SetSelection` → setters →
-   `Execute`. `Execute` checks the caller, reads all paths (`ShellSelection.ReadPaths`: one
+   `Execute`. For a folder-background click the observed order is `CreateInstance`,
+   `SetDirectory(<the open folder>)`, `SetSelection(NULL)`, `Initialize`, `Execute`: the folder
+   arrives only through `SetDirectory`. For a click on items the directory is their parent, so
+   `ShellVerbs.InvocationItems` uses it only for Robo-Paste with nothing selected
+   (testlog 2026-10-02). `Execute` checks the caller, reads all paths (`ShellSelection.ReadPaths`: one
    `BindToHandler(BHID_DataObject)` + `CF_HDROP` read; per-item fallback), releases the
    array, calls `IVerbHandler.Invoke`, returns `S_OK`.
 4. No exception crosses the COM boundary; every implementation catches and returns an HRESULT.
@@ -226,7 +233,11 @@ key and the app's own Uninstall key.
 Associations: RoboCopy and RoboCut on `AllFilesystemObjects`; RoboPaste on
 `Directory\Background`, `Directory`, `Drive`. `DelegateExecute` sits on the verb's `command`
 subkey (as in the Microsoft sample), `MultiSelectModel` on the verb key. `Single` hides
-Robo-Paste for a multi-folder selection, as Explorer's own Paste is hidden. Autostart on
+Robo-Paste for a multi-folder selection (Explorer's own Paste is offered there and pastes into
+the right-clicked folder, which a DelegateExecute verb is not told; deviation in
+docs/parity.md). The `Directory\Background` key has no `MultiSelectModel`
+(`ShellVerbs.MultiSelectModelFor`): a background click selects nothing, and with `Single`
+Explorer hid the item (testlog 2026-10-02). Autostart on
 reinstall comes from `Registration.ResolveStartWithWindows`: an explicit `--autostart` /
 `--no-autostart` wins (and is written to config.json), otherwise the existing config's choice
 is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
@@ -240,11 +251,16 @@ is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
   throws on a quote as a second line.
 - **Robo-Copy / Robo-Cut:** selection paths through `PathPolicy` (any refusal: a
   `SelectionNotFiles` toast, nothing written), then `ClipboardService.WriteFilesAsync(paths,
-  verb, mode)` writes every entry of `ClipboardPayload.ForFiles`: `CF_HDROP` (wide `DROPFILES`),
-  `Preferred DropEffect` (1 copy, 2 move) and, in ephemeral mode,
+  verb, mode, shellIdList)` writes every entry of `ClipboardPayload.ForFiles`: `CF_HDROP` (wide
+  `DROPFILES`), `Preferred DropEffect` (1 copy, 2 move), the selection's `Shell IDList Array`
+  when one came with it and `ClipboardPayload.IsShellIdListFor` accepts it for exactly these
+  items, and, in ephemeral mode,
   `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory = 0`,
   `CanUploadToCloudClipboard = 0`. No job starts. A clipboard held by another program through
-  about one second of retries gives a `ClipboardBusy` toast.
+  about one second of retries gives a `ClipboardBusy` toast. The ID list is read in `Execute`
+  from the same data object as `CF_HDROP` (no file-system access); without it Explorer's own
+  Ctrl+V of a copy into the folder it came from fails with "The source and destination file
+  names are the same" instead of creating "name - Copy" (testlog 2026-10-02).
 - **Robo-Paste:** destination = `ShellVerbs.PasteDestination(selection)`.
   `ClipboardService.ReadFilesAsync` reads `CF_HDROP` (Core decoder with size and count limits;
   a name without its terminator refuses the whole block; the ANSI form through Core's bounded
@@ -510,10 +526,12 @@ and asks rather than editing a file it does not own.
    `MOVEFILE_COPY_ALLOWED`) as a second source-deleting path beside robocopy `/MOV`, which needs
    an ADR under invariant 1. Same-volume cuts keep both with a rename. The cross-volume gap is
    listed in docs/parity.md.
-2. **Preferred DropEffect for copy:** the design fixes 1. Explorer's own Ctrl+C is commonly
-   reported as 5 (copy | link). Measure in M4. Both values paste as a copy.
+2. **Preferred DropEffect for copy:** the design fixes 1. Explorer's own Ctrl+C writes 5
+   (copy | link), measured 2026-10-02. Both values paste as a copy, in both directions
+   (testlog 2026-10-02); 1 stays.
 3. **Menu icon:** without an `.ico` the verbs have no icon. Adding one means a binary asset and
-   an `Icon` registry value.
+   an `Icon` registry value. Explorer's own classic Cut, Copy and Paste show no icon either
+   (measured 2026-10-02).
 4. **Uninstall deletes config and logs** (the privacy-preserving choice). A `--keep-data` flag is
    possible if users want settings to survive reinstall.
 5. **CLI `--wait`** (block until the paste finishes) would make VM automation simpler. It needs a
