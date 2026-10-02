@@ -84,7 +84,11 @@ known gap.
 
 Every other config field falls back to its default when invalid. `pasteHotkey` falls back
 to off, with a tray and Settings warning naming the field: the default would switch on a
-keyboard hook that the user may have been trying to switch off.
+keyboard hook that the user may have been trying to switch off. The same holds for a
+config.json that cannot be used at all (not valid JSON, not an object, or not readable from
+disk): every other field takes its default and the hotkey is off, with a problem naming
+`pasteHotkey` (Core `SettingsSerializer.UnreadableResult`). Only a missing file means the
+default hotkey, as on a fresh install.
 
 ## Consequences
 

@@ -96,11 +96,13 @@ public class SettingsTests
     [InlineData("not json")]
     [InlineData("[1,2]")]
     [InlineData("")]
-    public void Unreadable_config_yields_defaults(string json)
+    public void Unreadable_config_yields_defaults_with_the_hotkey_off(string json)
     {
         var result = SettingsSerializer.Parse(json);
-        Assert.Equal(Settings.Default, result.Settings);
-        Assert.Single(result.Problems);
+        Assert.True(result.Unreadable);
+        Assert.Equal(Settings.Default with { PasteHotkey = null }, result.Settings);
+        Assert.Equal(2, result.Problems.Count);
+        Assert.Equal(SettingsSerializer.PasteHotkeyUnreadableProblem, Assert.Single(result.Problems, SettingsSerializer.IsPasteHotkeyProblem));
     }
 
     [Fact]

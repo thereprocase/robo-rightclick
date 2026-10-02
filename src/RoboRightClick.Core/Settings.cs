@@ -146,11 +146,11 @@ public static class SettingsSerializer
         }
         catch (JsonException ex)
         {
-            return new(Settings.Default, [$"config is not valid JSON ({ex.Message}); using defaults"]) { Unreadable = true };
+            return UnreadableResult($"config is not valid JSON ({ex.Message}); using defaults");
         }
         if (root is null)
         {
-            return new(Settings.Default, ["config is not a JSON object; using defaults"]) { Unreadable = true };
+            return UnreadableResult("config is not a JSON object; using defaults");
         }
 
         var version = ReadVersion(root);
@@ -259,6 +259,22 @@ public static class SettingsSerializer
 
     /// <summary>The end of every "pasteHotkey" problem: unlike other fields it falls back to off.</summary>
     public const string PasteHotkeyOffSuffix = "; the hotkey is off";
+
+    /// <summary>The second problem of an unreadable file (<see cref="UnreadableResult"/>).</summary>
+    public const string PasteHotkeyUnreadableProblem =
+        $"'{PasteHotkeyKey}' is unknown because the file could not be read{PasteHotkeyOffSuffix}";
+
+    /// <summary>
+    /// What a config.json that is not a JSON object, or that exists but could not be read from
+    /// disk, loads as: every default except the hotkey, which is off. Its default is a keyboard
+    /// hook, and the damaged file may be one that switched it off; a fallback must never switch
+    /// on a hook the user may have switched off, as for an invalid "pasteHotkey" alone. The
+    /// second problem names the setting, so the tray says "off (setting invalid)" rather than
+    /// "off", and Settings marks the field.
+    /// </summary>
+    /// <param name="problem">Why the file could not be used, path-free.</param>
+    public static SettingsLoadResult UnreadableResult(string problem) =>
+        new(Settings.Default with { PasteHotkey = null }, [problem, PasteHotkeyUnreadableProblem]) { Unreadable = true };
 
     /// <summary>A load problem about "pasteHotkey" (the tray then says the hotkey is off because of it).</summary>
     public static bool IsPasteHotkeyProblem(string problem) =>

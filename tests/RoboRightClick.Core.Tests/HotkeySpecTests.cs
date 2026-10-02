@@ -240,6 +240,37 @@ public class HotkeySpecTests
         Assert.False(result.SavesRefused);
     }
 
+    /// <summary>
+    /// A file damaged after the user turned the hotkey off must not switch the keyboard hook
+    /// back on: whole-file fallback follows the same rule as a bad "pasteHotkey" alone.
+    /// </summary>
+    [Theory]
+    [InlineData("""{ "pasteHotkey": "", }} """)]
+    [InlineData("""{ "pasteHotkey": "" """)]
+    [InlineData("""["pasteHotkey", ""]""")]
+    [InlineData("null")]
+    public void An_unreadable_file_turns_the_hotkey_off_and_says_why(string json)
+    {
+        var result = SettingsSerializer.Parse(json);
+
+        Assert.True(result.Unreadable);
+        Assert.Null(result.Settings.PasteHotkey);
+        Assert.Equal(HotkeyStatus.Invalid, HotkeyStatusRules.Derive(result.Settings.PasteHotkey, result.Problems, hookFailed: false));
+        Assert.EndsWith(SettingsSerializer.PasteHotkeyOffSuffix, Assert.Single(result.Problems, SettingsSerializer.IsPasteHotkeyProblem), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_file_that_could_not_be_read_from_disk_turns_the_hotkey_off_too()
+    {
+        var result = SettingsSerializer.UnreadableResult("config could not be read; using defaults");
+
+        Assert.True(result.Unreadable);
+        Assert.Null(result.Settings.PasteHotkey);
+        Assert.Equal(Settings.Default with { PasteHotkey = null }, result.Settings);
+        Assert.Equal("config could not be read; using defaults", result.Problems[0]);
+        Assert.Equal(HotkeyStatus.Invalid, HotkeyStatusRules.Derive(null, result.Problems, hookFailed: false));
+    }
+
     [Fact]
     public void Only_hotkey_problems_count_as_hotkey_problems()
     {
