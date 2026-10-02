@@ -29,8 +29,13 @@ internal sealed class ClipboardService : IDisposable
     /// <summary>HWND_MESSAGE: a window that only receives messages, never shown, parent of nothing visible.</summary>
     private static readonly nint HwndMessage = -3;
 
-    /// <summary>Registered by shell32 for virtual items; present without CF_HDROP it means "not files on a drive".</summary>
-    private const string ShellIdListFormat = "Shell IDList Array";
+    /// <summary>
+    /// Formats that describe items without file-system paths. Present without CF_HDROP they
+    /// mean "not files on a drive": the shell's IDList (zip contents, other shell folders),
+    /// and the virtual-file descriptors that mail clients offer for attachments without any
+    /// IDList, which would otherwise read as an empty clipboard.
+    /// </summary>
+    private static readonly string[] VirtualItemFormats = ["Shell IDList Array", "FileGroupDescriptorW", "FileGroupDescriptor"];
 
     private readonly NativeWindow _owner = new();
     private readonly Dictionary<string, uint> _formatIds = new(StringComparer.Ordinal);
@@ -82,13 +87,15 @@ internal sealed class ClipboardService : IDisposable
     }
 
     /// <summary>
-    /// Inside one OpenClipboard: CF_HDROP (Core decoder; DragQueryFileW for the ANSI form,
-    /// with the same byte and path limits), then Preferred DropEffect, then the sequence
+    /// Inside one OpenClipboard: CF_HDROP (Core decoder; for the ANSI form Core's bounded
+    /// splitter and a CP_ACP conversion, with the same byte and path limits; see
+    /// <see cref="DecodeAnsiDropFiles"/>), then Preferred DropEffect, then the sequence
     /// number, so the number belongs to the data read. GlobalSize over
     /// <see cref="ClipboardPayload.MaxDropFilesBytes"/> is refused before copying. Works for
     /// Explorer's own Ctrl+C / Ctrl+X: OLE renders those formats onto the Win32 clipboard.
     /// No CF_HDROP but other content: <see cref="VerbRefusal.ClipboardNotFiles"/> when a shell
-    /// IDList format is present (virtual items), else <see cref="VerbRefusal.ClipboardEmpty"/>.
+    /// IDList or virtual-file descriptor is present (virtual items), else
+    /// <see cref="VerbRefusal.ClipboardEmpty"/>.
     /// </summary>
     public async Task<ClipboardReadResult> ReadFilesAsync()
     {
@@ -118,7 +125,7 @@ internal sealed class ClipboardService : IDisposable
     /// </remarks>
     public bool ClearIfUnchanged(uint sequenceNumber)
     {
-        if (!ClipboardNative.OpenClipboard(_owner.Handle))
+        if (!TryOpen())
         {
             return false;
         }
@@ -149,19 +156,30 @@ internal sealed class ClipboardService : IDisposable
     /// </summary>
     private async Task<bool> OpenWithRetryAsync()
     {
-        if (ClipboardNative.OpenClipboard(_owner.Handle))
+        if (TryOpen())
         {
             return true;
         }
         foreach (var delay in VerbRules.RetryDelays(OpenRetryBudget))
         {
             await Task.Delay(delay);
-            if (ClipboardNative.OpenClipboard(_owner.Handle))
+            if (TryOpen())
             {
                 return true;
             }
         }
         return false;
+    }
+
+    /// <summary>
+    /// Never opens with a null owner: once the owner window is gone (after
+    /// <see cref="Dispose"/>, during shutdown) OpenClipboard(NULL) would still succeed, and a
+    /// write would then empty the user's clipboard and fail every SetClipboardData.
+    /// </summary>
+    private bool TryOpen()
+    {
+        var owner = _owner.Handle;
+        return !_disposed && owner != 0 && ClipboardNative.OpenClipboard(owner);
     }
 
     private uint FormatId(ClipboardFormat format) =>
@@ -227,9 +245,9 @@ internal sealed class ClipboardService : IDisposable
     {
         var hasHdrop = ClipboardNative.IsClipboardFormatAvailable(ClipboardPayload.CF_HDROP);
         var decoded = hasHdrop ? ReadDropFiles() : null;
-        var hasShellIdList = !hasHdrop && IsAvailable(ShellIdListFormat);
+        var hasVirtualItems = !hasHdrop && VirtualItemFormats.Any(IsAvailable);
 
-        if (VerbRules.ClassifyClipboard(hasHdrop, decoded, hasShellIdList) is { } refusal)
+        if (VerbRules.ClassifyClipboard(hasHdrop, decoded, hasVirtualItems) is { } refusal)
         {
             return new ClipboardReadResult(null, refusal);
         }
@@ -272,42 +290,57 @@ internal sealed class ClipboardService : IDisposable
             return null;
         }
         var decoded = ClipboardPayload.DecodeDropFiles(bytes);
-        return decoded.Status == DropFilesStatus.Ansi ? DecodeAnsiDropFiles(handle) : decoded;
+        return decoded.Status == DropFilesStatus.Ansi ? DecodeAnsiDropFiles(bytes) : decoded;
     }
 
     /// <summary>
-    /// The legacy narrow DROPFILES depends on the active code page, which shell32 knows and
-    /// Core does not. Same limits as the wide decoder: too many names or any name over the
-    /// path limit is refused, never truncated (a truncated list would paste a different set).
+    /// The legacy narrow DROPFILES depends on the active code page, which Core does not know.
+    /// Core finds the names in the copied bytes with every offset bounded; each one is then
+    /// converted with CP_ACP, as shell32's DragQueryFileW does. DragQueryFileW itself is not
+    /// used: it trusts pFiles and the terminators, so a malformed block from any process
+    /// would make it read past the end of the HGLOBAL, and one call per index rescans the
+    /// list from the start, which for the path limit would hold the UI thread for minutes.
+    /// Same limits as the wide decoder: too many names or any name over the path limit is
+    /// refused, never truncated (a truncated list would paste a different set).
     /// </summary>
-    private static unsafe DropFilesResult DecodeAnsiDropFiles(nint drop)
+    private static unsafe DropFilesResult? DecodeAnsiDropFiles(byte[] block)
     {
-        var count = ClipboardNative.DragQueryFile(drop, ClipboardNative.DragQueryCount, null, 0);
-        if (count > ClipboardPayload.MaxDropFilesPaths)
+        if (VerbRules.SplitAnsiDropFiles(block) is not { } split)
+        {
+            return null;
+        }
+        if (split.Status == DropFilesStatus.TooLarge)
         {
             return DropFilesResult.TooLarge;
         }
 
-        var paths = new List<string>((int)count);
-        for (uint i = 0; i < count; i++)
+        var paths = new List<string>(split.Names.Count);
+        fixed (byte* start = block)
         {
-            var length = ClipboardNative.DragQueryFile(drop, i, null, 0);
-            if (length > PathPolicy.MaxPathLength)
+            foreach (var name in split.Names)
             {
-                return DropFilesResult.TooLarge;
-            }
-            if (length == 0)
-            {
-                continue;
-            }
-            var buffer = new char[length + 1];
-            fixed (char* name = buffer)
-            {
-                var copied = ClipboardNative.DragQueryFile(drop, i, name, length + 1);
-                if (copied > 0)
+                var (offset, byteCount) = name.GetOffsetAndLength(block.Length);
+                var source = start + offset;
+                var length = ClipboardNative.MultiByteToWideChar(
+                    ClipboardNative.CP_ACP, 0, source, byteCount, null, 0);
+                if (length <= 0)
                 {
-                    paths.Add(new string(buffer, 0, (int)copied));
+                    return null;
                 }
+                if (length > PathPolicy.MaxPathLength)
+                {
+                    return DropFilesResult.TooLarge;
+                }
+                var buffer = new char[length];
+                fixed (char* target = buffer)
+                {
+                    if (ClipboardNative.MultiByteToWideChar(
+                            ClipboardNative.CP_ACP, 0, source, byteCount, target, length) != length)
+                    {
+                        return null;
+                    }
+                }
+                paths.Add(new string(buffer));
             }
         }
         return new DropFilesResult(paths, DropFilesStatus.Ok);

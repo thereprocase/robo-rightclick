@@ -8,8 +8,8 @@ internal static partial class ClipboardNative
 {
     public const uint GMEM_MOVEABLE = 0x0002;
 
-    /// <summary>DragQueryFileW with this index returns the file count.</summary>
-    public const uint DragQueryCount = 0xFFFFFFFF;
+    /// <summary>The system's ANSI code page, which a narrow DROPFILES block is written in.</summary>
+    public const uint CP_ACP = 0;
 
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -57,7 +57,11 @@ internal static partial class ClipboardNative
     [LibraryImport("kernel32.dll", SetLastError = true)]
     public static partial nint GlobalFree(nint hMem);
 
-    /// <summary>Fallback reader for ANSI DROPFILES, which Core does not decode.</summary>
-    [LibraryImport("shell32.dll", EntryPoint = "DragQueryFileW")]
-    public static unsafe partial uint DragQueryFile(nint hDrop, uint iFile, char* lpszFile, uint cch);
+    /// <summary>
+    /// Converts one name of a narrow DROPFILES block (Core finds the names; the code page is
+    /// only known here). With a null buffer and cchWideChar 0 it returns the length needed.
+    /// </summary>
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static unsafe partial int MultiByteToWideChar(
+        uint codePage, uint dwFlags, byte* lpMultiByteStr, int cbMultiByte, char* lpWideCharStr, int cchWideChar);
 }
