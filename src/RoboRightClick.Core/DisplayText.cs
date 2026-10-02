@@ -66,6 +66,16 @@ public static class DisplayText
         _ => string.Create(CultureInfo.InvariantCulture, $"{NameOf(sources[0])} and {sources.Count - 1} more"),
     };
 
+    /// <summary>
+    /// Most rows a summary list shows. A selection can hold 250,000 paths and every one may be
+    /// refused; a list control that builds that many rows holds the UI thread for minutes (about
+    /// 0.75 ms a row on the test machine, docs/testlog.md), so the rest are counted, not listed.
+    /// </summary>
+    public const int MaxListedRows = 1_000;
+
+    public static string UnlistedRowsText(long unlisted) =>
+        string.Create(CultureInfo.InvariantCulture, $"and {unlisted:N0} more are not listed here.");
+
     public static string Items(long count) =>
         count == 1 ? "1 item" : count.ToString("N0", CultureInfo.InvariantCulture) + " items";
 

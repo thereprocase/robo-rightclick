@@ -139,7 +139,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             if (refused.Count > 0)
             {
                 var text = $"Not {done}. Trying again would not change this.";
-                AddFill(ListPane(title, text, refused.Select(r => new DetailRow(r.Path, r.Reason)), "Refused"));
+                AddFill(ListPane(title, text, refused.Take(DisplayText.MaxListedRows).Select(r => new DetailRow(r.Path, r.Reason)), "Refused"));
+                AddUnlistedNote(refused.Count);
                 filled = true;
             }
             else
@@ -159,7 +160,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             var damaged = jobs?.DamagedOf(job.Id) ?? [];
             if (damaged.Count > 0)
             {
-                AddFill(ListPane(title, text, damaged.Select(p => new DetailRow(p, "May hold partial data")), "Damaged"));
+                AddFill(ListPane(title, text, damaged.Take(DisplayText.MaxListedRows).Select(p => new DetailRow(p, "May hold partial data")), "Damaged"));
+                AddUnlistedNote(damaged.Count);
                 filled = true;
             }
             else
@@ -177,7 +179,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             var skipped = jobs?.SkippedAppearedOf(job.Id) ?? [];
             if (skipped.Count > 0)
             {
-                AddFill(ListPane(title, text, skipped.Select(p => new DetailRow(p, "Appeared during the paste")), "SkippedAppeared"));
+                AddFill(ListPane(title, text, skipped.Take(DisplayText.MaxListedRows).Select(p => new DetailRow(p, "Appeared during the paste")), "SkippedAppeared"));
+                AddUnlistedNote(skipped.Count);
                 filled = true;
             }
             else
@@ -266,6 +269,15 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
     {
         RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Controls.Add(control);
+    }
+
+    /// <summary>Says how many rows a capped list leaves out; nothing when it was not capped.</summary>
+    private void AddUnlistedNote(int total)
+    {
+        if (total > DisplayText.MaxListedRows)
+        {
+            AddAuto(Gridline.TextLabel(DisplayText.UnlistedRowsText(total - DisplayText.MaxListedRows), Gridline.Face.Mono, Gridline.SizeDense, Gridline.TextSecondary));
+        }
     }
 
     /// <summary>A row that shares the spare height with the other lists.</summary>
