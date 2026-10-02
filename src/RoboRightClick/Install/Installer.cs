@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using RoboRightClick.App;
 using RoboRightClick.Core;
 using RoboRightClick.UI;
@@ -508,19 +507,6 @@ internal static class Installer
         return CliExitCodes.Failed;
     }
 
-    /// <summary>A Gridline notice; a plain message box if the window itself cannot be built, so the result is never lost.</summary>
-    private static void Notice(string heading, string message, MessageTone tone)
-    {
-        try
-        {
-            MessageDialog.Show(owner: null,
-                new MessageContent(AppInfo.Name, message) { PaneTitle = heading.TrimEnd('.'), Tone = tone },
-                [new DialogButton("OK", "OK", DialogResult.OK, IsDefault: true, IsCancel: true)]);
-        }
-        catch (Exception ex) when (ex is ExternalException or InvalidOperationException or ArgumentException or OutOfMemoryException)
-        {
-            MessageBox.Show(heading + "\n\n" + message, AppInfo.Name, MessageBoxButtons.OK,
-                tone == MessageTone.Danger ? MessageBoxIcon.Error : MessageBoxIcon.Information);
-        }
-    }
+    private static void Notice(string heading, string message, MessageTone tone) =>
+        MessageDialog.Notice(owner: null, heading, message, tone);
 }

@@ -22,7 +22,7 @@ namespace RoboRightClick.App;
 /// ComServer.Register → SingleInstance.SignalReady → NotifyIcon → message loop. Posted to
 /// run once the loop is up: settings watcher, the settings-problem toast, the interrupted-
 /// jobs check (normal mode), the first-run tray hint, log pruning. Any exception before the
-/// loop shows a MessageBox with the reason and exits 1.</para>
+/// loop shows a Gridline notice with the reason and exits 1.</para>
 /// <para>Unhandled exceptions (<see cref="CrashPolicy"/>): Application.ThreadException and
 /// AppDomain.UnhandledException are handled. While any ephemeral job is active the process
 /// kills its robocopy children and ends with TerminateProcess, so Windows Error Reporting
@@ -218,11 +218,10 @@ internal sealed class TrayApplication : ApplicationContext
         {
             // The failure a beta tester is most likely to report, so it goes to crash.log too.
             CrashPolicy.LogHandled(ex);
-            MessageBox.Show(
-                $"{AppInfo.Name} could not start.\n\n{ex.Message}",
-                AppInfo.Name,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
+            MessageDialog.Notice(owner: null, $"{AppInfo.Name} could not start",
+                $"{ex.Message} Robo-Copy, Robo-Cut and Robo-Paste try to start it again on the next click. "
+                    + "If this keeps happening, reinstall with RoboRightClick.exe --install.",
+                MessageTone.Danger);
             return CliExitCodes.Failed;
         }
 
@@ -539,11 +538,9 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex)
         {
-            MessageBox.Show(
-                $"Some job logs could not be deleted.\n\n{ex.Message}",
-                AppInfo.Name,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            MessageDialog.Notice(owner: null, "Some job logs were not deleted",
+                $"{ex.Message} Close any program using them, then use Delete all job logs in Settings.",
+                MessageTone.Attention);
         }
     }
 
@@ -556,11 +553,9 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
         {
-            MessageBox.Show(
-                $"The setting could not be saved.\n\n{ex.Message}",
-                AppInfo.Name,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            MessageDialog.Notice(owner: null, "The setting was not saved",
+                $"{ex.Message} Nothing changed. Close any program that has config.json open and try again.",
+                MessageTone.Attention);
             return false;
         }
     }
@@ -597,11 +592,9 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
         {
-            MessageBox.Show(
-                $"The log folder could not be opened.\n\n{ex.Message}",
-                AppInfo.Name,
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
+            MessageDialog.Notice(owner: null, "The log folder could not be opened",
+                $"{ex.Message} The folder is {folder}.",
+                MessageTone.Attention);
         }
     }
 

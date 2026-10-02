@@ -1,3 +1,5 @@
+using RoboRightClick.Core;
+
 namespace RoboRightClick.UI;
 
 /// <summary>How a <see cref="MessageDialog"/> presents its text: plain, or in a caution strip.</summary>
@@ -163,6 +165,31 @@ internal sealed class MessageDialog : Gridline.Window
             return cancel.Result;
         }
         return result;
+    }
+
+    /// <summary>
+    /// A result or problem the user must see: the app's name as the window title,
+    /// <paramref name="heading"/> in the title strip, the text plain or in a caution strip, one
+    /// OK button. If the Gridline window cannot be built (the failure being reported may be
+    /// why), a plain message box says the same, so the message is never lost.
+    /// </summary>
+    public static void Notice(IWin32Window? owner, string heading, string text, MessageTone tone)
+    {
+        try
+        {
+            Show(owner, new MessageContent(AppInfo.Name, text) { PaneTitle = heading.TrimEnd('.'), Tone = tone },
+                [new DialogButton("OK", "OK", DialogResult.OK, IsDefault: true, IsCancel: true)]);
+        }
+        catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or InvalidOperationException or ArgumentException or OutOfMemoryException)
+        {
+            MessageBox.Show(heading + "\n\n" + text, AppInfo.Name, MessageBoxButtons.OK,
+                tone switch
+                {
+                    MessageTone.Danger => MessageBoxIcon.Error,
+                    MessageTone.Attention => MessageBoxIcon.Warning,
+                    _ => MessageBoxIcon.Information,
+                });
+        }
     }
 
     protected override void OnLoad(EventArgs e)
