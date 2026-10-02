@@ -5,7 +5,7 @@ using Microsoft.Win32.SafeHandles;
 namespace RoboRightClick.Jobs;
 
 /// <summary>kernel32/ntdll entry points for running robocopy and copying in-process.</summary>
-internal static partial class ProcessNative
+internal static unsafe partial class ProcessNative
 {
     [StructLayout(LayoutKind.Sequential)]
     public struct IoCounters
@@ -51,6 +51,10 @@ internal static partial class ProcessNative
     public const uint COPY_FILE_FAIL_IF_EXISTS = 0x1;
     public const uint PROGRESS_CONTINUE = 0;
     public const uint PROGRESS_CANCEL = 1;
+
+    public const uint FILE_SHARE_ALL = 0x7;
+    public const uint OPEN_EXISTING = 3;
+    public const uint FILE_FLAG_BACKUP_SEMANTICS = 0x02000000;
 
     public const int ERROR_NOT_SAME_DEVICE = 17;
     public const int ERROR_ALREADY_EXISTS = 183;
@@ -108,4 +112,40 @@ internal static partial class ProcessNative
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AssignProcessToJobObject(SafeFileHandle hJob, SafeProcessHandle hProcess);
+
+    /// <summary>
+    /// Opens a path to ask about it, never to read or write: dwDesiredAccess 0 and
+    /// FILE_FLAG_BACKUP_SEMANTICS (so directories open too). The final reparse point is
+    /// followed, which is the point for resolving a location.
+    /// </summary>
+    [LibraryImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    public static partial SafeFileHandle CreateFile(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        nint lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        nint hTemplateFile);
+
+    /// <summary>Returns the length needed when the buffer is too small, 0 on failure. dwFlags 0 = FILE_NAME_NORMALIZED | VOLUME_NAME_DOS.</summary>
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFinalPathNameByHandleW", SetLastError = true)]
+    public static partial uint GetFinalPathNameByHandle(SafeFileHandle hFile, char* lpszFilePath, uint cchFilePath, uint dwFlags);
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetVolumePathNameW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetVolumePathName(string lpszFileName, char* lpszVolumePathName, uint cchBufferLength);
+
+    /// <summary>Only the serial number is wanted; the other outputs are passed as null.</summary>
+    [LibraryImport("kernel32.dll", EntryPoint = "GetVolumeInformationW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool GetVolumeInformation(
+        string lpRootPathName,
+        nint lpVolumeNameBuffer,
+        uint nVolumeNameSize,
+        out uint lpVolumeSerialNumber,
+        nint lpMaximumComponentLength,
+        nint lpFileSystemFlags,
+        nint lpFileSystemNameBuffer,
+        uint nFileSystemNameSize);
 }
