@@ -18,6 +18,12 @@ internal sealed class ProgressSampler : IDisposable
 {
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromMilliseconds(333);
 
+    private readonly object _gate = new();
+    private readonly List<Tracked> _tracked = [];
+    private readonly CancellationTokenSource _stop = new();
+    private PeriodicTimer? _timer;
+    private bool _disposed;
+
     public ProgressSampler(TimeProvider time, TimeSpan interval)
     {
         Time = time;
@@ -32,10 +38,130 @@ internal sealed class ProgressSampler : IDisposable
     /// Starts sampling <paramref name="process"/>; the callback gets this run's cumulative
     /// ReadTransferCount on the sampler's thread. Dispose the result to stop (see remarks).
     /// </summary>
-    public IDisposable Track(SafeProcessHandle process, PauseGate pause, Action<long, DateTimeOffset> onReadBytes) =>
-        throw new NotImplementedException();
+    public IDisposable Track(SafeProcessHandle process, PauseGate pause, Action<long, DateTimeOffset> onReadBytes)
+    {
+        var run = new Tracked(this, process, pause, onReadBytes);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _tracked.Add(run);
+            if (_timer is null)
+            {
+                // Started on first use: an app with no running job has no timer ticking.
+                _timer = new PeriodicTimer(Interval, Time);
+                _ = Task.Run(() => LoopAsync(_timer, _stop.Token));
+            }
+        }
+
+        return run;
+    }
 
     public void Dispose()
     {
+        Tracked[] remaining;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            remaining = [.. _tracked];
+            _tracked.Clear();
+        }
+
+        _stop.Cancel();
+        _timer?.Dispose();
+        foreach (var run in remaining)
+        {
+            run.Stop();
+        }
+    }
+
+    private async Task LoopAsync(PeriodicTimer timer, CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+            {
+                Tracked[] runs;
+                lock (_gate)
+                {
+                    runs = [.. _tracked];
+                }
+
+                foreach (var run in runs)
+                {
+                    run.Sample();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Sampler disposed.
+        }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Timer disposed between the cancel and the wait. Only then: an
+            // ObjectDisposedException from a run is handled inside Sample, because leaving
+            // this loop would end sampling for every job in the app.
+        }
+    }
+
+    private void Remove(Tracked run)
+    {
+        lock (_gate)
+        {
+            _tracked.Remove(run);
+        }
+    }
+
+    private sealed class Tracked(ProgressSampler owner, SafeProcessHandle process, PauseGate pause, Action<long, DateTimeOffset> callback) : IDisposable
+    {
+        // Held while sampling and while stopping, so Stop cannot return with a callback running.
+        private readonly object _runLock = new();
+        private bool _stopped;
+
+        public void Sample()
+        {
+            lock (_runLock)
+            {
+                if (_stopped)
+                {
+                    return;
+                }
+
+                // One loop serves every run: nothing from this run (its gate, a handle closed
+                // early, its observer) may throw into the loop and end sampling for the others.
+                try
+                {
+                    if (pause.IsPaused || !ProcessNative.GetProcessIoCounters(process, out var counters))
+                    {
+                        return;
+                    }
+
+                    callback((long)counters.ReadTransferCount, owner.Time.GetUtcNow());
+                }
+                catch (Exception)
+                {
+                    // Skipped this tick; the run's own code reports real failures.
+                }
+            }
+        }
+
+        public void Stop()
+        {
+            lock (_runLock)
+            {
+                _stopped = true;
+            }
+        }
+
+        public void Dispose()
+        {
+            owner.Remove(this);
+            Stop();
+        }
     }
 }
