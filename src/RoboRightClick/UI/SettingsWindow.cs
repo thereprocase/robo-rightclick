@@ -114,7 +114,8 @@ internal sealed class SettingsWindow : Gridline.Window
         _extraMove = new Gridline.TextField("extraArgs.move", mono: true, logicalWidth: 420);
         _hotkeyEnabled = new Gridline.CheckBox("Robo-Paste with a keyboard shortcut", "pasteHotkey.enabled");
         _hotkeyText = new Gridline.TextField(SettingsSerializer.PasteHotkeyKey, mono: true, logicalWidth: 200);
-        _hotkeyProbeNote = Gridline.TextLabel(string.Empty, Gridline.Face.Sans, Gridline.SizeDense, Gridline.TextSecondary);
+        // Amber: a qualification of a valid choice (docs/gridline.md), not an error to fix.
+        _hotkeyProbeNote = Gridline.TextLabel(string.Empty, Gridline.Face.Sans, Gridline.SizeDense, Gridline.Amber);
         _hotkeyProbeNote.Name = "pasteHotkey.note";
         _hotkeyProbeNote.AccessibleName = "pasteHotkey.note";
         _hotkeyProbeNote.Visible = false;
@@ -390,7 +391,9 @@ internal sealed class SettingsWindow : Gridline.Window
 
     /// <summary>
     /// The hotkey row: a check box, and the shortcut in Plex Mono. Unticked is off ("" in
-    /// config.json); the text keeps the last shortcut so ticking the box again restores it.
+    /// config.json). While the window is open the text keeps the last shortcut, so ticking the
+    /// box again restores it; config.json has no place for a shortcut that is off, so once
+    /// "off" is saved the window next shows the default (<see cref="HotkeySpec.Default"/>).
     /// </summary>
     private void AddHotkeyField(TableLayoutPanel table)
     {

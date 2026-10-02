@@ -61,7 +61,7 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   Disabled text is `#7A7A7A`. Focus is a 1 px dotted ink rectangle inset 3 px. Owner-draw these;
   don't use FlatStyle defaults that round corners or add system visual styles.
 - **Text fields / numeric inputs / combo boxes:** white field, inset bevel (top/left `#8A8A8A`,
-  bottom/right `#FFFFFF`), square.
+  bottom/right `#FFFFFF`), square. Disabled: the whole field, edit included, is `gl-gray-light`.
 - **Lists (Jobs register):** owner-drawn rows of 26 px, white background, 1 px `gl-rule-light`
   separators. Header row in `gl-gray` with Plex Mono 12 UPPERCASE captions and a `gl-rule` bottom
   border. Selected row is `gl-blue` background with white text. Numbers, sizes, speeds, ETAs and
