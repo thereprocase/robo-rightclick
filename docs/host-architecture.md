@@ -4,10 +4,12 @@ The Windows host, `src/RoboRightClick`, and the Core contracts it depends on. Th
 implements is docs/design.md; the decisions there are fixed. This document makes them
 precise enough that several people can each own a set of files and build in parallel.
 
-**Status:** the skeleton cross-compiles. Nothing in the host has run on Windows. Runtime facts
-cited below come from docs/testlog.md (2026-10-02, M0 spikes 2-4). Everything else is a
-design claim until a testlog entry says otherwise. Section 15 records the architecture review
-of 2026-10-02: which findings changed this design and which were declined, with reasons.
+**Status:** the host is implemented end to end (the nine work packages of section 13 are
+merged) and cross-compiles. Nothing in the host has run on Windows. Runtime facts cited below
+come from docs/testlog.md (2026-10-02, M0 spikes 2-4). Everything else is a design claim until
+a testlog entry says otherwise. Section 15 records the architecture review of 2026-10-02:
+which findings changed this design and which were declined, with reasons. Section 16 records
+where the merged implementation settled questions the packages raised.
 
 ## 1. Component map
 
@@ -98,11 +100,18 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `TrayStatus.cs` | `JobSnapshot` (incl. refusals, damage, failure, wait, cancel); tray state, tooltip. | implemented, tested |
 | `ToastText.cs` | Job toasts (path-free in ephemeral), refusal and settings toasts. | implemented, tested |
 | `DisplayText.cs` | Sizes, speed, durations, source summaries. | implemented, tested |
-| `JobScan.cs` | `IScanFacts`, `ScanResult`; `JobScanner.Scan`. | contract only |
-| `ConflictDecisions.cs` | `ExecutionPlan`; `ExecutionPlanner.Apply` (exclusion by construction). | contract only |
-| `StepLedger.cs` | Planned vs reported reconciliation for progress, cancel, retry, summary. | contract only |
-| `JobOutcome.cs` | `StepOutcome`, `FinalState` (tested); `FailureText`, `RetryPlanner`. | partly contract |
-| `JobRecords.cs` | job.json and history.jsonl formats; `LastState`. | contract only |
+| `JobScan.cs` | `IScanFacts`, `ScanResult` (`StepScan.Directories` recreates empty folders of a split tree); `JobScanner.Scan`, `FileInTheWayReason`. | implemented, tested, sabotage-checked |
+| `ConflictDecisions.cs` | `ExecutionPlan`; `ExecutionPlanner.Apply` (exclusion by construction); the one command-line chunking rule. | implemented, tested, sabotage-checked |
+| `StepLedger.cs` | Planned vs reported reconciliation for progress, cancel, retry, summary; in-process completed / re-planned / refused. | implemented, tested, sabotage-checked |
+| `JobOutcome.cs` | `StepOutcome`, `FinalState`, `FailureText`, `RetryPlanner`. | implemented, tested, sabotage-checked |
+| `JobRecords.cs` | job.json and history.jsonl formats; `LastState`. | implemented, tested |
+| `Utf16Lines.cs` | Incremental UTF-16LE line splitter for the pipe (`MaxLineChars`, shared with `RobocopyPipe`). | implemented, tested |
+| `JobScheduler.cs` | Which queued jobs start, in click order (`JobQueuePolicy` over the manager's states). | implemented, tested |
+| `VerbRules.cs` | Selection, paste-destination and clipboard refusals; bounded ANSI `DROPFILES` splitter. | implemented, tested |
+| `UninstallPlan.cs` | Exactly which files and folders uninstall removes; the validated self-delete command. | implemented, tested, sabotage-checked |
+| `ConflictSelection.cs`, `JobStateText.cs`, `ProgressWindowPolicy.cs`, `ToastBatch.cs` | Conflict-dialog ticks, state wording, when a progress window opens or turns into the summary, toast coalescing. | implemented, tested |
+| `StartupRules.cs` | Tray start, exit, menu state, startup toast choice, conflict-to-front. | implemented, tested |
+| `WinPath.cs` | Windows path rules as strings, incl. `ExtendedLengthPath` / `StripVerbatimPrefix` for raw Win32 calls. | implemented, tested |
 
 ## 2. Threading model
 
@@ -179,14 +188,17 @@ All three are design claims until the spike in section 12 runs.
    CLSCTX_LOCAL_SERVER, REGCLS_MULTIPLEUSE | REGCLS_SUSPENDED)` for all three, then
    `CoResumeClassObjects`, then `SingleInstance.SignalReady`.
 2. Not running: COM starts `"<exe>" -Embedding`, which parses to `CliRunTray(StartedByCom: true)`;
-   the tray starts normally and stays resident. If a Run-key start won the mutex race, the
-   `-Embedding` instance waits up to 10 s for the ready event and exits 0.
+   the tray starts normally and stays resident. If another tray holds the mutex, the
+   `-Embedding` instance polls for up to 10 s (`SingleInstance.WaitForReadyOrAcquire`): the
+   other tray's ready event set means exit 0; the mutex released (that tray was shutting down
+   and cleared its ready event when it revoked) means take it and become the server.
 3. Explorer: `CreateInstance` → (`IInitializeCommand::Initialize`) → `SetSelection` → setters →
    `Execute`. `Execute` checks the caller, reads all paths (`ShellSelection.ReadPaths`: one
    `BindToHandler(BHID_DataObject)` + `CF_HDROP` read; per-item fallback), releases the
    array, calls `IVerbHandler.Invoke`, returns `S_OK`.
 4. No exception crosses the COM boundary; every implementation catches and returns an HRESULT.
-5. Exit: revoke first, then cancel jobs, then release the single-instance mutex.
+5. Exit: revoke first and clear the ready event, close open conflict questions, then cancel
+   jobs, then release the single-instance mutex.
 
 The pattern (DelegateExecute to an out-of-process local server) is Microsoft's
 `ExecuteCommandVerb` sample (Windows-classic-samples, Win7Samples/winui/shell/appshellintegration),
@@ -235,17 +247,24 @@ is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
   about one second of retries gives a `ClipboardBusy` toast.
 - **Robo-Paste:** destination = `ShellVerbs.PasteDestination(selection)`.
   `ClipboardService.ReadFilesAsync` reads `CF_HDROP` (Core decoder with size and count limits;
-  `DragQueryFileW` for ANSI under the same limits), `Preferred DropEffect` and then the sequence
-  number, inside one `OpenClipboard`. Verb = `ClipboardPayload.VerbForPaste` (move only for a
-  pure move marker). A move where every source's parent is the destination is Explorer's
+  a name without its terminator refuses the whole block; the ANSI form through Core's bounded
+  `VerbRules.SplitAnsiDropFiles` plus `MultiByteToWideChar(CP_ACP)` under the same limits),
+  `Preferred DropEffect` and then the sequence number, inside one `OpenClipboard`. The service
+  also classifies the read (`VerbRules.ClassifyClipboard`), because only it sees whether a
+  Shell IDList Array or file-group descriptor is present, and returns a refusal or files.
+  Verb = `ClipboardPayload.VerbForPaste` (move only for a pure move marker). A move where every source's parent is the destination is Explorer's
   no-op and does nothing. Otherwise `JobManager.Enqueue(PasteOrder, cut ? sequence : null)`;
   everything that touches the disk happens later, in Scanning, on a worker thread.
 - **Refusals** (`VerbRefusal`): empty clipboard, virtual items, too large, busy, no
   file-system destination, several destinations, non-file selection, same cut already being
-  pasted. Each has one fixed, path-free sentence in `ToastText.ForRefusal`.
-- **After a cut-paste ends `Done` with at least one item moved:** `ClearIfUnchanged(sequence)`
-  opens the clipboard, compares, then empties. A newer clipboard write by anyone is left alone.
+  pasted, and `Failed` (a verb threw; the dispatcher logs the exception type only). Each has
+  one fixed, path-free sentence in `ToastText.ForRefusal`.
+- **After a cut-paste ends `Done` with at least one item moved:** `ClearIfUnchangedAsync(sequence)`
+  compares the sequence number, opens the clipboard (retried with awaited delays for about a
+  second), compares again, then empties. A newer clipboard write by anyone is left alone.
   `DoneWithErrors` keeps the clipboard (its sources still exist).
+- Robo-Copy writes any number of paths, as Explorer's Ctrl+C does; Robo-Paste refuses more
+  than `ClipboardPayload.MaxDropFilesPaths`. Refusing at copy time is a product decision left open.
 
 ## 6. Job engine contracts
 
@@ -289,39 +308,67 @@ Step execution:
   `JobProgress.ResetRate` on resume; no speed while paused.
 - `RenameStep` and a same-volume keep-both cut → `MoveFileEx(src, dst, 0)` for files and folders.
   It never copies across volumes or overwrites. `ERROR_NOT_SAME_DEVICE` sets
-  `StepOutcome.ReplanAsMove`: the item is scanned again and appended as a robocopy move with
-  policy Skip. `File.Move` would silently copy and delete across volumes, an app-initiated
-  source deletion that invariant 1 forbids.
+  `StepOutcome.ReplanAsMove` (`StepLedger.InProcessReplannedAsMove`): after the plan's steps,
+  the re-planned items are scanned again and run as a **second ledger part**, an
+  `ExecutionPlan` with its own `StepLedger` (a ledger is bound to one fixed plan), planned with
+  Ask and `SkipAll` so kept names are left out by construction and late arrivals are skipped.
+  Progress, cancel cleanup, retry and the summary read both parts. A keep-both cut, or a
+  directory link, whose rename turns out to cross volumes is **refused**
+  (`StepLedger.InProcessRefused`, a plan issue), never moved by robocopy: robocopy cannot
+  write under the keep-both name, and it follows a link given as its source root.
+  `File.Move` would silently copy and delete across volumes, an app-initiated source deletion
+  that invariant 1 forbids.
 - `DuplicateFileStep`, copy-mode `KeepBothStep` → `CopyFileEx(COPY_FILE_FAIL_IF_EXISTS)`.
 - **Cancel** (any state before Finalizing): `CancelRequested` at once; kill robocopy and wait;
   then `CancelCleanup.Select(ledger.StartedRobocopyFiles, ledger.CompletedSources, presence set,
-  move, sourceStillExists, claimedByOtherJob)` and delete each `Delete` entry if present, opening
-  it with `FILE_FLAG_OPEN_REPARSE_POINT` and refusing a reparse point. Skipped entirely when the
-  ledger found robocopy's paths unreliable. Rules (each tested, each test seen failing with the
+  move, sourceStillExists, claimedByOtherJob)` and delete each `Delete` entry if present through
+  `ProcessNative.DeleteFileIfNotReparsePoint`: one handle opened with `FILE_FLAG_OPEN_REPARSE_POINT`
+  (no backup semantics, so a folder does not open), attributes checked on that handle, deleted
+  with `FileDispositionInfo` on the same handle; no check-then-delete window. Skipped entirely
+  when the ledger found robocopy's paths unreliable. Cleanup cannot tell an in-flight partial
+  from a file that appeared at the destination after the step's presence check and that
+  robocopy skipped silently; both are deleted if the run was killed (a narrow race, listed in
+  section 16). Rules (each tested, each test seen failing with the
   rule removed): reported-complete files stay; files present before their step are never
   deleted; files another job of this session planned or wrote are never deleted; for a cut, a
   destination whose source is gone stays. `LeftInPlace` becomes `JobSnapshot.DamagedOnCancel`
   (attention, toast, "Finish replacing them").
 - **Errors** → `DoneWithErrors`; "Try again (N)" = `JobManager.Retry(parent)` →
-  `RetryPlanner.ForFailures(plan, ledger.Retryable, ledger.FailedInProcessSteps)`; a child
-  job with `ParentId`, logging mode `JobSinks.ForDerivedJob(parent, current)`; its Scanning
-  only refreshes totals and presence and never prompts. A `Failed` job's "Try again" is
-  `JobManager.Rerun` (the original order, full re-scan). Refusals are not retryable and are
-  counted separately (`RefusedCount`).
+  `RetryPlanner.ForFailures(plan, ledger.Retryable, ledger.FailedInProcessSteps)` per ledger
+  part; a child job with `ParentId`, logging mode `JobSinks.ForDerivedJob(parent, current)`;
+  its Scanning only refreshes totals and presence and never prompts. Only robocopy steps'
+  files are retried file by file (a keep-both or duplicate retried as robocopy would be written
+  under the source name over the file the user kept); failed in-process steps repeat whole. A
+  `Failed` job's "Try again" is `JobManager.Rerun` (the original order, full re-scan), and so is
+  a `DoneWithErrors` job whose ledger found robocopy's paths unreliable: re-running a recursive
+  `/MOVE` step under Replace is not safe, so the whole paste is scanned and asked about again.
+  Refusals are not retryable and are counted separately (`RefusedCount`).
+- **Late arrivals** (files skipped because their name appeared after the scan) are not errors;
+  they are counted in `JobSnapshot.SkippedAppeared`, and a `Done` job with any opens the
+  summary so the user sees which ones (`ProgressWindowPolicy.OnTerminal`).
 - **Invariant 1:** the job never deletes a source. Only robocopy `/MOV`/`/MOVE` and renames
   move anything.
 
 ## 7. UI surfaces
 
 - **Progress window** (per job, `showProgressWindow`, default on): Explorer's copy dialog
-  counterpart, opened about one second after the job is created. It closes on Done and turns
-  into the error summary on DoneWithErrors, Failed or a damaging cancel. It owns the job's
-  conflict dialog, which is how that dialog reaches the front.
+  counterpart, opened about one second after the job is created (or straight into the summary
+  when the job already ended needing the user). It closes on Done and turns into the error
+  summary on DoneWithErrors, Failed, a damaging cancel or a Done with late arrivals. It owns
+  the job's conflict dialog, which is how that dialog reaches the front. A pause latched before
+  Running shows as "Paused (waiting)" in every window (`JobSnapshot.PauseRequested`).
+- **Error summary** lists retryable errors, refused items with their reasons, files a cancel
+  left partly replaced and late arrivals, each per item (`JobManager.ErrorsOf`, `IssuesOf`,
+  `DamagedOf`, `SkippedAppearedOf`; first 1,000 of each, exact counts from the snapshot). Only
+  Skip or Try again acknowledges a job; closing the summary keeps its attention state.
 - **Tray** (`TrayApplication`): icon and tooltip from `TrayStatus.Derive(snapshots, mode)`
   (attention > running > paused > idle; tooltip ≤ 127 chars). Left click and double click open
   Jobs. Menu: Jobs…, Pause all (checked while on), Resume all, Ephemeral mode (check),
-  Settings…, Open logs (hidden in ephemeral), Exit (confirms when jobs are active). First run
-  shows a one-time hint about pinning the tray icon.
+  Settings…, Open logs (hidden in ephemeral), Exit (confirms when jobs are active, with the
+  Gridline confirmation). The installer starts the tray with `--after-install`; that start,
+  and only that one, shows the hint about pinning the tray icon (`StartupRules.PickStartupToast`).
+  Settings are saved off the UI thread (`SettingsStore.SaveAsync`); a reload re-runs the
+  start queue (`JobManager.SettingsChanged`).
 - **Jobs window**, **Settings window**, **Conflict dialog**, **Error summary**: specified in
   the doc comments of their files. All built in code, no designer files or resources. Dialogs
   are modeless, because several jobs can ask at once; titles name their job.
@@ -358,8 +405,9 @@ Step execution:
 |---|---|
 | *(none)* | Tray. From outside the install folder: offer to install instead. |
 | `-Embedding` | Tray started by COM. |
-| `--install [--autostart \| --no-autostart]` | Install (section 10). |
-| `--uninstall` | Uninstall (section 10). |
+| `--install [--autostart \| --no-autostart] [--quiet]` | Install (section 10). `--quiet`: no message box, exit code only. Repeated or contradictory options are refused. |
+| `--uninstall [--quiet]` | Uninstall (section 10). |
+| `--after-install` | Tray started by the installer: shows the first-run hint once. Not meant for users. |
 | `copy <path>...`, `cut <path>...`, `paste <folder>` | `ComClient.Invoke`: `CoCreateInstance(CLSCTX_LOCAL_SERVER)` on the verb's CLSID, `CoAllowSetForegroundWindow`, `SetSelection(SHCreateShellItemArrayFromIDLists(SHParseDisplayName(...)))`, `Execute`. The same path as a right-click, started by the CLI process instead of Explorer. Returns when the verb is accepted. |
 
 Exit codes: 0 ok, 1 failed, 2 usage. The exe is a GUI-subsystem program, so shells do not
@@ -373,10 +421,12 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
   default config.json only if absent (or apply an explicit autostart flag to the existing one)
   → start the installed tray → message.
 - `--uninstall`: stop the tray → remove `Registration.UninstallRemovals()` → delete exactly the
-  known files (config, history, each job folder's two files), then `RemoveDirectory` on each
-  folder after checking its leaf name and that it is not a reparse point → the install folder
-  via `%SystemRoot%\System32\cmd.exe` (absolute path, validated arguments) when running from
-  it. Nothing outside `AppPaths` and the registry list; never a blind recursive delete.
+  known files (`UninstallPlan`: config.json and its `.bad` and `.tmp`, history and its rotated
+  file, each job folder's job.json, robocopy.log and a leftover job.json.tmp), then
+  `RemoveDirectory` on each folder after checking its leaf name and that it is not a reparse
+  point → the install folder via `%SystemRoot%\System32\cmd.exe` (absolute path, validated
+  arguments, its one-second sleep `PING.EXE` also by absolute path) when running from it.
+  Nothing outside `AppPaths` and the registry list; never a blind recursive delete.
 - No Explorer setting, no Explorer restart, no admin rights.
 - DLL search: `[assembly: DefaultDllImportSearchPaths(System32)]` and
   `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32)` first in `Main`, so a DLL planted
@@ -417,6 +467,13 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | HKCU AppID `AccessPermission`/`LaunchPermission` are honored, and do not break Explorer's activation | **unverified** (security spike) |
 | Explorer allows the tray to take foreground (conflict dialog, progress window) | **unverified** (spike 1) |
 | Remote clients are refused by the output pipe | **unverified** |
+| Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | **unverified** |
+| `DeleteFileIfNotReparsePoint` (handle-based delete, read-only cleared first) deletes partial files and refuses links and folders | **unverified** |
+| A losing `-Embedding` start takes over from a tray that is shutting down (`WaitForReadyOrAcquire`) | **unverified** |
+| `ShutdownBlockReasonCreate` on a hidden, never-shown top-level window vetoes sign-out with the reason shown | **unverified** |
+| No WER report after `TerminateProcess` while ephemeral jobs run (machine-wide LocalDumps aside) | **unverified** |
+| Rename and `CopyFileEx` on paths over 260 characters with the extended-length prefix | **unverified** |
+| Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | **unverified** |
 | `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | **unverified** |
 | Explorer ghosts icons after a Robo-Cut clipboard write | **unverified** (M0 spike 5) |
 | Robocopy `/MOV` deletes the source of a "same" file it skipped | **unverified**; the design no longer depends on it either way |
@@ -427,7 +484,10 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 
 ## 13. Work packages (disjoint file ownership)
 
-The beta's remaining work is split into nine packages that can be built in parallel in separate
+Historical: all nine packages were merged into main on 2026-10-02 and their contract change
+requests applied (section 16). The table records who owned what during the parallel build.
+
+The beta's remaining work was split into nine packages that could be built in parallel in separate
 worktrees. Each owns its files exclusively; everything else is read-only to it. Contracts
 between packages are the types in the skeleton. A package that needs a contract changed stops
 and asks rather than editing a file it does not own.
@@ -510,3 +570,39 @@ Declined, with reasons:
 | Compact relative-path storage in the scan, and not materializing planned files | The ledger, cancel cleanup and retry need per-file data. Memory is about 50 MB per 100k files; revisit when measured (open question 7). |
 | Remove empty source folders after a successful retry of a cut | An app-initiated deletion in the source tree; needs an ADR under invariant 1. Recorded as a deviation instead. |
 | `WerAddExcludedApplication` to keep crash reports off | It writes an HKCU value outside the install footprint (invariant 4). `CrashPolicy` avoids WER while ephemeral jobs run without touching the registry. |
+
+## 16. Merge record (2026-10-02)
+
+Questions the parallel packages raised, and how the merged code answers them.
+
+| Question | Settled as |
+|---|---|
+| How are robocopy moves that replace failed renames tracked? | A second ledger part (own `ExecutionPlan` + `StepLedger`); no ledger append API (section 6). |
+| Retry when `PathsUnreliable` | `JobManager.Retry` re-runs the whole paste (`Rerun`); no whole-step retry API. |
+| Which in-process steps does "Try again" repeat? | `StepLedger.FailedInProcessSteps`; the job reports re-planned and refused steps to the ledger. |
+| `ConflictScan.Resolve` vs the planner's per-step policy | The planner decides per step; `Resolve` is the job-wide answer only. |
+| `StepOutcome.Failure` text | One path-free sentence from its producer; `FailureText` filters again. |
+| `IJobSink` call order | Documented on the interface; the job disposes a disposable sink after `JobFinished`. |
+| Pause latched before Running, refused items, damaged files, late arrivals in the UI | `JobSnapshot.PauseRequested` / `SkippedAppeared`; `JobManager.IssuesOf` / `DamagedOf` / `SkippedAppearedOf`. |
+| `JobSnapshot.Acknowledged` vs `ErrorSummaryChoice.None` | Only Skip or Try again acknowledge. |
+| Conflict dialog: both boxes ticked where keep-both is not allowed | Skip (keep the destination the user ticked); the dialog makes the boxes exclusive there. |
+| Tray icon tint | Gridline tokens (ink tile, gray frame for ephemeral), not a violet ring. |
+| First-run hint | `--after-install` from the installer; no marker file. |
+| Whole-file config failure | `SettingsLoadResult.Unreadable`. |
+| Extended-length paths | Core `WinPath.ExtendedLengthPath` / `StripVerbatimPrefix`, tested. |
+
+Known gaps carried into the Windows phase:
+
+- Cancel cleanup cannot tell a partial file from a late arrival robocopy skipped silently in
+  the same killed run (section 6).
+- `CF_HDROP` size is not capped on Robo-Copy; Robo-Paste refuses past its limit.
+- An oversized selection makes `Execute` return `E_FAIL` without a toast; no COM call timeout
+  guards against a hostile in-process `IShellItemArray` that blocks.
+- The first-run install offer (`Installer.OfferInstall`) uses the native TaskDialog, before any
+  Gridline font is loaded.
+- Hand edits of `startWithWindows` reload the setting but do not rewrite the Run value; only a
+  save from the app does.
+- `scripts/publish.sh` publishes without `-r win-x64` and with the single-file analyzer off,
+  because the lockfiles carry no runtime identifier and the ILLink package is not in them.
+  Changing either is a separate, reviewed dependency commit.
+
