@@ -31,7 +31,8 @@ internal static class Installer
         "RoboRightClick is still running and has jobs in progress. Finish or cancel them, then try again.";
 
     private const string NewerConfigKeptMessage =
-        "config.json was written by a newer version of RoboRightClick and was left unchanged; "
+        "config.json was written by a newer version of RoboRightClick, or its \"version\" field is damaged, "
+        + "so it was left unchanged; "
         + "the start-with-Windows choice applies to the registry only.";
 
     /// <summary>
@@ -273,7 +274,7 @@ internal static class Installer
     /// <summary>
     /// Writes config.json as described on <see cref="Install"/>. Returns false when an
     /// explicit autostart choice was not written because the file comes from a newer version
-    /// (<see cref="SettingsSerializer.MayOverwrite"/>): the Run value still follows the
+    /// or its version cannot be read (<see cref="SettingsSerializer.MayOverwrite"/>): the Run value still follows the
     /// choice, the file stays exactly as the newer version left it.
     /// </summary>
     private static bool WriteConfig(

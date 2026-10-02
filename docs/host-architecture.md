@@ -241,7 +241,8 @@ docs/parity.md). The `Directory\Background` key has no `MultiSelectModel`
 (`ShellVerbs.MultiSelectModelFor`): a background click selects nothing, and with `Single`
 Explorer hid the item (testlog 2026-10-02). Autostart on
 reinstall comes from `Registration.ResolveStartWithWindows`: an explicit `--autostart` /
-`--no-autostart` wins (and is written to config.json, unless a newer version wrote that file),
+`--no-autostart` wins (and is written to config.json, unless a newer version wrote that file
+or its version cannot be read: `SettingsSerializer.MayOverwrite`),
 otherwise the existing config's choice is kept. Each verb key carries the `Icon` value in the
 table above since commit e13fa37. Whether Explorer shows those icons is unverified on Windows:
 the 2026-10-02 session ran earlier builds, which wrote no `Icon` value, and saw none.

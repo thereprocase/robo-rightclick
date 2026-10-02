@@ -80,26 +80,84 @@ public class SchemaVersionTests
     [InlineData("not json")]
     [InlineData("[1, 2]")]
     [InlineData("""{ "version": 1 }""")]
-    [InlineData("""{ "version": "2" }""")]
-    [InlineData("""{ "version": 0 }""")]
-    [InlineData("""{ "version": -3 }""")]
-    [InlineData("""{ "version": 2.5 }""")]
-    public void Anything_but_a_newer_version_number_may_be_overwritten(string? existing)
+    [InlineData("""{ "threads": 4 }""")]
+    public void Missing_unreadable_and_current_version_files_may_be_overwritten(string? existing)
     {
-        // Missing files, unreadable files (kept as .bad first) and damaged version fields
-        // are this version's to repair; only an integer above the current version is not.
+        // A missing file, a file that is not a JSON object (kept as .bad first), and files of
+        // this version or none are this version's to write.
         Assert.True(SettingsSerializer.MayOverwrite(existing));
     }
 
     [Theory]
     [InlineData("""{ "version": "2" }""")]
+    [InlineData("""{ "version": "1" }""")]
     [InlineData("""{ "version": 0 }""")]
+    [InlineData("""{ "version": -3 }""")]
+    [InlineData("""{ "version": 2.5 }""")]
+    [InlineData("""{ "version": 2.0, "future": 1 }""")]
+    [InlineData("""{ "version": 1.0 }""")]
+    [InlineData("""{ "version": 1e3 }""")]
+    [InlineData("""{ "version": 2147483648 }""")]
+    [InlineData("""{ "version": 3000000000 }""")]
     [InlineData("""{ "version": null, "threads": 4 }""")]
-    public void A_damaged_version_field_falls_back_like_any_field(string text)
+    [InlineData("""{ "version": true }""")]
+    [InlineData("""{ "version": { "major": 2 } }""")]
+    public void A_version_that_cannot_be_read_is_never_overwritten(string text)
     {
+        // It may come from a newer version, as an unreadable job.json version does
+        // (JobRecords.IsNewerVersion): refusing costs a manual fix, saving over it loses data.
         var result = SettingsSerializer.Parse(text);
+        Assert.Null(result.Version);
+        Assert.True(result.SavesRefused);
         Assert.False(result.WrittenByNewerVersion);
-        Assert.Equal(SettingsSerializer.CurrentVersion, result.Version);
+        Assert.False(SettingsSerializer.MayOverwrite(text));
+
+        var problem = Assert.Single(result.Problems, p => p.Contains("'version'"));
+        Assert.Contains("left unchanged", problem);
+    }
+
+    [Fact]
+    public void A_version_that_cannot_be_read_still_loads_the_known_settings()
+    {
+        var result = SettingsSerializer.Parse("""{ "version": 2.0, "threads": 16, "someFutureSetting": 1 }""");
+        Assert.Equal(16, result.Settings.Threads);
+        Assert.Single(result.Problems);
+    }
+
+    [Theory]
+    // No file, or the file as it is now: what is on disk decides, whatever the last load saw.
+    [InlineData(null, false, false, true)]
+    [InlineData(null, false, true, true)]
+    [InlineData("""{ "version": 1 }""", false, true, true)]
+    [InlineData("""{ "version": 2 }""", false, false, false)]
+    [InlineData("""{ "version": "x" }""", false, false, false)]
+    // The file exists but cannot be read now: the last load decides.
+    [InlineData(null, true, false, true)]
+    [InlineData(null, true, true, false)]
+    public void A_save_checks_the_file_on_disk_and_falls_back_to_the_last_load(string? onDisk, bool readFailed, bool lastLoadRefused, bool expected)
+    {
+        Assert.Equal(expected, SettingsSerializer.MaySave(onDisk, readFailed, lastLoadRefused));
+    }
+
+    [Fact]
+    public void The_save_refusal_names_both_causes_and_both_ways_out()
+    {
+        Assert.Contains("newer version", SettingsSerializer.NewerVersionSaveRefusal);
+        Assert.Contains("damaged", SettingsSerializer.NewerVersionSaveRefusal);
+        Assert.Contains("delete config.json", SettingsSerializer.NewerVersionSaveRefusal);
+    }
+
+    [Fact]
+    public void The_settings_toast_does_not_send_the_user_to_a_Settings_window_that_cannot_save()
+    {
+        var problems = SettingsSerializer.Parse("""{ "version": 2 }""").Problems;
+
+        var refused = ToastText.ForSettingsProblems(problems, savesRefused: true);
+        Assert.DoesNotContain("Open Settings to fix", refused.Body);
+        Assert.Contains("delete config.json", refused.Body);
+        Assert.Contains("newer version", refused.Body);
+
+        Assert.EndsWith("Open Settings to fix.", ToastText.ForSettingsProblems(["'retries' must be an integer"]).Body);
     }
 
     [Fact]

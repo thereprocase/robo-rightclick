@@ -207,9 +207,11 @@ public static class ToastText
 
     /// <summary>
     /// Path-free in every mode: setting names only. Shows the first problem so the user
-    /// knows what to fix; Settings lists the rest.
+    /// knows what to fix; Settings lists the rest. When this version may not save over the
+    /// file (<paramref name="savesRefused"/>, <see cref="SettingsLoadResult.SavesRefused"/>),
+    /// Settings cannot fix it, so the toast names the steps that can instead.
     /// </summary>
-    public static Toast ForSettingsProblems(IReadOnlyList<string> problems)
+    public static Toast ForSettingsProblems(IReadOnlyList<string> problems, bool savesRefused = false)
     {
         var first = problems.Count > 0 ? problems[0] : "a setting was invalid";
         var more = problems.Count switch
@@ -218,6 +220,9 @@ public static class ToastText
             2 => " (and 1 more)",
             _ => $" (and {problems.Count - 1} more)",
         };
-        return new Toast("Settings problem", $"config.json: {first}{more}. Open Settings to fix.", ToastKind.Warning);
+        var next = savesRefused
+            ? "Settings cannot save over this file; install the newer version, or delete config.json to start from the defaults."
+            : "Open Settings to fix.";
+        return new Toast("Settings problem", $"config.json: {first}{more}. {next}", ToastKind.Warning);
     }
 }

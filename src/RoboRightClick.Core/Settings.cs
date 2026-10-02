@@ -78,8 +78,12 @@ public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string>
     /// </summary>
     public bool Unreadable { get; init; }
 
-    /// <summary>The format version the file declares; a file without one is version 1.</summary>
-    public int Version { get; init; } = SettingsSerializer.CurrentVersion;
+    /// <summary>
+    /// The format version the file declares; a file without one is version 1. Null when the
+    /// field is present but not a positive integer this version can read ("2", 2.0, 0, a
+    /// number past int.MaxValue): such a file may come from any version.
+    /// </summary>
+    public int? Version { get; init; } = SettingsSerializer.CurrentVersion;
 
     /// <summary>
     /// The file comes from a newer RoboRightClick (after a downgrade). Its known fields are
@@ -87,6 +91,14 @@ public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string>
     /// know, and the newer version would lose them.
     /// </summary>
     public bool WrittenByNewerVersion => Version > SettingsSerializer.CurrentVersion;
+
+    /// <summary>
+    /// Nothing may save over this file: it comes from a newer version, or its version cannot
+    /// be read and so it may. Refusing costs one manual step (fix the field or delete the
+    /// file); saving over a newer file loses its settings for good. This matches job.json,
+    /// where an unreadable version also counts as newer (<see cref="JobRecords.IsNewerVersion"/>).
+    /// </summary>
+    public bool SavesRefused => Version is not { } version || version > SettingsSerializer.CurrentVersion;
 }
 
 /// <summary>
@@ -106,8 +118,9 @@ public static class SettingsSerializer
 
     /// <summary>Why a save was refused (<see cref="MayOverwrite"/>); path-free, shown in a message box or the Settings window.</summary>
     public const string NewerVersionSaveRefusal =
-        "config.json was written by a newer version of RoboRightClick, so this version does not save over it. "
-        + "Install the newer version to change settings, or delete config.json to start again from the defaults.";
+        "config.json was written by a newer version of RoboRightClick, or its \"version\" field is damaged, "
+        + "so this version does not save over it. Install the newer version to change settings, "
+        + "or delete config.json to start again from the defaults.";
 
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
@@ -132,9 +145,14 @@ public static class SettingsSerializer
             return new(Settings.Default, ["config is not a JSON object; using defaults"]) { Unreadable = true };
         }
 
-        var version = ReadVersion(root, problems);
-        var newer = version > CurrentVersion;
-        if (newer)
+        var version = ReadVersion(root);
+        var savesRefused = version is not { } known || known > CurrentVersion;
+        if (version is null)
+        {
+            problems.Add($"'{VersionKey}' is not a format version this one reads (a positive integer); "
+                + "the settings this version knows are used and the file is left unchanged");
+        }
+        else if (version > CurrentVersion)
         {
             problems.Add($"written by a newer version of RoboRightClick (format {version}, this one reads {CurrentVersion}); "
                 + "the settings this version knows are used and the file is left unchanged");
@@ -157,9 +175,9 @@ public static class SettingsSerializer
             ExtraArgs = ReadExtraArgs(root, problems),
         };
 
-        // A newer file is expected to hold settings this version does not know; the one
-        // problem about its version covers them.
-        if (!newer)
+        // A newer file is expected to hold settings this version does not know, and so may a
+        // file whose version cannot be read; the one problem about its version covers them.
+        if (!savesRefused)
         {
             foreach (var property in root)
             {
@@ -173,12 +191,23 @@ public static class SettingsSerializer
     }
 
     /// <summary>
-    /// Whether a save may replace the config text now on disk (null: no file). False only
-    /// for a file a newer version wrote; an unreadable file may be replaced, because the
-    /// store keeps a .bad copy of it first.
+    /// Whether a save may replace the config text now on disk (null: no file). False for a
+    /// file whose version is newer or unreadable (<see cref="SettingsLoadResult.SavesRefused"/>);
+    /// a file that is not JSON at all may be replaced, because the store keeps a .bad copy
+    /// of it first.
     /// </summary>
     public static bool MayOverwrite(string? existingText) =>
-        existingText is null || !Parse(existingText).WrittenByNewerVersion;
+        existingText is null || !Parse(existingText).SavesRefused;
+
+    /// <summary>
+    /// The settings store's decision before every save. The file as it is now decides
+    /// (<paramref name="textOnDisk"/>, null when there is none): a newer version may have
+    /// written it since the last load, and a user may have deleted a newer file to start over.
+    /// Only when it exists but cannot be read does the last load decide
+    /// (<paramref name="lastLoadRefusedSaves"/>, its <see cref="SettingsLoadResult.SavesRefused"/>).
+    /// </summary>
+    public static bool MaySave(string? textOnDisk, bool onDiskReadFailed, bool lastLoadRefusedSaves) =>
+        onDiskReadFailed ? !lastLoadRefusedSaves : MayOverwrite(textOnDisk);
 
     public static string Serialize(Settings s)
     {
@@ -220,22 +249,23 @@ public static class SettingsSerializer
     public const string ThreadsAuto = "auto";
 
     /// <summary>
-    /// "version": missing means 1 (files from before the field existed). Anything that is not
-    /// a positive integer is a damaged field, read as the current version, the way any other
-    /// field falls back to its default.
+    /// "version": missing means 1 (files from before the field existed). Present but not a
+    /// positive JSON integer within int range (null, a string, 2.0, 0, 3000000000) means
+    /// null: unlike other fields it does not fall back to a default, because the default
+    /// would allow saving over a file that a newer version may have written.
     /// </summary>
-    private static int ReadVersion(JsonObject root, List<string> problems)
+    private static int? ReadVersion(JsonObject root)
     {
-        if (!root.TryGetPropertyValue(VersionKey, out var node) || node is null)
+        if (!root.TryGetPropertyValue(VersionKey, out var node))
         {
             return 1;
         }
-        if (node is JsonValue v && v.TryGetValue<int>(out var version) && version >= 1)
-        {
-            return version;
-        }
-        problems.Add($"'{VersionKey}' must be a positive integer; read as {CurrentVersion}");
-        return CurrentVersion;
+        return node is JsonValue v
+            && v.GetValueKind() == JsonValueKind.Number
+            && v.TryGetValue<int>(out var version)
+            && version >= 1
+                ? version
+                : null;
     }
 
     /// <summary>"threads" is either "auto" or a fixed count; anything else falls back to auto.</summary>

@@ -392,7 +392,7 @@ internal sealed class TrayApplication : ApplicationContext
             return false;
         }
         _toastedProblems = problems;
-        _notifier.Show(ToastText.ForSettingsProblems(problems), ToastTarget.Settings);
+        _notifier.Show(ToastText.ForSettingsProblems(problems, _settings.SavesRefused), ToastTarget.Settings);
         return true;
     }
 
