@@ -17,6 +17,7 @@ public class SettingsTests
         Assert.Equal(LoggingMode.Normal, d.Logging);
         Assert.Equal(ExtraArgs.None, d.ExtraArgs);
         Assert.True(d.ShowProgressWindow);
+        Assert.Equal("Ctrl+Shift+V", d.PasteHotkey?.Format());
     }
 
     [Fact]
@@ -36,6 +37,7 @@ public class SettingsTests
             NotifyOnComplete = false,
             ShowProgressWindow = false,
             ExtraArgs = new ExtraArgs("/J", "/Z /IORATE:50M"),
+            PasteHotkey = HotkeySpec.Parse("Ctrl+F9").Spec,
         };
 
         var result = SettingsSerializer.Parse(SettingsSerializer.Serialize(s));
