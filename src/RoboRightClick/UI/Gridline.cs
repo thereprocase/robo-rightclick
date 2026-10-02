@@ -200,6 +200,24 @@ internal static class Gridline
         g.DrawLine(light, r.Right - 1, r.Top, r.Right - 1, r.Bottom - 1);
     }
 
+    /// <summary>
+    /// The frame of an editable field: the inset bevel's dark top and left with a darker inner
+    /// line, and a mid-grey bottom and right. The inset's white edges vanish where a field sits
+    /// on a white pane, which left text fields drawn as open corners.
+    /// </summary>
+    public static void DrawField(Graphics g, Rectangle r)
+    {
+        using var dark = new Pen(BevelDark);
+        using var darker = new Pen(BevelDarker);
+        using var mid = new Pen(BevelMid);
+        g.DrawLine(dark, r.Left, r.Top, r.Right - 1, r.Top);
+        g.DrawLine(dark, r.Left, r.Top, r.Left, r.Bottom - 1);
+        g.DrawLine(darker, r.Left + 1, r.Top + 1, r.Right - 2, r.Top + 1);
+        g.DrawLine(darker, r.Left + 1, r.Top + 1, r.Left + 1, r.Bottom - 2);
+        g.DrawLine(mid, r.Left, r.Bottom - 1, r.Right - 1, r.Bottom - 1);
+        g.DrawLine(mid, r.Right - 1, r.Top, r.Right - 1, r.Bottom - 1);
+    }
+
     /// <summary>Dotted 1 px ink focus rectangle, inset as the tokens specify.</summary>
     public static void DrawFocus(Graphics g, Rectangle r)
     {
@@ -298,6 +316,30 @@ internal static class Gridline
             ApplyDpi();
         }
 
+        /// <summary>
+        /// A window sized in logical pixels can be taller than the screen at 150% or more on a
+        /// small display (760 x 640 becomes 1140 x 960), which hid the Settings window's Save
+        /// button below the taskbar. Every window is kept inside the working area of its screen.
+        /// </summary>
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            KeepOnScreen();
+        }
+
+        protected void KeepOnScreen()
+        {
+            var area = Screen.FromControl(this).WorkingArea;
+            var size = new Size(Math.Min(Width, area.Width), Math.Min(Height, area.Height));
+            var location = new Point(
+                Math.Clamp(Left, area.Left, Math.Max(area.Left, area.Right - size.Width)),
+                Math.Clamp(Top, area.Top, Math.Max(area.Top, area.Bottom - size.Height)));
+            if (size != Size || location != Location)
+            {
+                Bounds = new Rectangle(location, size);
+            }
+        }
+
         /// <summary>Sets pixel metrics WinForms does not scale itself (list rows, grid columns). Called after build and after every DPI change.</summary>
         protected virtual void ApplyDpi()
         {
@@ -309,6 +351,7 @@ internal static class Gridline
             Font = FontAt(Face.Sans, SizeUi, e.DeviceDpiNew);
             RescaleFonts(this, e.DeviceDpiNew);
             ApplyDpi();
+            KeepOnScreen();
             Invalidate(invalidateChildren: true);
         }
     }
@@ -511,7 +554,7 @@ internal static class Gridline
         protected override void OnPaint(PaintEventArgs pevent)
         {
             var g = pevent.Graphics;
-            using (var back = new SolidBrush(Parent?.BackColor is { A: 255 } parent ? parent : White))
+            using (var back = new SolidBrush(OpaqueBackground(this)))
             {
                 g.FillRectangle(back, ClientRectangle);
             }
@@ -527,6 +570,22 @@ internal static class Gridline
                 DrawFocus(g, Rectangle.Inflate(textRect, 2, 1));
             }
         }
+    }
+
+    /// <summary>
+    /// The colour actually behind a control: its nearest ancestor with an opaque background.
+    /// Layout panels are transparent, so the immediate parent's colour is often not what shows.
+    /// </summary>
+    public static Color OpaqueBackground(Control control)
+    {
+        for (var c = control.Parent; c is not null; c = c.Parent)
+        {
+            if (c.BackColor.A == 255)
+            {
+                return c.BackColor;
+            }
+        }
+        return Gray;
     }
 
     /// <summary>A ruled list row: white, or Active Blue when selected, with a light rule along the bottom.</summary>
@@ -577,6 +636,13 @@ internal static class Gridline
             g.FillRectangle(field, box);
         }
         DrawInset(g, box);
+        // The inset's light edges vanish on a white row, which left an open corner; a dark
+        // bottom and right edge keeps the box closed on white and gray alike.
+        using (var edge = new Pen(BevelDark))
+        {
+            g.DrawLine(edge, box.Left, box.Bottom - 1, box.Right - 1, box.Bottom - 1);
+            g.DrawLine(edge, box.Right - 1, box.Top, box.Right - 1, box.Bottom - 1);
+        }
         using (var deep = new Pen(BevelDarker))
         {
             g.DrawLine(deep, box.Left + 1, box.Top + 1, box.Right - 2, box.Top + 1);
@@ -648,14 +714,21 @@ internal static class Gridline
             }
         }
 
-        // The strip and frame are drawn, not controls, so the body is the client area minus them.
+        // The strip and frame are drawn, not controls, so the body is the client area minus
+        // them and minus Padding. Layout takes this rectangle as it is (the base class is
+        // where Padding is normally subtracted), so leaving Padding out put text against the frame.
         public override Rectangle DisplayRectangle
         {
             get
             {
                 var strip = Gridline.Scale(this, TitleStripHeight);
                 var r = ClientRectangle;
-                return new Rectangle(r.X + 1, r.Y + strip + 1, Math.Max(0, r.Width - 2), Math.Max(0, r.Height - strip - 2));
+                var p = Padding;
+                return new Rectangle(
+                    r.X + 1 + p.Left,
+                    r.Y + strip + 1 + p.Top,
+                    Math.Max(0, r.Width - 2 - p.Horizontal),
+                    Math.Max(0, r.Height - strip - 2 - p.Vertical));
             }
         }
 
@@ -890,10 +963,39 @@ internal static class Gridline
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.Clear(Box.Enabled ? White : GrayLight);
-            DrawInset(e.Graphics, ClientRectangle);
-            using var deep = new Pen(BevelDarker);
-            e.Graphics.DrawLine(deep, 1, 1, Width - 2, 1);
-            e.Graphics.DrawLine(deep, 1, 1, 1, Height - 2);
+            DrawField(e.Graphics, ClientRectangle);
+        }
+    }
+
+    /// <summary>A drop-down list in a white field with the inset bevel text fields have, <paramref name="logicalWidth"/> wide at 96 dpi.</summary>
+    public sealed class ComboField : Panel
+    {
+        private readonly int _logicalWidth;
+
+        public ComboField(ComboBox box, int logicalWidth)
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            _logicalWidth = logicalWidth;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            BackColor = White;
+            Padding = new Padding(2);
+            Margin = box.Margin;
+            box.Margin = Padding.Empty;
+            box.Dock = DockStyle.Fill;
+            Box = box;
+            Controls.Add(box);
+        }
+
+        public ComboBox Box { get; }
+
+        public override Size GetPreferredSize(Size proposedSize) =>
+            new(Gridline.Scale(this, _logicalWidth), Box.PreferredHeight + Padding.Vertical);
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Box.Enabled ? White : GrayLight);
+            DrawField(e.Graphics, ClientRectangle);
         }
     }
 
@@ -1021,6 +1123,34 @@ internal static class Gridline
             CancelButton = no;
             ActiveControl = no;
             EndBuild();
+        }
+    }
+
+    /// <summary>
+    /// An app-owned context menu in Gridline style: the square renderer below, a check margin
+    /// instead of the wide image margin, and no drop shadow (Gridline has no shadows; Windows adds
+    /// one to every menu window unless its class style is removed).
+    /// </summary>
+    public sealed class ContextMenu : ContextMenuStrip
+    {
+        private const int CsDropShadow = 0x00020000;
+
+        public ContextMenu()
+        {
+            Renderer = new MenuRenderer();
+            ShowImageMargin = false;
+            ShowCheckMargin = true;
+            BackColor = Gray;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var cp = base.CreateParams;
+                cp.ClassStyle &= ~CsDropShadow;
+                return cp;
+            }
         }
     }
 
