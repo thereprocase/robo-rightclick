@@ -84,7 +84,9 @@ internal static class CrashPolicy
         try
         {
             MessageBox.Show(
-                $"{AppInfo.Name} hit an unexpected error. Restart it from the Start menu if it stops responding.\n\n{exception.Message}",
+                // Install creates no Start menu entry; any Robo item starts the tray through COM.
+                $"{AppInfo.Name} hit an unexpected error. If it stops responding, end it in Task Manager; "
+                    + $"the next Robo-Copy, Robo-Cut or Robo-Paste starts it again.\n\n{exception.Message}",
                 AppInfo.Name,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
