@@ -49,21 +49,31 @@ internal static class PathHeuristic
     /// The text with every path-looking part replaced by <see cref="Placeholder"/>, on one
     /// line and at most <paramref name="maxLength"/> characters. First each quoted span
     /// (quotes included) goes, because .NET quotes the names in its messages and a quoted name
-    /// may contain spaces; then each whitespace-separated word that <see cref="IsPathFree"/>
-    /// would refuse for its characters (a separator, a drive designator, a stray double quote,
-    /// a shell metacharacter). Line breaks and other control characters become spaces.
+    /// may contain spaces. Then, line by line, the first whitespace-separated word that
+    /// <see cref="IsPathFree"/> would refuse for its characters (a separator, a drive
+    /// designator, a stray double quote, a shell metacharacter) and everything after it on
+    /// that line: an unquoted path may contain spaces ("C:\Tax Returns 2025\a.pdf"), and
+    /// nothing but a line break marks where it ends. The lines are joined with spaces.
     /// </summary>
     public static string Scrub(string text, int maxLength)
     {
         var unquoted = ReplaceQuotedSpans(text);
         var result = new StringBuilder(Math.Min(unquoted.Length, maxLength) + 16);
-        foreach (var word in unquoted.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var line in unquoted.Split(LineBreak))
         {
-            if (result.Length > 0)
+            foreach (var word in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
             {
-                result.Append(' ');
+                if (result.Length > 0)
+                {
+                    result.Append(' ');
+                }
+                if (LooksLikePath(word))
+                {
+                    result.Append(Placeholder);
+                    break;
+                }
+                result.Append(word);
             }
-            result.Append(LooksLikePath(word) ? Placeholder : word);
         }
         if (result.Length > maxLength)
         {
@@ -72,6 +82,14 @@ internal static class PathHeuristic
         }
         return result.ToString();
     }
+
+    /// <summary>
+    /// What <see cref="ReplaceQuotedSpans"/> puts in place of a C0 control character. Win32
+    /// file names cannot contain U+0001 to U+001F, so one ends any path; the C1 controls
+    /// (U+007F to U+009F) are legal in NTFS names and become spaces instead, which keeps a
+    /// path that contains one on its line.
+    /// </summary>
+    private const char LineBreak = '\n';
 
     private static bool IsPathCharacter(char c) =>
         c is '\\' or '/' or '"' or '“' or '”' or '<' or '>' or '|' || char.IsControl(c);
@@ -96,7 +114,8 @@ internal static class PathHeuristic
     /// Replaces each quoted span with the placeholder. An opening quote starts a word (so the
     /// apostrophe in "don't" is not one); its closing quote ends one (so "Bob's" inside a
     /// quoted name does not close it). A quote that never closes takes the rest of the text.
-    /// Control characters become spaces, so the words split cleanly afterwards.
+    /// C0 control characters become <see cref="LineBreak"/>, other control characters spaces,
+    /// so no control character reaches the log and the lines and words split cleanly afterwards.
     /// </summary>
     private static string ReplaceQuotedSpans(string text)
     {
@@ -116,7 +135,7 @@ internal static class PathHeuristic
                 i = end + 1;
                 continue;
             }
-            result.Append(char.IsControl(c) ? ' ' : c);
+            result.Append(c < ' ' ? LineBreak : char.IsControl(c) ? ' ' : c);
             i++;
         }
         return result.ToString();

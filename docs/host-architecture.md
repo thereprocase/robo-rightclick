@@ -483,7 +483,9 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
    (`Application.ThreadException`) or any other (`AppDomain.UnhandledException`), appends one
    entry to `%LOCALAPPDATA%\RoboRightClick\crash.log` (`AppPaths.CrashLogFile`): exception
    types outermost first, messages with path-looking parts replaced by `[path]` (Core
-   `PathHeuristic.Scrub`, the heuristic `FailureText` uses), stack traces, app version, UTC
+   `PathHeuristic.Scrub`, the heuristic `FailureText` uses; an unquoted path-looking word
+   takes the rest of its line, since a path with spaces has no other end), stack traces, app
+   version, UTC
    time, Windows build. No job data is added; a stack trace is written as the runtime reports
    it. The file is rotated to `crash.1.log` (one kept) before it would pass 256 KB, an entry
    is at most 32K characters, and one run writes at most 20 entries. Nothing is written in

@@ -122,8 +122,9 @@ under `HKEY_CURRENT_USER` and listed in docs/host-architecture.md section 4.
 
 `crash.log` holds, per error: its type, its message with anything that looks like a path
 replaced by `[path]`, the program's stack trace, the app version, the time (UTC) and the
-Windows build. Please attach it to a bug report, but read it first: the path filter is a
-heuristic, and a bare file name without quotes or folder can get through.
+Windows build. An unquoted path also takes the rest of its line with it, since nothing marks
+where a path with spaces ends. Please attach it to a bug report, but read it first: the path
+filter is a heuristic, and a bare file name without quotes or folder can get through.
 
 A paste that was still running when the app ended (a crash, a power cut) is reported once at
 the next start, with a tray notice that some destination files may be incomplete. Its
