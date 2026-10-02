@@ -7,7 +7,7 @@ namespace RoboRightClick.Core;
 /// <param name="Foreground">The foreground window at the press.</param>
 /// <param name="Tab">The ShellTabWindowClass window above the focused item list, or 0.</param>
 /// <param name="Desktop">The press was in the desktop's icon list.</param>
-/// <param name="Time">KBDLLHOOKSTRUCT.time of the key-down (GetTickCount milliseconds).</param>
+/// <param name="Time">The key-down event's own time stamp (GetTickCount milliseconds).</param>
 /// <param name="ClipboardSequence">GetClipboardSequenceNumber at the press.</param>
 /// <param name="CopyCutNoted">A Ctrl+C or Ctrl+X went to an Explorer view since the hook was set up.</param>
 /// <param name="CopyCutTime">Tick of the most recent one.</param>

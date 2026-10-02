@@ -12,7 +12,8 @@ namespace RoboRightClick.UI;
 /// One page mapping every config.json field: threads, retries, retry wait, conflict
 /// default, max concurrent jobs (0 = unlimited), logging mode (labeled "Ephemeral: write
 /// nothing about new jobs to disk"), log retention, start with Windows, notify on complete,
-/// show progress window, extra args for copy and move (with the allowed switches listed).
+/// show progress window, extra args for copy and move (with the allowed switches listed), and
+/// the Robo-Paste hotkey (a check box and the shortcut in Plex Mono; unticked saves "").
 /// Values are checked by round-tripping through <see cref="Core.SettingsSerializer.Parse"/>;
 /// any problem is shown next to the field and Save stays disabled. Opened with a field
 /// name highlights that field (settings-problem toast click). Also: "Open config file",
@@ -26,6 +27,9 @@ namespace RoboRightClick.UI;
 /// of all fields together. The serializer stays the only definition of what is valid.</para>
 /// <para>Counting and deleting job logs runs off the UI thread. Single instance: closing
 /// hides the window, and showing it again reloads the saved values.</para>
+/// <para>The hotkey row's problem, like any field's, is red and disables Save. A valid
+/// shortcut is also probed with RegisterHotKey (registered and released at once): when
+/// another app already owns it, a note says that in File Explorer this app takes it first.</para>
 /// </remarks>
 internal sealed class SettingsWindow : Gridline.Window
 {
@@ -49,6 +53,10 @@ internal sealed class SettingsWindow : Gridline.Window
     private readonly Gridline.CheckBox _progressWindow;
     private readonly Gridline.TextField _extraCopy;
     private readonly Gridline.TextField _extraMove;
+    private readonly Gridline.CheckBox _hotkeyEnabled;
+    private readonly Gridline.TextField _hotkeyText;
+    private readonly Label _hotkeyProbeNote;
+    private string? _probedHotkey;
     private Settings? _valid;
     private string _loadedState = string.Empty;
     private bool _loading;
@@ -104,6 +112,12 @@ internal sealed class SettingsWindow : Gridline.Window
         _progressWindow = new Gridline.CheckBox("Show a progress window for each paste", "showProgressWindow");
         _extraCopy = new Gridline.TextField("extraArgs.copy", mono: true, logicalWidth: 420);
         _extraMove = new Gridline.TextField("extraArgs.move", mono: true, logicalWidth: 420);
+        _hotkeyEnabled = new Gridline.CheckBox("Robo-Paste with a keyboard shortcut", "pasteHotkey.enabled");
+        _hotkeyText = new Gridline.TextField(SettingsSerializer.PasteHotkeyKey, mono: true, logicalWidth: 200);
+        _hotkeyProbeNote = Gridline.TextLabel(string.Empty, Gridline.Face.Sans, Gridline.SizeDense, Gridline.TextSecondary);
+        _hotkeyProbeNote.Name = "pasteHotkey.note";
+        _hotkeyProbeNote.AccessibleName = "pasteHotkey.note";
+        _hotkeyProbeNote.Visible = false;
 
         var table = new TableLayoutPanel
         {
@@ -157,6 +171,7 @@ internal sealed class SettingsWindow : Gridline.Window
         AddField(table, "extraArgs.move", "Extra switches for moves", _extraMove,
             "Same switches as for copies.",
             () => JsonValue.Create(_extraMove.Box.Text), s => _extraMove.Box.Text = s.ExtraArgs.Move);
+        AddHotkeyField(table);
 
         var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Gridline.White };
         scroll.Controls.Add(table);
@@ -235,6 +250,8 @@ internal sealed class SettingsWindow : Gridline.Window
             _saveError.Visible = false;
             _logsStatus.Text = string.Empty;
             Show();
+            _probedHotkey = null;
+            ProbeHotkey(_valid?.PasteHotkey);
         }
         if (WindowState == FormWindowState.Minimized)
         {
@@ -275,7 +292,8 @@ internal sealed class SettingsWindow : Gridline.Window
         base.OnFormClosed(e);
     }
 
-    private sealed record Field(string Key, Label Label, Control Focus, Control Row, Label Problem, Func<JsonNode?> Value, Action<Settings> Load);
+    /// <param name="ExtraProblem">A problem the serializer cannot see (the hotkey ticked with no shortcut typed).</param>
+    private sealed record Field(string Key, Label Label, Control Focus, Control Row, Label Problem, Func<JsonNode?> Value, Action<Settings> Load, Func<string?>? ExtraProblem = null);
 
     private static bool KeyMatches(string fieldKey, string key) =>
         string.Equals(fieldKey, key, StringComparison.OrdinalIgnoreCase)
@@ -320,7 +338,9 @@ internal sealed class SettingsWindow : Gridline.Window
         return combo;
     }
 
-    private void AddField(TableLayoutPanel table, string key, string label, Control input, string? hint, Func<JsonNode?> value, Action<Settings> load)
+    private void AddField(
+        TableLayoutPanel table, string key, string label, Control input, string? hint, Func<JsonNode?> value, Action<Settings> load,
+        Control? focusOverride = null, Func<string?>? extraProblem = null, Control? afterProblem = null)
     {
         var caption = Gridline.TextLabel(label, Gridline.Face.SansMedium, Gridline.SizeUi);
         caption.Anchor = AnchorStyles.Left | AnchorStyles.Top;
@@ -335,6 +355,10 @@ internal sealed class SettingsWindow : Gridline.Window
             rows.Add(Gridline.TextLabel(hint, Gridline.Face.Sans, Gridline.SizeDense, Gridline.TextSecondary));
         }
         rows.Add(problem);
+        if (afterProblem is not null)
+        {
+            rows.Add(afterProblem);
+        }
         var cell = Gridline.Stack([.. rows]);
         cell.Margin = new Padding(0, Gridline.Space1, 0, Gridline.Space2);
 
@@ -342,13 +366,13 @@ internal sealed class SettingsWindow : Gridline.Window
         table.Controls.Add(caption, 0, table.RowStyles.Count - 1);
         table.Controls.Add(cell, 1, table.RowStyles.Count - 1);
 
-        Control focus = input switch
+        Control focus = focusOverride ?? input switch
         {
             Gridline.TextField text => text.Box,
             Gridline.ComboField combo => combo.Box,
             _ => input,
         };
-        _fields.Add(new Field(key, caption, focus, cell, problem, value, load));
+        _fields.Add(new Field(key, caption, focus, cell, problem, value, load, extraProblem));
 
         switch (focus)
         {
@@ -361,6 +385,73 @@ internal sealed class SettingsWindow : Gridline.Window
             case System.Windows.Forms.CheckBox check:
                 check.CheckedChanged += (_, _) => Revalidate();
                 break;
+        }
+    }
+
+    /// <summary>
+    /// The hotkey row: a check box, and the shortcut in Plex Mono. Unticked is off ("" in
+    /// config.json); the text keeps the last shortcut so ticking the box again restores it.
+    /// </summary>
+    private void AddHotkeyField(TableLayoutPanel table)
+    {
+        var input = Gridline.Stack(_hotkeyEnabled, _hotkeyText);
+        AddField(table, SettingsSerializer.PasteHotkeyKey, "Hotkey", input,
+            "In a File Explorer folder or on the desktop, while RoboRightClick is running. "
+                + "Ctrl, optionally Shift, and one key: A to Z, 0 to 9 or F1 to F12.",
+            () => JsonValue.Create(_hotkeyEnabled.Checked ? _hotkeyText.Box.Text : string.Empty),
+            s =>
+            {
+                _hotkeyEnabled.Checked = s.PasteHotkey is not null;
+                _hotkeyText.Box.Text = (s.PasteHotkey ?? HotkeySpec.Default).Format();
+                _hotkeyText.Box.Enabled = _hotkeyEnabled.Checked;
+            },
+            focusOverride: _hotkeyEnabled,
+            extraProblem: () => _hotkeyEnabled.Checked && _hotkeyText.Box.Text.Trim().Length == 0
+                ? $"Type a shortcut such as {HotkeySpec.DefaultText}, or untick the box."
+                : null,
+            afterProblem: _hotkeyProbeNote);
+        _hotkeyText.Box.TextChanged += (_, _) => Revalidate();
+        _hotkeyEnabled.CheckedChanged += (_, _) =>
+        {
+            _hotkeyText.Box.Enabled = _hotkeyEnabled.Checked;
+            _hotkeyText.Invalidate();
+        };
+    }
+
+    /// <summary>
+    /// Whether another program has registered <paramref name="spec"/> as a global hotkey.
+    /// RegisterHotKey fails with ERROR_HOTKEY_ALREADY_REGISTERED then; on success the
+    /// registration is released at once. Only a hint: this app's hook does not register the
+    /// combination, and in File Explorer it sees the key before such a hotkey would.
+    /// </summary>
+    private void ProbeHotkey(HotkeySpec? spec)
+    {
+        if (spec is null)
+        {
+            _probedHotkey = null;
+            _hotkeyProbeNote.Visible = false;
+            return;
+        }
+        // The probe registers against this window, so it waits until the window exists
+        // (ShowSettings probes again once it is shown).
+        var text = spec.Format();
+        if (!IsHandleCreated || text == _probedHotkey)
+        {
+            return;
+        }
+        _probedHotkey = text;
+        _hotkeyProbeNote.Visible = false;
+        const int probeId = 0x5250;
+        var modifiers = AppNative.MOD_CONTROL | AppNative.MOD_NOREPEAT | (spec.Shift ? AppNative.MOD_SHIFT : 0);
+        if (AppNative.RegisterHotKey(Handle, probeId, modifiers, (uint)spec.VirtualKey))
+        {
+            AppNative.UnregisterHotKey(Handle, probeId);
+            return;
+        }
+        if (System.Runtime.InteropServices.Marshal.GetLastPInvokeError() == AppNative.ERROR_HOTKEY_ALREADY_REGISTERED)
+        {
+            _hotkeyProbeNote.Text = $"Another app also uses {text}. In File Explorer and on the desktop, RoboRightClick gets it first; elsewhere the other app does.";
+            _hotkeyProbeNote.Visible = true;
         }
     }
 
@@ -423,13 +514,18 @@ internal sealed class SettingsWindow : Gridline.Window
         var anyProblem = false;
         foreach (var field in _fields)
         {
-            var problems = SettingsSerializer.Parse(ToJson([field]).ToJsonString()).Problems;
-            field.Problem.Text = string.Join(" ", problems.Select(p => Clean(field.Key, p)));
+            var problems = SettingsSerializer.Parse(ToJson([field]).ToJsonString()).Problems.Select(p => Clean(field.Key, p)).ToList();
+            if (field.ExtraProblem?.Invoke() is { } extra)
+            {
+                problems.Add(extra);
+            }
+            field.Problem.Text = string.Join(" ", problems);
             field.Problem.Visible = problems.Count > 0;
             anyProblem |= problems.Count > 0;
         }
         var all = SettingsSerializer.Parse(ToJson(_fields).ToJsonString());
         _valid = !anyProblem && all.Problems.Count == 0 ? all.Settings : null;
+        ProbeHotkey(_valid?.PasteHotkey);
         _save.Enabled = _valid is not null;
         var invalid = _fields.Where(f => f.Problem.Visible).Select(f => f.Label.Text).ToList();
         _invalidNote.Text = invalid.Count switch
@@ -459,6 +555,11 @@ internal sealed class SettingsWindow : Gridline.Window
         if (cut >= 0)
         {
             text = text[..cut];
+        }
+        // The hotkey falls back to off, not to a value; nothing is "off" while Save is disabled.
+        if (text.EndsWith(SettingsSerializer.PasteHotkeyOffSuffix, StringComparison.Ordinal))
+        {
+            text = text[..^SettingsSerializer.PasteHotkeyOffSuffix.Length];
         }
         if (text.EndsWith("; ignored", StringComparison.Ordinal))
         {

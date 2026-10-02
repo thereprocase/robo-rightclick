@@ -59,7 +59,7 @@ public static class WindowClasses
 
 /// <summary>
 /// One keyboard event as the hook sees it, reduced to what the matcher needs. The
-/// modifier states are read when the event arrives (GetAsyncKeyState); <paramref name="AltDown"/>
+/// modifier states are read by the hook when the event arrives; <paramref name="AltDown"/>
 /// is true when either VK_MENU or the event's LLKHF_ALTDOWN flag says so.
 /// </summary>
 /// <param name="IsKeyDown">WM_KEYDOWN. WM_SYSKEYDOWN is not a key-down here: it means Alt (or F10).</param>
@@ -162,7 +162,7 @@ public sealed class HotkeyLatch
     /// The event is a key-down that <see cref="HotkeyMatcher.Matches(int, bool, in HotkeyKeyEvent)"/>
     /// and <see cref="HotkeyGate.Decide"/> both accept. Ignored for key-ups.
     /// </param>
-    /// <param name="time">The event's tick (KBDLLHOOKSTRUCT.time, milliseconds, wraps every 49.7 days).</param>
+    /// <param name="time">The hook event's time stamp (GetTickCount milliseconds; wraps every 49.7 days).</param>
     public LatchAction Next(LatchInput input, bool gatePasses, uint time)
     {
         switch (input)
