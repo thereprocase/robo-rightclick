@@ -52,6 +52,10 @@ internal static partial class ComNative
     [LibraryImport("ole32.dll")]
     public static partial void ReleaseStgMedium(ref STGMEDIUM pmedium);
 
+    /// <summary>The id of a named clipboard format (0xC000-0xFFFF), or 0 on failure.</summary>
+    [LibraryImport("user32.dll", EntryPoint = "RegisterClipboardFormatW", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial uint RegisterClipboardFormat(string format);
+
     [LibraryImport("advapi32.dll", EntryPoint = "ConvertStringSecurityDescriptorToSecurityDescriptorW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ConvertStringSecurityDescriptorToSecurityDescriptor(

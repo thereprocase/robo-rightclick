@@ -6,7 +6,12 @@ namespace RoboRightClick.Com;
 
 /// <param name="Paths">File-system paths in selection order.</param>
 /// <param name="SkippedItems">Items with no file-system path (virtual folders); reported, not guessed at.</param>
-internal sealed record SelectionPaths(IReadOnlyList<string> Paths, int SkippedItems);
+/// <param name="ShellIdList">
+/// The selection's "Shell IDList Array" from the same data object as <paramref name="Paths"/>,
+/// when it is a well-formed CIDA for exactly those items
+/// (<see cref="ClipboardPayload.IsShellIdListFor"/>); otherwise null.
+/// </param>
+internal sealed record SelectionPaths(IReadOnlyList<string> Paths, int SkippedItems, byte[]? ShellIdList = null);
 
 /// <summary>Converts shell item arrays to and from file-system paths.</summary>
 internal static class ShellSelection
@@ -34,10 +39,13 @@ internal static class ShellSelection
     /// <exception cref="InvalidDataException">The selection exceeds the size limits.</exception>
     public static SelectionPaths ReadPaths(IShellItemArray array)
     {
-        var viaDataObject = TryReadDataObject(array);
+        var (viaDataObject, shellIdList) = TryReadDataObject(array);
         if (viaDataObject is { Count: > 0 })
         {
-            return new SelectionPaths(viaDataObject, SkippedCount(array, viaDataObject.Count));
+            var list = shellIdList is not null && ClipboardPayload.IsShellIdListFor(shellIdList, viaDataObject.Count)
+                ? shellIdList
+                : null;
+            return new SelectionPaths(viaDataObject, SkippedCount(array, viaDataObject.Count), list);
         }
         return ReadPerItem(array);
     }
@@ -80,8 +88,12 @@ internal static class ShellSelection
         }
     }
 
-    /// <summary>Null when the data object path is unavailable or unusable; the caller falls back.</summary>
-    private static List<string>? TryReadDataObject(IShellItemArray array)
+    /// <summary>
+    /// Paths null when the data object path is unavailable or unusable; the caller falls
+    /// back. The shell ID list is read from the same object, best effort: Explorer's own
+    /// paste needs it on the clipboard (<see cref="ClipboardPayload.ShellIdListFormat"/>).
+    /// </summary>
+    private static (List<string>? Paths, byte[]? ShellIdList) TryReadDataObject(IShellItemArray array)
     {
         IDataObject? dataObject = null;
         var pointer = nint.Zero;
@@ -91,7 +103,7 @@ internal static class ShellSelection
             var iid = ShellConstants.IID_IDataObject;
             if (array.BindToHandler(0, in bhid, in iid, out pointer) < 0 || pointer == 0)
             {
-                return null;
+                return (null, null);
             }
             dataObject = (IDataObject)ComNative.Wrappers.GetOrCreateObjectForComInstance(pointer, CreateObjectFlags.UniqueInstance);
 
@@ -105,21 +117,23 @@ internal static class ShellSelection
             };
             if (dataObject.GetData(in format, out var medium) < 0)
             {
-                return null;
+                return (null, null);
             }
 
+            List<string>? paths;
             try
             {
-                return medium.tymed == ShellConstants.TYMED_HGLOBAL ? DecodeHGlobal(medium.data) : null;
+                paths = medium.tymed == ShellConstants.TYMED_HGLOBAL ? DecodeHGlobal(medium.data) : null;
             }
             finally
             {
                 ComNative.ReleaseStgMedium(ref medium);
             }
+            return (paths, paths is { Count: > 0 } ? TryReadShellIdList(dataObject) : null);
         }
         catch (Exception ex) when (ex is COMException or InvalidCastException)
         {
-            return null;
+            return (null, null);
         }
         finally
         {
@@ -128,6 +142,70 @@ internal static class ShellSelection
             {
                 Marshal.Release(pointer);
             }
+        }
+    }
+
+    /// <summary>The CIDA bytes, or null when the format is missing, not an HGLOBAL or too large.</summary>
+    private static byte[]? TryReadShellIdList(IDataObject dataObject)
+    {
+        var id = ComNative.RegisterClipboardFormat(ClipboardPayload.ShellIdListFormat);
+        if (id is 0 or > ushort.MaxValue)
+        {
+            return null;
+        }
+        var format = new FORMATETC
+        {
+            cfFormat = (ushort)id,
+            ptd = 0,
+            dwAspect = ShellConstants.DVASPECT_CONTENT,
+            lindex = -1,
+            tymed = ShellConstants.TYMED_HGLOBAL,
+        };
+        if (dataObject.GetData(in format, out var medium) < 0)
+        {
+            return null;
+        }
+        try
+        {
+            return medium.tymed == ShellConstants.TYMED_HGLOBAL
+                ? CopyHGlobal(medium.data, ClipboardPayload.MaxShellIdListBytes)
+                : null;
+        }
+        finally
+        {
+            ComNative.ReleaseStgMedium(ref medium);
+        }
+    }
+
+    /// <summary>
+    /// The block's bytes; null when empty, unlockable or larger than <paramref name="maxBytes"/>.
+    /// The size is checked before anything is copied: the block belongs to another process.
+    /// </summary>
+    private static byte[]? CopyHGlobal(nint handle, int maxBytes)
+    {
+        if (handle == 0)
+        {
+            return null;
+        }
+        var size = ComNative.GlobalSize(handle);
+        if (size == 0 || size > (nuint)maxBytes)
+        {
+            return null;
+        }
+        var locked = ComNative.GlobalLock(handle);
+        if (locked == 0)
+        {
+            return null;
+        }
+        try
+        {
+            var bytes = new byte[(int)size];
+            Marshal.Copy(locked, bytes, 0, bytes.Length);
+            return bytes;
+        }
+        finally
+        {
+            ComNative.GlobalUnlock(handle);
         }
     }
 

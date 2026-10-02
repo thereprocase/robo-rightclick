@@ -102,6 +102,112 @@ public class ClipboardPayloadTests
             ClipboardPayload.ForFiles([@"C:\a"], TransferVerb.Copy, LoggingMode.Normal)[0].Format.StandardId);
     }
 
+    /// <summary>A CIDA: cidl, offsets, the parent list, then each item list (one ID each).</summary>
+    private static byte[] Cida(int items, int? declared = null)
+    {
+        var lists = new List<byte[]> { new byte[] { 0, 0 } }; // parent: the desktop, an empty list
+        for (var i = 0; i < items; i++)
+        {
+            lists.Add([5, 0, (byte)'a', (byte)'b', (byte)i, 0, 0]);
+        }
+        var header = 4 + 4 * lists.Count;
+        var bytes = new List<byte>();
+        bytes.AddRange(BitConverter.GetBytes((uint)(declared ?? items)));
+        var offset = header;
+        foreach (var list in lists)
+        {
+            bytes.AddRange(BitConverter.GetBytes((uint)offset));
+            offset += list.Length;
+        }
+        foreach (var list in lists)
+        {
+            bytes.AddRange(list);
+        }
+        return [.. bytes];
+    }
+
+    [Fact]
+    public void A_well_formed_shell_id_list_for_the_same_items_is_written_after_the_drop_list()
+    {
+        var entries = ClipboardPayload.ForFiles([@"C:", @"C:"], TransferVerb.Copy, LoggingMode.Normal, Cida(2));
+        Assert.Equal(ClipboardPayload.CF_HDROP, entries[0].Format.StandardId);
+        Assert.Equal(Cida(2), entries.Single(e => e.Format.RegisteredName == ClipboardPayload.ShellIdListFormat).Data);
+    }
+
+    [Fact]
+    public void No_shell_id_list_is_written_without_one()
+    {
+        Assert.DoesNotContain(
+            ClipboardPayload.ForFiles([@"C:"], TransferVerb.Copy, LoggingMode.Normal),
+            e => e.Format.RegisteredName == ClipboardPayload.ShellIdListFormat);
+    }
+
+    [Fact]
+    public void A_shell_id_list_for_a_different_number_of_items_is_not_written()
+    {
+        Assert.False(ClipboardPayload.IsShellIdListFor(Cida(3), 2));
+        Assert.DoesNotContain(
+            ClipboardPayload.ForFiles([@"C:", @"C:"], TransferVerb.Copy, LoggingMode.Normal, Cida(3)),
+            e => e.Format.RegisteredName == ClipboardPayload.ShellIdListFormat);
+    }
+
+    [Fact]
+    public void A_shell_id_list_whose_count_claims_more_offsets_than_fit_is_refused()
+    {
+        Assert.False(ClipboardPayload.IsShellIdListFor(Cida(1, declared: 100_000), 100_000));
+    }
+
+    [Fact]
+    public void A_shell_id_list_with_an_offset_outside_the_block_or_inside_the_table_is_refused()
+    {
+        var outside = Cida(1);
+        BitConverter.GetBytes((uint)outside.Length).CopyTo(outside, 8);
+        Assert.False(ClipboardPayload.IsShellIdListFor(outside, 1));
+
+        // Offset 2 lands on the zero high bytes of cidl, which read as an empty list: only
+        // the rule that lists start after the offset table refuses it.
+        var intoTable = Cida(1);
+        BitConverter.GetBytes(2u).CopyTo(intoTable, 8);
+        Assert.False(ClipboardPayload.IsShellIdListFor(intoTable, 1));
+    }
+
+    [Fact]
+    public void A_shell_id_list_with_an_unterminated_or_non_advancing_id_is_refused()
+    {
+        Assert.True(ClipboardPayload.IsShellIdListFor(Cida(1), 1));
+
+        var unterminated = Cida(1)[..^2];
+        Assert.False(ClipboardPayload.IsShellIdListFor(unterminated, 1));
+
+        // The item list is { cb = 1, 0 }: a 1-byte ID cannot hold its own size. Stepping one
+        // byte would land on a zero cb and accept it, so only the cb >= 2 rule refuses it.
+        var header = 4 + 4 * 2;
+        var stuck = new List<byte>();
+        stuck.AddRange(BitConverter.GetBytes(1u));
+        stuck.AddRange(BitConverter.GetBytes((uint)header));
+        stuck.AddRange(BitConverter.GetBytes((uint)header + 2));
+        stuck.AddRange(new byte[] { 0, 0, 1, 0, 0 });
+        Assert.False(ClipboardPayload.IsShellIdListFor(stuck.ToArray(), 1));
+    }
+
+    [Fact]
+    public void A_shell_id_list_with_too_many_ids_in_one_list_is_refused()
+    {
+        var ids = new List<byte>();
+        for (var i = 0; i <= ClipboardPayload.MaxItemIdsPerList; i++)
+        {
+            ids.AddRange(new byte[] { 2, 0 });
+        }
+        ids.AddRange(new byte[] { 0, 0 });
+        var header = 4 + 4 * 2;
+        var block = new List<byte>();
+        block.AddRange(BitConverter.GetBytes(1u));
+        block.AddRange(BitConverter.GetBytes((uint)header));
+        block.AddRange(BitConverter.GetBytes((uint)header));
+        block.AddRange(ids);
+        Assert.False(ClipboardPayload.IsShellIdListFor(block.ToArray(), 1));
+    }
+
     [Fact]
     public void Oversized_clipboard_data_is_refused_not_truncated()
     {

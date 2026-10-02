@@ -51,11 +51,12 @@ internal sealed class VerbDispatcher : IVerbHandler
     /// toast; none carries a path.
     /// </summary>
     /// <param name="skippedItems">Selected items with no file-system path (virtual folders).</param>
-    public void Invoke(ShellVerb verb, IReadOnlyList<string> selection, int skippedItems)
+    /// <param name="shellIdList">The selection's CIDA for Explorer's own paste, or null.</param>
+    public void Invoke(ShellVerb verb, IReadOnlyList<string> selection, int skippedItems, byte[]? shellIdList)
     {
         // The caller's list may be reused once Execute returns; the queued work needs its own.
         var items = selection.ToArray();
-        Ui.Post(_ => Chain(() => RunAsync(verb, items, skippedItems)), null);
+        Ui.Post(_ => Chain(() => RunAsync(verb, items, skippedItems, shellIdList)), null);
     }
 
     /// <summary>The end of the FIFO. Only touched from <see cref="Ui"/> callbacks.</summary>
@@ -91,22 +92,22 @@ internal sealed class VerbDispatcher : IVerbHandler
         }
     }
 
-    private Task RunAsync(ShellVerb verb, IReadOnlyList<string> selection, int skippedItems) => verb switch
+    private Task RunAsync(ShellVerb verb, IReadOnlyList<string> selection, int skippedItems, byte[]? shellIdList) => verb switch
     {
-        ShellVerb.RoboCopy => WriteToClipboardAsync(selection, skippedItems, TransferVerb.Copy),
-        ShellVerb.RoboCut => WriteToClipboardAsync(selection, skippedItems, TransferVerb.Move),
+        ShellVerb.RoboCopy => WriteToClipboardAsync(selection, skippedItems, TransferVerb.Copy, shellIdList),
+        ShellVerb.RoboCut => WriteToClipboardAsync(selection, skippedItems, TransferVerb.Move, shellIdList),
         ShellVerb.RoboPaste => PasteAsync(selection, skippedItems),
         _ => throw new ArgumentOutOfRangeException(nameof(verb)),
     };
 
-    private async Task WriteToClipboardAsync(IReadOnlyList<string> selection, int skippedItems, TransferVerb verb)
+    private async Task WriteToClipboardAsync(IReadOnlyList<string> selection, int skippedItems, TransferVerb verb, byte[]? shellIdList)
     {
         if (VerbRules.SelectionRefusal(selection, skippedItems) is { } refusal)
         {
             Refuse(refusal);
             return;
         }
-        if (await ClipboardService.WriteFilesAsync(selection, verb, SettingsStore.Current.Logging) is { } failure)
+        if (await ClipboardService.WriteFilesAsync(selection, verb, SettingsStore.Current.Logging, shellIdList) is { } failure)
         {
             Refuse(failure);
         }

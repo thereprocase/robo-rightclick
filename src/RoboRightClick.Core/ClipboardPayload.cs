@@ -64,7 +64,30 @@ public static class ClipboardPayload
     /// <summary>sizeof(DROPFILES): DWORD pFiles, POINT pt, BOOL fNC, BOOL fWide.</summary>
     public const int DropFilesHeaderSize = 20;
 
-    public static IReadOnlyList<ClipboardEntry> ForFiles(IReadOnlyList<string> paths, TransferVerb verb, LoggingMode mode)
+    /// <summary>
+    /// CFSTR_SHELLIDLIST: the same items as shell item IDs (a CIDA). Explorer's own paste
+    /// needs it to paste a copy into the folder it came from as "name - Copy"; with
+    /// CF_HDROP alone it reports "The source and destination file names are the same"
+    /// (observed on Windows 11 build 26200, docs/testlog.md 2026-10-02).
+    /// </summary>
+    public const string ShellIdListFormat = "Shell IDList Array";
+
+    /// <summary>Largest CIDA accepted, the same budget as a CF_HDROP block.</summary>
+    public const int MaxShellIdListBytes = MaxDropFilesBytes;
+
+    /// <summary>
+    /// Most item IDs one ITEMIDLIST in a CIDA may hold: one per path component, so far
+    /// beyond any real path, and a bound on the work a forged block can cause.
+    /// </summary>
+    public const int MaxItemIdsPerList = 256;
+
+    /// <param name="shellIdList">
+    /// The selection's CIDA as Explorer (or the shell, for the CLI) provided it, or null. It
+    /// is written only when <see cref="IsShellIdListFor"/> accepts it for exactly these
+    /// paths; otherwise the clipboard carries CF_HDROP alone, as before.
+    /// </param>
+    public static IReadOnlyList<ClipboardEntry> ForFiles(
+        IReadOnlyList<string> paths, TransferVerb verb, LoggingMode mode, byte[]? shellIdList = null)
     {
         if (paths.Count == 0)
         {
@@ -76,6 +99,10 @@ public static class ClipboardPayload
             new(ClipboardFormat.Registered(PreferredDropEffectFormat),
                 EncodeDropEffect(verb == TransferVerb.Move ? DropEffect.Move : DropEffect.Copy)),
         };
+        if (shellIdList is not null && IsShellIdListFor(shellIdList, paths.Count))
+        {
+            entries.Add(new(ClipboardFormat.Registered(ShellIdListFormat), shellIdList));
+        }
         if (mode == LoggingMode.Ephemeral)
         {
             var zero = new byte[4];
@@ -84,6 +111,69 @@ public static class ClipboardPayload
             entries.Add(new(ClipboardFormat.Registered(CanUploadToCloudFormat), zero));
         }
         return entries;
+    }
+
+    /// <summary>
+    /// True when <paramref name="cida"/> is a well-formed CIDA (shlobj_core.h) for exactly
+    /// <paramref name="itemCount"/> items: UINT cidl, then UINT aoffset[cidl + 1] (the parent
+    /// folder, then each item), and at every offset an ITEMIDLIST (USHORT cb-prefixed IDs
+    /// ending in a zero cb) lying entirely inside the block, after the offset table. The
+    /// block comes from another process and goes onto the clipboard for Explorer to parse,
+    /// so nothing about it is trusted: a count that differs from the CF_HDROP paths, an
+    /// offset or ID outside the block, or more than <see cref="MaxItemIdsPerList"/> IDs in
+    /// one list rejects it.
+    /// </summary>
+    public static bool IsShellIdListFor(ReadOnlySpan<byte> cida, int itemCount)
+    {
+        if (itemCount <= 0 || cida.Length < 4 || cida.Length > MaxShellIdListBytes)
+        {
+            return false;
+        }
+        var cidl = BinaryPrimitives.ReadUInt32LittleEndian(cida);
+        if (cidl != (uint)itemCount)
+        {
+            return false;
+        }
+        // The offset table must fit. The rule below, that each list starts after the table
+        // and inside the block, already implies this; checked first so no read leaves the block.
+        var headerBytes = 4L + 4L * (cidl + 1);
+        if (headerBytes > cida.Length)
+        {
+            return false;
+        }
+        for (var i = 0; i <= cidl; i++)
+        {
+            var offset = BinaryPrimitives.ReadUInt32LittleEndian(cida[(4 + 4 * i)..]);
+            if (offset < headerBytes || !IsItemIdList(cida, offset))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool IsItemIdList(ReadOnlySpan<byte> block, long offset)
+    {
+        var position = offset;
+        for (var ids = 0; ids <= MaxItemIdsPerList; ids++)
+        {
+            if (position + 2 > block.Length)
+            {
+                return false;
+            }
+            var cb = BinaryPrimitives.ReadUInt16LittleEndian(block[(int)position..]);
+            if (cb == 0)
+            {
+                return true;
+            }
+            // cb counts its own two bytes; anything shorter would never advance.
+            if (cb < 2)
+            {
+                return false;
+            }
+            position += cb;
+        }
+        return false;
     }
 
     /// <summary>A DROPFILES block with wide (UTF-16) names, double-null terminated.</summary>

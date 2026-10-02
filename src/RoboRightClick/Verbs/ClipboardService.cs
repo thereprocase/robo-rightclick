@@ -49,12 +49,13 @@ internal sealed class ClipboardService : IDisposable
 
     /// <summary>
     /// Empties the clipboard and writes every entry of
-    /// <see cref="ClipboardPayload.ForFiles"/> (CF_HDROP, Preferred DropEffect, and in
-    /// ephemeral mode the history exclusions). Returns the refusal on failure, null on success.
+    /// <see cref="ClipboardPayload.ForFiles"/> (CF_HDROP, Preferred DropEffect, the shell ID
+    /// list when the selection provided a valid one, and in ephemeral mode the history
+    /// exclusions). Returns the refusal on failure, null on success.
     /// </summary>
-    public async Task<VerbRefusal?> WriteFilesAsync(IReadOnlyList<string> paths, TransferVerb verb, LoggingMode mode)
+    public async Task<VerbRefusal?> WriteFilesAsync(IReadOnlyList<string> paths, TransferVerb verb, LoggingMode mode, byte[]? shellIdList = null)
     {
-        var entries = ClipboardPayload.ForFiles(paths, verb, mode);
+        var entries = ClipboardPayload.ForFiles(paths, verb, mode, shellIdList);
         if (!await OpenWithRetryAsync())
         {
             return VerbRefusal.ClipboardBusy;

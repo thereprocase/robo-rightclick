@@ -167,8 +167,11 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
                 return HResult.E_FAIL;
             }
 
-            TraceExecute(items.Count, selection.SkippedItems, fromDirectory: !ReferenceEquals(items, selection.Paths), readTimer.Elapsed);
-            Handler.Invoke(Verb, items, selection.SkippedItems);
+            var fromDirectory = !ReferenceEquals(items, selection.Paths);
+            // The ID list describes the selection; a background paste's directory has none.
+            var shellIdList = fromDirectory ? null : selection.ShellIdList;
+            TraceExecute(items.Count, selection.SkippedItems, fromDirectory, shellIdList is not null, readTimer.Elapsed);
+            Handler.Invoke(Verb, items, selection.SkippedItems, shellIdList);
             return HResult.S_OK;
         }
         catch (Exception)
@@ -186,12 +189,12 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
     /// whole selection arrived in one call and how long a COM cold start took. Counts and
     /// times only, never a path, so it is allowed in ephemeral mode.
     /// </summary>
-    private void TraceExecute(int items, int skipped, bool fromDirectory, TimeSpan read)
+    private void TraceExecute(int items, int skipped, bool fromDirectory, bool shellIdList, TimeSpan read)
     {
         var uptime = DateTime.Now - Process.GetCurrentProcess().StartTime;
         Trace.WriteLine(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"RoboRightClick: Execute verb={Verb} items={items} skipped={skipped} fromDirectory={fromDirectory} readMs={read.TotalMilliseconds:F1} uptimeMs={uptime.TotalMilliseconds:F0}"));
+            $"RoboRightClick: Execute verb={Verb} items={items} skipped={skipped} fromDirectory={fromDirectory} idList={shellIdList} readMs={read.TotalMilliseconds:F1} uptimeMs={uptime.TotalMilliseconds:F0}"));
     }
 
     private void ReleaseSelection()

@@ -16,7 +16,11 @@ internal interface IVerbHandler
     /// untrusted (any same-user COM client can send them) and are checked by the handler.
     /// </summary>
     /// <param name="skippedItems">Selected items that had no file-system path.</param>
-    void Invoke(ShellVerb verb, IReadOnlyList<string> paths, int skippedItems);
+    /// <param name="shellIdList">
+    /// The selection's CIDA, validated for exactly <paramref name="paths"/>, or null. Robo-Copy
+    /// and Robo-Cut put it on the clipboard beside CF_HDROP for Explorer's own paste.
+    /// </param>
+    void Invoke(ShellVerb verb, IReadOnlyList<string> paths, int skippedItems, byte[]? shellIdList);
 }
 
 /// <summary>
