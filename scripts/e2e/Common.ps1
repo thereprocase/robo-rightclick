@@ -198,13 +198,18 @@ function Get-TreeEntries([string]$Root) {
     return $entries
 }
 
-function Get-StreamNames([string]$LongPath) {
+# Returns $null when the streams cannot be read, so the caller reports that instead of
+# treating two failed reads as two equal results.
+function Get-StreamNames([string]$Path) {
+    # The cmdlet is given the plain form: Windows PowerShell 5.1 does not reliably accept
+    # the \\?\ prefix together with -Stream.
+    if ($Path.StartsWith('\\?\')) { $Path = $Path.Substring(4) }
     try {
-        $names = Get-Item -LiteralPath $LongPath -Stream * -ErrorAction Stop |
+        $names = Get-Item -LiteralPath $Path -Stream * -ErrorAction Stop |
             Where-Object { $_.Stream -ne ':$DATA' } | ForEach-Object { $_.Stream + '=' + $_.Length }
         return (@($names) | Sort-Object) -join ','
     }
-    catch { return '?' }
+    catch { return $null }
 }
 
 <#
@@ -238,10 +243,11 @@ function Compare-Tree {
         if (($x.Attr -band $mask) -ne ($y.Attr -band $mask)) { Add-Diff 'AttributesDiffer' $rel "$($x.Attr -band $mask) vs $($y.Attr -band $mask)" }
         $lastA = [IO.File]::GetLastWriteTimeUtc($x.Full); $lastB = [IO.File]::GetLastWriteTimeUtc($y.Full)
         if ($lastA -ne $lastB) { Add-Diff 'ModifiedTimeDiffers' $rel "$($lastA.ToString('o')) vs $($lastB.ToString('o'))" }
-        # Stream names are read only where the path is short enough for the cmdlet.
-        if ($x.Full.Length -lt 250) {
+        # Stream names are read only where both plain paths are short enough for the cmdlet.
+        if ($x.Full.Length -lt 250 -and $y.Full.Length -lt 250) {
             $sa = Get-StreamNames $x.Full; $sb = Get-StreamNames $y.Full
-            if ($sa -ne $sb) { Add-Diff 'StreamsDiffer' $rel "$sa vs $sb" }
+            if ($null -eq $sa -or $null -eq $sb) { Add-Diff 'StreamsUnreadable' $rel 'could not list alternate data streams' }
+            elseif ($sa -ne $sb) { Add-Diff 'StreamsDiffer' $rel "$sa vs $sb" }
         }
     }
     foreach ($rel in $b.Keys) {
@@ -292,6 +298,9 @@ function Invoke-RoboCommand {
     $argText = ($Arguments | ForEach-Object { if ($_ -match '^--?[A-Za-z]') { $_ } else { Quote-Arg $_ } }) -join ' '
     if ($argText) { $p = Start-Process -FilePath $ExePath -ArgumentList $argText -PassThru }
     else { $p = Start-Process -FilePath $ExePath -PassThru }
+    # Reading Handle now keeps it open; without it ExitCode can come back empty once the
+    # process has exited (a known Start-Process -PassThru behavior).
+    $null = $p.Handle
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while (-not $p.WaitForExit(300)) {
         if ((Get-Date) -gt $deadline) { $p.Kill(); throw "Timed out after $TimeoutSec s: $ExePath $argText" }
@@ -301,13 +310,51 @@ function Invoke-RoboCommand {
     return $p.ExitCode
 }
 
-function Wait-ClipboardFiles([int]$TimeoutSec = 10) {
+# The clipboard can be held open briefly by its owner (the tray, while it writes), so every
+# access retries instead of failing the test on the first ExternalException.
+function Clear-ClipboardWithRetry {
+    for ($i = 0; $i -lt 20; $i++) {
+        try { [Windows.Forms.Clipboard]::Clear(); return }
+        catch { Start-Sleep -Milliseconds 100 }
+    }
+    throw 'Could not clear the clipboard: another program keeps it open.'
+}
+
+# Leaf names of the files on the clipboard, sorted; empty when there are none or it is busy.
+function Get-ClipboardFileNames {
+    try {
+        if (-not [Windows.Forms.Clipboard]::ContainsFileDropList()) { return @() }
+        return @([Windows.Forms.Clipboard]::GetFileDropList() | ForEach-Object { [IO.Path]::GetFileName($_.TrimEnd('\')) } | Sort-Object)
+    }
+    catch { return @() }
+}
+
+function Set-ClipboardFiles([string[]]$Paths) {
+    $list = New-Object System.Collections.Specialized.StringCollection
+    foreach ($path in $Paths) { [void]$list.Add($path) }
+    for ($i = 0; $i -lt 20; $i++) {
+        try { [Windows.Forms.Clipboard]::SetFileDropList($list); return }
+        catch { Start-Sleep -Milliseconds 100 }
+    }
+    throw 'Could not write the clipboard: another program keeps it open.'
+}
+
+<#
+Waits until the clipboard holds exactly the items just copied or cut. Leaf names are compared
+rather than full paths, because the tray may write the long form of a path given in 8.3 form
+(a %TEMP% under a long user name). Invoke-Robo clears the clipboard first, so an earlier
+selection still on the clipboard cannot satisfy this wait.
+#>
+function Wait-ClipboardFiles([string[]]$Expected, [int]$TimeoutSec = 10) {
+    $want = (@($Expected | ForEach-Object { [IO.Path]::GetFileName($_.TrimEnd('\')) } | Sort-Object)) -join '|'
+    $have = ''
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
-        if ([Windows.Forms.Clipboard]::ContainsFileDropList()) { return }
+        $have = (Get-ClipboardFileNames) -join '|'
+        if ($have -ieq $want) { return }
         Start-Sleep -Milliseconds 200
     }
-    throw 'The clipboard holds no files after the verb returned.'
+    throw "After $TimeoutSec s the clipboard does not hold the items just copied. Expected: '$want'. Found: '$have'."
 }
 
 <#
@@ -323,9 +370,12 @@ function Invoke-Robo {
         [string]$ExePath
     )
     if (-not $ExePath) { $ExePath = $script:E2E.InstalledExe }
+    # Without this, a paste that follows could take the previous selection, which is still
+    # on the clipboard until the tray has written the new one.
+    if ($Verb -ne 'paste') { Clear-ClipboardWithRetry }
     $argText = $Verb + ' ' + (($Paths | ForEach-Object { Quote-Arg $_ }) -join ' ')
     $p = Start-Process -FilePath $ExePath -ArgumentList $argText -Wait -PassThru
-    if ($p.ExitCode -eq 0 -and $Verb -ne 'paste') { Wait-ClipboardFiles }
+    if ($p.ExitCode -eq 0 -and $Verb -ne 'paste') { Wait-ClipboardFiles -Expected $Paths }
     return $p.ExitCode
 }
 
@@ -365,6 +415,17 @@ function Wait-Settled {
         Start-Sleep -Milliseconds 500
     }
     throw "Timed out after $TimeoutSec s waiting for $Path to settle."
+}
+
+# Evidence that a job ran at all: a safety check that only looks at what stayed in place
+# would also pass if the paste had been refused or had never started.
+function Wait-PathExists([string]$Path, [int]$TimeoutSec = 120) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path -LiteralPath $Path) { return }
+        Start-Sleep -Milliseconds 300
+    }
+    throw "Timed out after $TimeoutSec s waiting for $Path to appear. The paste may not have run; check the tray's Jobs window."
 }
 
 function Wait-RobocopyGone([int]$TimeoutSec = 120) {
@@ -518,8 +579,34 @@ function Assert-RegistryInstalled([string]$ExePath, [string]$Version, $ExpectRun
 }
 
 function Assert-RegistryRemoved {
-    $left = @(Get-RemovedKeyTrees | Where-Object { $null -ne [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($_) })
+    $left = @(Get-RemovedKeyTrees | Where-Object {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($_)
+            if ($null -ne $k) { $k.Dispose() }
+            $null -ne $k
+        })
     if ($null -ne (Read-HkcuValue $script:RunKey 'RoboRightClick')) { $left += "$($script:RunKey) [RoboRightClick]" }
     if ($left.Count -gt 0) { throw ('Registry entries survived uninstall:' + [Environment]::NewLine + ($left -join [Environment]::NewLine)) }
     Write-Step 'ok: every registry key and the Run value are gone'
+}
+
+# Keys other software shares with the app. Install creates them when absent and uninstall must
+# never delete them (product invariant 4, docs/host-architecture.md section 4), so each one
+# still exists after uninstall.
+function Get-SharedParentKeys {
+    $keys = @('Software\Classes\CLSID', 'Software\Classes\AppID', $script:RunKey,
+        (Split-Path -Parent $script:UninstallKey))
+    foreach ($v in $script:Verbs) {
+        foreach ($assoc in $v.Associations) { $keys += "Software\Classes\$assoc\shell" }
+    }
+    return @($keys | Select-Object -Unique)
+}
+
+function Assert-SharedParentsKept {
+    $gone = @(Get-SharedParentKeys | Where-Object {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($_)
+            if ($null -ne $k) { $k.Dispose() }
+            $null -eq $k
+        })
+    if ($gone.Count -gt 0) { throw ('Uninstall deleted shared keys it does not own:' + [Environment]::NewLine + ($gone -join [Environment]::NewLine)) }
+    Write-Step 'ok: shared parent keys (CLSID, AppID, Run, Uninstall, each shell key) are still there'
 }

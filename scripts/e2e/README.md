@@ -20,8 +20,9 @@ as likely to be a script defect as an app defect.
 - Use a disposable machine or VM. The scripts install and uninstall the app, restart the tray,
   write and restore `config.json`, and create files under `-Root`. `Cancel.Tests.ps1` writes about
   2 GB, `Ephemeral.Tests.ps1` hashes your profile folders.
-- `CutSafety.Tests.ps1` scenario A needs a second volume: a writable folder on a different
-  drive letter (for example a small attached virtual disk), passed as `-SecondVolume`.
+- `CutSafety.Tests.ps1` scenario A and the cross-volume cut need a second volume: a writable
+  folder on a different drive letter (for example a small attached virtual disk), passed as
+  `-SecondVolume`. Without it the same-volume part runs and the script reports SKIP, not PASS.
 
 ## Run
 
@@ -35,11 +36,11 @@ stdout. It writes no files. Exit code 0 means no test failed (a skipped test is 
 |---|---|
 | `Install.Tests.ps1` | `--install`, every registry value, the Uninstall entry, the AppID security descriptors, the tray process |
 | `Verbs.Tests.ps1` | copy and paste against Explorer's `CopyHere` on the same tree (deviations from docs/parity.md only), Ctrl+C interop, `X - Copy` naming, paste into own subfolder refused |
-| `CutSafety.Tests.ps1` | cross-volume cut with a locked file keeps that source; `skip` conflict with same size and time keeps the source (hash) |
+| `CutSafety.Tests.ps1` | cross-volume cut with a locked file keeps that source; `skip` conflict with same size and time keeps the source (hash); a movable file in each cut proves the job ran |
 | `Cancel.Tests.ps1` | Cancel through UI Automation leaves no partial file and does not touch pre-existing destinations |
-| `Ephemeral.Tests.ps1` | five ephemeral jobs leave no new or changed file in `%APPDATA%`, `%LOCALAPPDATA%` or `%TEMP%` except `config.json` and `%TEMP%\.net`, and no file with the test marker |
-| `Security.Tests.ps1` | a low-integrity copy of the exe cannot run a verb (a normal copy can) |
-| `Uninstall.Tests.ps1` | `--uninstall` removes every key, the Run value, the folders and the tray |
+| `Ephemeral.Tests.ps1` | five ephemeral jobs leave no new or changed file in `%APPDATA%`, `%LOCALAPPDATA%` or `%TEMP%` except `config.json` and `%TEMP%\.net`, and no file with the test marker; Windows' notification database may change but is searched for the marker (toasts carry no path) |
+| `Security.Tests.ps1` | a low-integrity copy of the exe cannot run a verb: exit 1 (a normal copy exits 0); any other code is reported as inconclusive |
+| `Uninstall.Tests.ps1` | `--uninstall` removes every key, the Run value, the folders and the tray, and keeps the shared parent keys |
 
 A script can also be run alone, for example
 `powershell -STA -File .\Verbs.Tests.ps1 -Root D:\rrc-e2e`. Tests other than Install and
@@ -67,6 +68,8 @@ names a machine, an address or a user.
 - The progress window's Cancel button has the accessible name `Cancel`.
 - The expected registry table in `Common.ps1` mirrors `Registration.InstallValues`. When that
   changes, change the table in the same commit.
+- `copy` and `cut` put exactly the given items on the clipboard. `Invoke-Robo` clears the
+  clipboard first and waits for those names, so a paste never takes an earlier selection.
 - `Wait-Settled` decides a paste is done when the destination's file count and size stop
   changing for 3 seconds and no `robocopy.exe` is running. There is no `--wait`.
 

@@ -1,6 +1,6 @@
 <#
 Uninstall: --uninstall removes every registry key and the Run value, the config, data and
-install folders, and the tray process. Run last.
+install folders, and the tray process, and leaves the shared parent keys alone. Run last.
 #>
 param(
     [string]$Root = (Join-Path $env:TEMP 'rrc-e2e'),
@@ -22,5 +22,6 @@ while ((Get-Date) -lt $deadline -and ($folders | Where-Object { Test-Path -Liter
 foreach ($folder in $folders) { Assert-That (-not (Test-Path -LiteralPath $folder)) "folder is gone: $folder" }
 
 Assert-RegistryRemoved
+Assert-SharedParentsKept
 Assert-That ((Get-RoboProcesses).Count -eq 0) 'no RoboRightClick process is running'
 Write-Host 'PASS: Uninstall'

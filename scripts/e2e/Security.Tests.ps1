@@ -2,9 +2,9 @@
 Security: a low-integrity process must not be able to drive the tray.
 
 A copy of the exe is placed in a temp folder and run once as a control (normal integrity,
-expect exit 0), then marked low integrity with icacls and run again (expect non-zero:
-access denied by the AppID permissions, or COM activation failure). The control shows that
-the second failure comes from the integrity level and not from the copy being unable to start.
+expect exit 0). A second copy is marked low integrity with icacls and run (expect exit 1,
+CliExitCodes.Failed: access denied by the AppID permissions or the integrity check, or a COM
+activation failure). Any other non-zero code is reported as inconclusive, not as a pass.
 Needs the installed app (the COM classes point at the installed exe) and a desktop session.
 #>
 param(
@@ -36,17 +36,23 @@ $icacls = & icacls.exe $lowCopy /setintegritylevel low 2>&1
 if ($LASTEXITCODE -ne 0) { throw "icacls failed: $icacls" }
 Write-Step 'marked the second copy low integrity'
 
-$lowExit = $null
-try {
-    $p = Start-Process -FilePath $lowCopy -ArgumentList ('copy ' + (Quote-Arg $sample)) -Wait -PassThru
-    $lowExit = $p.ExitCode
+# Only exit code 1 (CliExitCodes.Failed: the tray refused the call, or activation was denied)
+# shows the refusal. Any other non-zero code means the process did not get as far as asking:
+# for example the single-file host failing to start at low integrity. That proves nothing
+# about the server's security, so it is a failure of the test, reported with the code.
+$p = Start-Process -FilePath $lowCopy -ArgumentList ('copy ' + (Quote-Arg $sample)) -PassThru
+$null = $p.Handle
+if (-not $p.WaitForExit(60000)) {
+    $p.Kill()
+    throw 'The low-integrity process did not exit within 60 s. Look for a window or prompt it opened.'
 }
-catch {
-    # The process could not start at all. The control above rules out a broken exe, so this
-    # also counts as refused, and it is reported as such rather than hidden.
-    Write-Step "low-integrity process failed to start: $($_.Exception.Message)"
-    $lowExit = -1
+$lowExit = $p.ExitCode
+Write-Step "low-integrity exit code: $lowExit"
+if ($lowExit -eq 0) { throw 'A low-integrity process ran a verb (exit 0). The integrity check or the AppID permissions are not working.' }
+if ($lowExit -ne 1) {
+    throw ("The low-integrity process exited with $lowExit, not 1. It most likely failed before calling the tray " +
+        '(start-up, runtime extraction), so this run says nothing about the security check. Investigate and rerun.')
 }
-Assert-That ($lowExit -ne 0) "a low-integrity process cannot run a verb (exit $lowExit)"
+Assert-That $true 'a low-integrity process cannot run a verb (exit 1, refused)'
 
 Write-Host 'PASS: Security'

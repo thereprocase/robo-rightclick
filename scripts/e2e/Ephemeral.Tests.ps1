@@ -7,6 +7,10 @@ jobs whose file names carry a unique marker, snapshots again, and fails on any n
 file other than config.json and the runtime's %TEMP%\.net extraction folder, and on any file
 name or new or changed file content containing the marker.
 
+Windows records every toast in its notification database. The jobs raise toasts
+(notifyOnComplete), so that folder may change, but its content is still searched for the
+marker: an ephemeral toast must not carry a path (product invariant 2).
+
 The test's own folder (-Root) is excluded: the marker is in those names on purpose. A busy
 profile can show unrelated changes (browsers, indexers); the failure lists each path so a
 person can judge it, and -AllowPath adds substring exclusions for noise that has been judged.
@@ -28,8 +32,19 @@ $work = Join-Path $script:E2E.Root 'ephemeral'
 Remove-TreeIfPresent $work
 $marker = 'rrcmark' + [Guid]::NewGuid().ToString('N').Substring(0, 12)
 
-$scanRoots = @($env:APPDATA, $env:LOCALAPPDATA, $env:TEMP) | Where-Object { $_ } | Select-Object -Unique
+# %TEMP% normally sits inside %LOCALAPPDATA%; a root inside another root is scanned once.
+$candidates = @($env:APPDATA, $env:LOCALAPPDATA, $env:TEMP) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') } | Select-Object -Unique
+$scanRoots = @($candidates | Where-Object {
+        $inner = $_
+        -not ($candidates | Where-Object { $_ -ne $inner -and $inner.StartsWith($_ + '\', [StringComparison]::OrdinalIgnoreCase) })
+    })
 $excluded = @($script:E2E.Root) + @(Join-Path $env:TEMP '.net')
+$searchedOnly = @(Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Notifications')
+
+function Test-SearchedOnly([string]$Path) {
+    foreach ($e in $searchedOnly) { if ($Path.StartsWith($e, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+    return $false
+}
 
 function Test-Excluded([string]$Path) {
     foreach ($e in $excluded) { if ($Path.StartsWith($e, [StringComparison]::OrdinalIgnoreCase)) { return $true } }
@@ -67,20 +82,32 @@ function Get-Snapshot {
     return $snapshot
 }
 
-function Test-FileContainsText([string]$Path, [string]$Text) {
+# $true or $false; $null when the file cannot be read, which the caller reports, so an
+# unreadable file is never mistaken for a clean one. The file is opened with full sharing because
+# databases and logs stay open for writing. Bytes are mapped one-to-one to characters (code page
+# 28591), so a native IndexOf finds the marker in UTF-8 and in UTF-16LE text quickly.
+function Test-FileContainsText([string]$Path, [string]$Text, [int]$LimitMB = 256) {
     try {
-        $bytes = [IO.File]::ReadAllBytes($Path)
-        foreach ($encoding in [Text.Encoding]::UTF8, [Text.Encoding]::Unicode) {
-            $needle = $encoding.GetBytes($Text)
-            for ($i = 0; $i -le $bytes.Length - $needle.Length; $i++) {
-                if ($bytes[$i] -ne $needle[0]) { continue }
-                $match = $true
-                for ($j = 1; $j -lt $needle.Length; $j++) { if ($bytes[$i + $j] -ne $needle[$j]) { $match = $false; break } }
-                if ($match) { return $true }
+        $stream = [IO.File]::Open((ConvertTo-LongPath $Path), 'Open', 'Read', 'ReadWrite, Delete')
+        try {
+            if ($stream.Length -gt ([long]$LimitMB * 1MB)) { return $null }
+            $bytes = New-Object byte[] ([int]$stream.Length)
+            $read = 0
+            while ($read -lt $bytes.Length) {
+                $n = $stream.Read($bytes, $read, $bytes.Length - $read)
+                if ($n -le 0) { break }
+                $read += $n
             }
         }
+        finally { $stream.Dispose() }
     }
-    catch { }
+    catch { return $null }
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
+    $haystack = $latin1.GetString($bytes, 0, $read)
+    foreach ($encoding in [Text.Encoding]::UTF8, [Text.Encoding]::Unicode) {
+        $needle = $latin1.GetString($encoding.GetBytes($Text))
+        if ($haystack.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+    }
     return $false
 }
 
@@ -113,19 +140,26 @@ try {
         $isNew = -not $before.ContainsKey($path)
         $isChanged = -not $isNew -and $before[$path] -ne $after[$path]
         $isConfig = $path -ieq $script:E2E.ConfigFile
-        if (($isNew -or $isChanged) -and -not $isConfig) {
+        $isSearchedOnly = Test-SearchedOnly $path
+        if (($isNew -or $isChanged) -and -not $isConfig -and -not $isSearchedOnly) {
             $problems.Add($(if ($isNew) { 'new:     ' } else { 'changed: ' }) + $path)
         }
-        if ((Split-Path -Leaf $path).IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $problems.Add("marker in name: $path") }
-        elseif (($isNew -or $isChanged) -and -not $isConfig -and (Test-FileContainsText $path $marker)) { $problems.Add("marker in content: $path") }
+        if ([IO.Path]::GetFileName($path).IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $problems.Add("marker in name: $path") }
+        elseif (($isNew -or $isChanged) -and -not $isConfig) {
+            $found = Test-FileContainsText $path $marker
+            if ($found -eq $true) { $problems.Add("marker in content: $path") }
+            elseif ($null -eq $found -and $isSearchedOnly) { $problems.Add("could not search for the marker: $path") }
+        }
     }
     # A deleted file is a change too (a temp file created and removed leaves the other list empty).
-    foreach ($path in $before.Keys) { if (-not $after.ContainsKey($path)) { $problems.Add("removed:  $path") } }
+    foreach ($path in $before.Keys) {
+        if (-not $after.ContainsKey($path) -and -not (Test-SearchedOnly $path)) { $problems.Add("removed:  $path") }
+    }
 
     if ($problems.Count -gt 0) {
         throw ('Ephemeral mode left traces (judge each; add -AllowPath for noise unrelated to the app):' + [Environment]::NewLine + ($problems -join [Environment]::NewLine))
     }
-    Assert-That $true 'no new or changed file outside config.json and %TEMP%\.net, and no file name or content with the marker'
+    Assert-That $true 'no new or changed file outside config.json, %TEMP%\.net and the notification database, and no file name or content with the marker'
 }
 finally {
     Restore-RoboConfig $originalConfig

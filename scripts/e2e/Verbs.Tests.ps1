@@ -37,18 +37,34 @@ Assert-That ((Invoke-Robo -Verb paste -Paths $roboOut) -eq 0) 'Robo-Paste accept
 Write-Step 'Robo copy finished'
 
 # Against the source, nothing may differ: a copy must keep names, data, attributes and streams.
-$vsSource = Compare-Tree -Reference $src -Difference (Join-Path $roboOut 'tree') -IgnoreArchive
+# The one exception is the source's junction. Get-TreeEntries leaves reparse points out, but the
+# job recreates an empty folder with the link's name, as Explorer does (JobScan.LinkFolders), so
+# that folder is expected in the copy. It must be a plain, empty folder.
+$roboTree = Join-Path $roboOut 'tree'
+# Compare-Tree returns one array object; assign it before piping so the filter sees each entry.
+$vsSourceAll = Compare-Tree -Reference $src -Difference $roboTree -IgnoreArchive
+$vsSource = @($vsSourceAll | Where-Object {
+        -not ($_.Kind -eq 'ExtraInDifference' -and $_.Rel -eq 'junction-to-target')
+    })
 Assert-That ($vsSource.Count -eq 0) ('Robo copy equals the source' + [Environment]::NewLine + (Format-Diffs $vsSource))
+$standIn = Join-Path $roboTree 'junction-to-target'
+if (Test-Path -LiteralPath $standIn) {
+    $standInAttr = [IO.File]::GetAttributes($standIn)
+    Assert-That (-not ($standInAttr -band [IO.FileAttributes]::ReparsePoint)) 'the junction was not copied as a link'
+    Assert-That (@(Get-ChildItem -LiteralPath $standIn -Force).Count -eq 0) "the junction's stand-in folder is empty (its target was not followed)"
+}
 
 # Against Explorer, only the listed deviations are accepted.
-$roboTree = Join-Path $roboOut 'tree'
-$vsExplorer = Compare-Tree -Reference (Join-Path $explorerOut 'tree') -Difference $roboTree
+$explorerTree = Join-Path $explorerOut 'tree'
+$vsExplorer = Compare-Tree -Reference $explorerTree -Difference $roboTree
 $unexpected = @($vsExplorer | Where-Object {
         $allowed = $false
-        # Folder links: Explorer leaves an empty folder, robocopy leaves nothing.
+        # Folder links: Explorer leaves an empty folder; docs/parity.md lists robo leaving none.
         if ($_.Kind -eq 'MissingInDifference' -and $_.Rel -eq 'junction-to-target') { $allowed = $true }
-        # Long paths: Explorer skipped them in the measured run (about 200 characters); robo copies them.
-        if ($_.Kind -eq 'ExtraInDifference' -and (Join-Path $roboTree $_.Rel).Length -gt 200) { $allowed = $true }
+        # Long paths: Explorer skipped them in the measured run (beyond about 200 characters of
+        # its own path); robo copies them. The length that matters is the path Explorer would
+        # have written, which is longer than robo's ("out-explorer" versus "out-robo").
+        if ($_.Kind -eq 'ExtraInDifference' -and (Join-Path $explorerTree $_.Rel).Length -gt 200) { $allowed = $true }
         -not $allowed
     })
 Assert-That ($unexpected.Count -eq 0) ('Robo equals Explorer apart from the deviations in docs/parity.md' + [Environment]::NewLine + (Format-Diffs $unexpected))
@@ -58,7 +74,11 @@ $interop = Join-Path $work 'interop'
 New-Item -ItemType Directory -Path $interop, (Join-Path $interop 'dest') | Out-Null
 $plain = Join-Path $interop 'copied-with-ctrl-c.txt'
 Set-Content -LiteralPath $plain -Value 'placed on the clipboard by the shell, not by Robo-Copy'
-Set-Clipboard -Path $plain
+# Set-Clipboard -Path exists only in Windows PowerShell 5.1; PowerShell 7 dropped it. Both
+# write a plain CF_HDROP file list, as a Ctrl+C in Explorer does.
+if ((Get-Command Set-Clipboard).Parameters.ContainsKey('Path')) { Set-Clipboard -Path $plain }
+else { Set-ClipboardFiles @($plain) }
+Assert-That (((Get-ClipboardFileNames) -join '|') -eq 'copied-with-ctrl-c.txt') 'the clipboard holds the Ctrl+C file'
 Assert-That ((Invoke-Robo -Verb paste -Paths (Join-Path $interop 'dest')) -eq 0) 'Robo-Paste accepted a clipboard written by Set-Clipboard'
 [void](Wait-Settled -Path (Join-Path $interop 'dest'))
 Assert-That ((Get-FileSha256 (Join-Path $interop 'dest\copied-with-ctrl-c.txt')) -eq (Get-FileSha256 $plain)) 'the Ctrl+C file arrived intact'
