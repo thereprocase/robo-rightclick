@@ -13,9 +13,6 @@ namespace RoboRightClick.Jobs;
 /// </summary>
 internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
 {
-    private const string VerbatimPrefix = @"\\?\";
-    private const string VerbatimUncPrefix = @"\\?\UNC\";
-
     /// <summary>Starting buffer for the path APIs; a longer path is retried at the size Windows asks for.</summary>
     private const int InitialPathBuffer = 1024;
 
@@ -159,16 +156,6 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
         }
     }
 
-    internal static string StripVerbatimPrefix(string path)
-    {
-        if (path.StartsWith(VerbatimUncPrefix, StringComparison.OrdinalIgnoreCase))
-        {
-            return @"\\" + path[VerbatimUncPrefix.Length..];
-        }
-
-        return path.StartsWith(VerbatimPrefix, StringComparison.Ordinal) ? path[VerbatimPrefix.Length..] : path;
-    }
-
     private static FileSystemEnumerable<ScanEntry> Enumerate(string directory, bool ignoreInaccessible)
     {
         var options = new EnumerationOptions
@@ -224,7 +211,7 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
     private static string? ResolveExisting(string path)
     {
         using var handle = ProcessNative.CreateFile(
-            ProcessNative.ExtendedLengthPath(path),
+            WinPath.ExtendedLengthPath(path),
             0,
             ProcessNative.FILE_SHARE_ALL,
             0,
@@ -249,7 +236,7 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
             return null;
         }
 
-        return StripVerbatimPrefix(new string(buffer, 0, (int)length));
+        return WinPath.StripVerbatimPrefix(new string(buffer, 0, (int)length));
     }
 
     private static string? VolumeRoot(string path)
@@ -257,7 +244,7 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
         var buffer = new char[InitialPathBuffer];
         fixed (char* p = buffer)
         {
-            if (!ProcessNative.GetVolumePathName(ProcessNative.ExtendedLengthPath(path), p, (uint)buffer.Length))
+            if (!ProcessNative.GetVolumePathName(WinPath.ExtendedLengthPath(path), p, (uint)buffer.Length))
             {
                 return null;
             }
@@ -265,7 +252,7 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
 
         // A prefixed query answers with a prefixed root; strip it so roots compare alike.
         var end = Array.IndexOf(buffer, '\0');
-        return end > 0 ? StripVerbatimPrefix(new string(buffer, 0, end)) : null;
+        return end > 0 ? WinPath.StripVerbatimPrefix(new string(buffer, 0, end)) : null;
     }
 
     private static uint FinalPathName(SafeFileHandle handle, char[] buffer)

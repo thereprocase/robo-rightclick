@@ -25,7 +25,7 @@ internal static unsafe class InProcessCopier
     /// </summary>
     public static StepOutcome Rename(string source, string destination)
     {
-        if (ProcessNative.MoveFileEx(ProcessNative.ExtendedLengthPath(source), ProcessNative.ExtendedLengthPath(destination), 0))
+        if (ProcessNative.MoveFileEx(WinPath.ExtendedLengthPath(source), WinPath.ExtendedLengthPath(destination), 0))
         {
             return new StepOutcome([source], [], null, null);
         }
@@ -90,8 +90,8 @@ internal static unsafe class InProcessCopier
         {
             var routine = (nint)(delegate* unmanaged[Stdcall]<long, long, long, long, uint, uint, nint, nint, nint, uint>)&ProgressRoutine;
             var copied = ProcessNative.CopyFileEx(
-                ProcessNative.ExtendedLengthPath(source),
-                ProcessNative.ExtendedLengthPath(destination),
+                WinPath.ExtendedLengthPath(source),
+                WinPath.ExtendedLengthPath(destination),
                 routine,
                 GCHandle.ToIntPtr(handle),
                 0,

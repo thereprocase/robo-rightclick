@@ -46,6 +46,16 @@ public class RobocopyOutputParserTests
     }
 
     [Fact]
+    public void An_error_code_too_large_for_an_int_is_reported_as_unknown_instead_of_throwing()
+    {
+        var parser = new RobocopyOutputParser();
+        parser.Feed(@"2026/10/02 12:34:56 ERROR 99999999999 (0x00000005) Copying File C:\src\a.txt");
+        var e = Assert.IsType<ErrorReported>(Assert.Single(parser.Complete()));
+        Assert.Equal(0, e.Code);
+        Assert.Equal(@"C:\src\a.txt", e.Path);
+    }
+
+    [Fact]
     public void Complete_flushes_a_trailing_error()
     {
         var parser = new RobocopyOutputParser();
@@ -160,6 +170,28 @@ public class JobLifecycleTests
         Assert.Equal(100.0, p.BytesPerSecond!.Value, precision: 6);
         Assert.Equal(TimeSpan.FromSeconds(7.5), p.EstimatedRemaining);
     }
+
+    [Fact]
+    public void Eta_is_null_rather_than_overflowing_when_the_rate_is_tiny()
+    {
+        var p = new JobProgress(totalBytes: long.MaxValue, totalFiles: 1);
+        p.SetObservedBytes(0, T0);
+        p.SetObservedBytes(1, T0.AddSeconds(10));
+        Assert.NotNull(p.BytesPerSecond);
+        Assert.Null(p.EstimatedRemaining);
+    }
+
+    [Theory]
+    [InlineData(1_000L, 0.0)]
+    [InlineData(1_000L, -5.0)]
+    [InlineData(1_000L, double.NaN)]
+    [InlineData(long.MaxValue, 1e-300)]
+    public void Estimate_is_null_without_a_usable_rate_or_beyond_a_year(long remaining, double rate) =>
+        Assert.Null(JobProgress.Estimate(remaining, rate));
+
+    [Fact]
+    public void Estimate_never_goes_negative() =>
+        Assert.Equal(TimeSpan.Zero, JobProgress.Estimate(-10, 5));
 
     [Fact]
     public void Done_bytes_never_exceed_total()

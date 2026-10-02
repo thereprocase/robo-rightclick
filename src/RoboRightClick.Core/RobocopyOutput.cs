@@ -74,7 +74,7 @@ public sealed partial class RobocopyOutputParser
                 _pendingFile = null;
             }
             FlushFile(events);
-            _pendingError = (int.Parse(error.Groups[1].Value, CultureInfo.InvariantCulture), error.Groups[2].Value, path);
+            _pendingError = (ErrorCode(error.Groups[1].Value), error.Groups[2].Value, path);
             return events;
         }
 
@@ -118,6 +118,14 @@ public sealed partial class RobocopyOutputParser
         }
         return events;
     }
+
+    /// <summary>
+    /// The decimal Windows error code of an ERROR line. The pipe client is checked to be the
+    /// robocopy the app started, but its text is still parsed defensively: a code that does
+    /// not fit an int is reported as 0 (unknown) instead of throwing on the consumer thread.
+    /// </summary>
+    private static int ErrorCode(string digits) =>
+        int.TryParse(digits, NumberStyles.None, CultureInfo.InvariantCulture, out var code) ? code : 0;
 
     private void FlushFile(List<RobocopyEvent> events)
     {

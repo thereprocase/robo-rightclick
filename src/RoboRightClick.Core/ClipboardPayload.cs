@@ -27,7 +27,7 @@ public enum DropFilesStatus
 {
     Ok,
 
-    /// <summary>The legacy narrow form; the host decodes it with DragQueryFileW.</summary>
+    /// <summary>The legacy narrow form; the host splits it with <see cref="VerbRules.SplitAnsiDropFiles"/> and converts each name from the ANSI code page.</summary>
     Ansi,
 
     /// <summary>Over <see cref="ClipboardPayload.MaxDropFilesBytes"/> or <see cref="ClipboardPayload.MaxDropFilesPaths"/>: refused, not truncated.</summary>
@@ -118,8 +118,11 @@ public static class ClipboardPayload
 
     /// <summary>
     /// Reads a wide DROPFILES block. The legacy ANSI form is reported as
-    /// <see cref="DropFilesStatus.Ansi"/> for the host to decode with DragQueryFileW, because
-    /// it depends on the code page; the host applies the same limits to that path.
+    /// <see cref="DropFilesStatus.Ansi"/> for the host to decode (it depends on the code
+    /// page) through <see cref="VerbRules.SplitAnsiDropFiles"/>, under the same limits.
+    /// A name without its NUL terminator makes the whole block <see cref="DropFilesResult.Empty"/>:
+    /// the block was cut short or forged, and pasting the names before it would silently
+    /// leave out an item the user selected.
     /// </summary>
     public static DropFilesResult DecodeDropFiles(ReadOnlySpan<byte> data)
     {
@@ -148,9 +151,13 @@ public static class ClipboardPayload
         while (position < text.Length)
         {
             var end = text.IndexOf('\0', position);
-            if (end < 0 || end == position)
+            if (end < 0)
             {
-                break; // missing terminator, or the empty string that ends the list
+                return DropFilesResult.Empty;
+            }
+            if (end == position)
+            {
+                break; // the empty string that ends the list
             }
             if (paths.Count == MaxDropFilesPaths)
             {

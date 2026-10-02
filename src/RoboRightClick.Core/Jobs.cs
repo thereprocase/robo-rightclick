@@ -165,17 +165,24 @@ public sealed class JobProgress
         }
     }
 
-    public TimeSpan? EstimatedRemaining
+    public TimeSpan? EstimatedRemaining => Estimate(TotalBytes - DoneBytes, BytesPerSecond);
+
+    /// <summary>An estimate beyond this means nothing to the user.</summary>
+    public static readonly TimeSpan MaxEstimate = TimeSpan.FromDays(365);
+
+    /// <summary>
+    /// Time left at <paramref name="bytesPerSecond"/>, or null when there is no usable rate or
+    /// the answer exceeds <see cref="MaxEstimate"/>. A tiny rate would otherwise make
+    /// TimeSpan.FromSeconds overflow and throw on the UI's snapshot path.
+    /// </summary>
+    public static TimeSpan? Estimate(long remainingBytes, double? bytesPerSecond)
     {
-        get
+        if (bytesPerSecond is not { } rate || !double.IsFinite(rate) || rate <= 0)
         {
-            var rate = BytesPerSecond;
-            if (rate is null or <= 0)
-            {
-                return null;
-            }
-            return TimeSpan.FromSeconds((TotalBytes - DoneBytes) / rate.Value);
+            return null;
         }
+        var seconds = Math.Max(0, remainingBytes) / rate;
+        return double.IsFinite(seconds) && seconds <= MaxEstimate.TotalSeconds ? TimeSpan.FromSeconds(seconds) : null;
     }
 
     private void Sample(DateTimeOffset at)

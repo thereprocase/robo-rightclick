@@ -37,6 +37,25 @@ public class ClipboardPayloadTests
         Assert.Empty(ClipboardPayload.DecodeDropFiles(bytes).Paths);
     }
 
+    [Fact]
+    public void A_final_name_without_its_terminator_refuses_the_whole_block()
+    {
+        // Two names, then the second one's terminator and the list terminator cut off: the
+        // first name alone must not be pasted as if it were the whole selection.
+        var full = ClipboardPayload.EncodeDropFiles([@"C:\a", @"C:\bb"]);
+        var cut = full[..^4];
+        var result = ClipboardPayload.DecodeDropFiles(cut);
+        Assert.Equal(DropFilesStatus.Ok, result.Status);
+        Assert.Empty(result.Paths);
+    }
+
+    [Fact]
+    public void A_list_missing_only_its_final_empty_string_still_decodes()
+    {
+        var full = ClipboardPayload.EncodeDropFiles([@"C:\a", @"C:\bb"]);
+        Assert.Equal([@"C:\a", @"C:\bb"], ClipboardPayload.DecodeDropFiles(full[..^2]).Paths);
+    }
+
     [Theory]
     [InlineData(null, TransferVerb.Copy)]
     [InlineData(DropEffect.Copy, TransferVerb.Copy)]

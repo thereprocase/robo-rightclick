@@ -54,4 +54,53 @@ public class WinPathTests
     [InlineData("README", "README", "")]
     public void SplitExtension(string name, string stem, string ext) =>
         Assert.Equal((stem, ext), WinPath.SplitExtension(name));
+
+    [Fact]
+    public void ExtendedLengthPath_LeavesShortPathsAlone()
+    {
+        var path = @"C:\" + new string('a', WinPath.ExtendedLengthThreshold - 4);
+        Assert.Equal(WinPath.ExtendedLengthThreshold - 1, path.Length);
+        Assert.Same(path, WinPath.ExtendedLengthPath(path));
+    }
+
+    [Fact]
+    public void ExtendedLengthPath_PrefixesLongDrivePaths()
+    {
+        var path = @"C:\" + new string('a', WinPath.ExtendedLengthThreshold);
+        Assert.Equal(@"\\?\" + path, WinPath.ExtendedLengthPath(path));
+    }
+
+    [Fact]
+    public void ExtendedLengthPath_PrefixesLongUncPathsWithUnc()
+    {
+        var tail = @"srv\share\" + new string('a', WinPath.ExtendedLengthThreshold);
+        Assert.Equal(@"\\?\UNC\" + tail, WinPath.ExtendedLengthPath(@"\\" + tail));
+    }
+
+    [Theory]
+    [InlineData(@"\\?\C:\")]
+    [InlineData(@"\\.\pipe\")]
+    [InlineData(@"relative\")]
+    public void ExtendedLengthPath_NeverDoublesOrInventsAPrefix(string start)
+    {
+        var path = start + new string('a', WinPath.ExtendedLengthThreshold);
+        Assert.Equal(path, WinPath.ExtendedLengthPath(path));
+    }
+
+    [Theory]
+    [InlineData(@"\\?\C:\a\b", @"C:\a\b")]
+    [InlineData(@"\\?\UNC\srv\share\a", @"\\srv\share\a")]
+    [InlineData(@"\\?\unc\srv\share", @"\\srv\share")]
+    [InlineData(@"C:\a", @"C:\a")]
+    [InlineData(@"\\srv\share", @"\\srv\share")]
+    public void StripVerbatimPrefix(string path, string expected) => Assert.Equal(expected, WinPath.StripVerbatimPrefix(path));
+
+    [Fact]
+    public void StripVerbatimPrefix_InvertsExtendedLengthPath()
+    {
+        foreach (var path in new[] { @"C:\" + new string('x', 300), @"\\srv\share\" + new string('y', 300) })
+        {
+            Assert.Equal(path, WinPath.StripVerbatimPrefix(WinPath.ExtendedLengthPath(path)));
+        }
+    }
 }

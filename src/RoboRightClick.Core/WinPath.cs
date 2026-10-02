@@ -128,6 +128,56 @@ public static class WinPath
         return TrimTrailingSeparators(p);
     }
 
+    /// <summary>
+    /// Shortest path given the extended-length prefix by <see cref="ExtendedLengthPath"/>:
+    /// directory operations stop at MAX_PATH (260) minus room for an 8.3 name.
+    /// </summary>
+    public const int ExtendedLengthThreshold = 248;
+
+    private const string VerbatimPrefix = @"\\?\";
+    private const string VerbatimUncPrefix = @"\\?\UNC\";
+    private const string DevicePrefix = @"\\.\";
+
+    /// <summary>
+    /// The form of <paramref name="path"/> to hand to raw Win32 path APIs. The app has no
+    /// longPathAware manifest, so without the "\\?\" (or "\\?\UNC\") prefix those APIs stop
+    /// at MAX_PATH, while <see cref="PathPolicy"/> accepts paths up to 32,767 characters.
+    /// Paths shorter than <see cref="ExtendedLengthThreshold"/>, paths that already carry a
+    /// verbatim or device prefix, and anything that is not a drive or UNC path are returned
+    /// unchanged. Callers pass paths that passed PathPolicy (fully qualified, no "." or ".."
+    /// segments, no '/'), so the prefix switches off no normalization they rely on.
+    /// </summary>
+    public static string ExtendedLengthPath(string path)
+    {
+        if (path.Length < ExtendedLengthThreshold
+            || path.StartsWith(VerbatimPrefix, StringComparison.Ordinal)
+            || path.StartsWith(DevicePrefix, StringComparison.Ordinal))
+        {
+            return path;
+        }
+        if (path.StartsWith(@"\\", StringComparison.Ordinal))
+        {
+            return VerbatimUncPrefix + path[2..];
+        }
+        return path.Length >= 3 && char.IsAsciiLetter(path[0]) && path[1] == ':' && path[2] == Separator
+            ? VerbatimPrefix + path
+            : path;
+    }
+
+    /// <summary>
+    /// The inverse of <see cref="ExtendedLengthPath"/> for paths Windows hands back
+    /// (GetFinalPathNameByHandle, GetVolumePathName): "\\?\UNC\server\share" becomes
+    /// "\\server\share" and "\\?\C:\x" becomes "C:\x". Anything else is returned unchanged.
+    /// </summary>
+    public static string StripVerbatimPrefix(string path)
+    {
+        if (path.StartsWith(VerbatimUncPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return @"\\" + path[VerbatimUncPrefix.Length..];
+        }
+        return path.StartsWith(VerbatimPrefix, StringComparison.Ordinal) ? path[VerbatimPrefix.Length..] : path;
+    }
+
     /// <summary>True when one path is the other or contains it: the two locations share files.</summary>
     public static bool Overlap(string a, string b) => AreSame(a, b) || IsStrictlyUnder(a, b) || IsStrictlyUnder(b, a);
 
