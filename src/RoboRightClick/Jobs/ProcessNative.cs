@@ -196,7 +196,12 @@ internal static unsafe partial class ProcessNative
         public ulong FileIdHigh;
     }
 
-    [StructLayout(LayoutKind.Sequential)]
+    /// <summary>
+    /// BY_HANDLE_FILE_INFORMATION. Its times are FILETIMEs, two DWORDs aligned to 4, so the
+    /// struct is 52 bytes with CreationTime at offset 4. Pack = 4 keeps the longs there; with
+    /// the default packing every field after the attributes would be read 4 bytes off.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
     private struct ByHandleFileInformation
     {
         public uint FileAttributes;
