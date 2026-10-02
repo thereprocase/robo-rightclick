@@ -160,3 +160,15 @@ All job output goes through one `IJobSink` interface:
 - **Linux:** `./scripts/build.sh` (cross-build) and `./scripts/test.sh` (all Core tests) green on every commit.
 - **Windows:** every runtime claim cites a dated `docs/testlog.md` entry from the VM. "Cross-compiles; unverified on Windows" is stated wherever that's all we have.
 - **Physical machine:** a final smoke test of install, three verbs, uninstall, and checking that the HKCU keys are gone. It's recorded as a separate testlog entry, not assumed from the VM run.
+
+## Decided for after the beta
+
+- **Opt-in verified cut (`cutVerify: "hash"`).** The default cut stays robocopy `/MOV`/`/MOVE`.
+  Robocopy deletes each source only after that file's copy succeeded, which matches Explorer
+  and keeps the per-file guarantee measured in the testlog. `/MOV` doesn't read the copy back.
+  A verified mode would copy without `/MOV`, hash both sides of each file, and delete only
+  the sources whose copies matched, through a minimal delete step limited to files the step
+  ledger proved copied. That is an app-initiated deletion, so it needs an ADR under invariant 1
+  first. Hashing reads both sides, so a verified cut takes about 3× as long as a plain one.
+  Copy-everything-then-delete-everything was considered and rejected: a crash during the
+  delete phase leaves a half-deleted source with no per-file record.
