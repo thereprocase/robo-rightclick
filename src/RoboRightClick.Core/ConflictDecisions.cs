@@ -467,6 +467,38 @@ public static class ExecutionPlanner
             var children = ChildDirectories(stepScan, root);
             var ownFiles = new Dictionary<string, List<PlannedFile>>(WinPath.Comparer);
             var subtreeFiles = new Dictionary<string, List<PlannedFile>>(WinPath.Comparer);
+            var topByDirectory = new Dictionary<string, string>(WinPath.Comparer);
+
+            // The topmost unmarked folder above a directory is the recursive step that copies it.
+            // Memoized along each climb: on a path thousands of levels deep, climbing once per
+            // file would rebuild every ancestor string for every file.
+            string TopUnmarked(string start)
+            {
+                var climbed = new List<string>();
+                var current = start;
+                string top;
+                while (true)
+                {
+                    if (topByDirectory.TryGetValue(current, out var known))
+                    {
+                        top = known;
+                        break;
+                    }
+                    climbed.Add(current);
+                    var up = WinPath.GetParent(current);
+                    if (marked.Contains(up))
+                    {
+                        top = current;
+                        break;
+                    }
+                    current = up;
+                }
+                foreach (var directory in climbed)
+                {
+                    topByDirectory[directory] = top;
+                }
+                return top;
+            }
             foreach (var file in stepScan.Files)
             {
                 var parent = WinPath.GetParent(file.SourcePath);
@@ -475,13 +507,7 @@ public static class ExecutionPlanner
                     ListFor(ownFiles, parent).Add(file);
                     continue;
                 }
-                // The topmost unmarked folder above the file is the recursive step that copies it.
-                var top = parent;
-                while (!marked.Contains(WinPath.GetParent(top)))
-                {
-                    top = WinPath.GetParent(top);
-                }
-                ListFor(subtreeFiles, top).Add(file);
+                ListFor(subtreeFiles, TopUnmarked(parent)).Add(file);
             }
 
             string DestinationOf(string directory) => WinPath.AreSame(directory, root)
