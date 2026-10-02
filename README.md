@@ -125,8 +125,10 @@ this section is verified on Windows yet; the checks that will verify it are list
   the clipboard before. A Ctrl+C with nothing selected counts too: wait 2 seconds after it.
 - Libraries, This PC, the Recycle Bin, search results, Control Panel and zip folders are
   refused with a notification, as with the right-click.
-- In ephemeral mode, keep using Robo-Copy and Robo-Cut: a plain Ctrl+C or Ctrl+X puts the
-  file list in Windows clipboard history, which Robo-Copy and Robo-Cut avoid.
+- In ephemeral mode, keep using Robo-Copy and Robo-Cut: after a plain Ctrl+C or Ctrl+X,
+  clipboard managers and other apps that watch the clipboard can record the file list;
+  Robo-Copy and Robo-Cut mark it to be skipped. Windows' own clipboard history (Win+V) is
+  not expected to keep file lists at all (not yet verified).
 - Change it or turn it off in Settings (**Hotkey**), from the tray menu's hotkey line, or in
   `config.json` (`"pasteHotkey": ""` is off). An install from before the hotkey existed gets
   it switched on when upgraded. The message at the end of the install names it (an install
@@ -142,7 +144,10 @@ this section is verified on Windows yet; the checks that will verify it are list
 How it works: while File Explorer or the desktop is the active window, the app watches the
 keyboard with a low-level keyboard hook, and removes the hook as soon as another window is
 active. It takes the combination only when the focus is in a file list, and lets every other
-key through. It records no keys, and nothing about the hotkey is written to disk or to a log.
+key through. It records no keys. The one thing it keeps, in memory only, is the time of the
+last Ctrl+C or Ctrl+X in a file list and the clipboard's change counter at that moment, so a
+paste right after it can wait for the clipboard. Nothing about the hotkey is written to disk
+or to a log.
 The code that may touch the keyboard hook is confined to two files, which a test checks.
 
 ## Uninstall
@@ -283,7 +288,8 @@ afterwards. Robo-Paste accepts files copied with a plain Ctrl+C.
 
 Set `logging` to `ephemeral` (tray menu, Settings, or `config.json`). Then the app writes
 nothing about jobs to disk: no job files, no history, no temp files. Toasts name no paths,
-and clipboard writes are marked to stay out of clipboard history and cloud clipboard. The
+and clipboard writes are marked to be skipped by clipboard managers and other apps that
+watch the clipboard, clipboard history and cloud clipboard. The
 one file it writes is `config.json`, which holds the setting itself. History is kept in memory
 until the app exits. The change applies to jobs started after it. No crash log is written in
 ephemeral mode, nor for the rest of a session in which any ephemeral job ran. Job logs and a

@@ -119,7 +119,7 @@ All job output goes through one `IJobSink` interface:
 - **Ephemeral mode** composes a `NullJobSink` and keeps history in memory only, cleared on exit. Guarantees:
   - Nothing about a job is written to disk: no job files, no history, and no temp files (none are needed at all). Robocopy's own log goes only into the in-memory pipe.
   - Completion toasts are generic ("Job finished") and contain **no paths**, because Windows keeps toast text in the notification center.
-  - Clipboard writes set `ExcludeClipboardContentFromMonitorProcessing`, so file lists stay out of clipboard history and cloud clipboard.
+  - Clipboard writes set `ExcludeClipboardContentFromMonitorProcessing` (with `CanIncludeInClipboardHistory = 0` and `CanUploadToCloudClipboard = 0`), so clipboard managers and other apps that watch the clipboard skip the file list, as do clipboard history and cloud clipboard.
   - The only file write is the `logging` setting itself in config.json.
 
   Switching ephemeral mode on while normal-mode jobs are running affects only new jobs. The tray says so, and offers to delete the job logs already on disk.
@@ -170,7 +170,8 @@ All job output goes through one `IJobSink` interface:
 
 - **Optional copy and cut hotkeys.** Not in v1: Explorer's own Ctrl+C and Ctrl+X write the
   formats Robo-Paste reads, and Ctrl+X even dims the icons. One difference is listed in the
-  README: in ephemeral mode a Ctrl+C reaches clipboard history, a Robo-Copy does not. Copy and
+  README: in ephemeral mode the file list of a Ctrl+C reaches apps that watch the clipboard,
+  that of a Robo-Copy is marked to be skipped. Copy and
   cut hotkeys would follow docs/decisions/0001-paste-hotkey.md (same hook, same gate).
 
 - **Opt-in verified cut (`cutVerify: "hash"`).** The default cut stays robocopy `/MOV`/`/MOVE`.
