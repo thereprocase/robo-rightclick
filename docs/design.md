@@ -62,7 +62,7 @@ Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /N
 
 ```json
 {
-  "threads": 32,
+  "threads": "auto",               // per drive: 32 SSD/network, 8 spinning disk, 4 within one; or a fixed 1-128
   "retries": 0, "retryWaitSeconds": 0,
   "conflictDefault": "ask",          // ask | replace | skip | keepNewer
   "maxConcurrentJobs": 0,            // 0 = unlimited (Explorer parity)

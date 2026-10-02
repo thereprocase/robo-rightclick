@@ -117,8 +117,11 @@ internal sealed class SettingsWindow : Gridline.Window
         table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddField(table, "threads", "Robocopy threads", _threads,
-            $"{Settings.MinThreads} to {Settings.MaxThreads} (robocopy /MT). Default 32.",
-            () => IntNode(_threads), s => _threads.Box.Text = Invariant(s.Threads));
+            $"\"{SettingsSerializer.ThreadsAuto}\" (default) picks per drive: {ThreadPolicy.SolidState} for SSDs and network shares, "
+                + $"{ThreadPolicy.Rotational} for spinning disks, {ThreadPolicy.SameRotationalDisk} within one spinning disk. "
+                + $"Or a fixed {Settings.MinThreads} to {Settings.MaxThreads} (robocopy /MT).",
+            () => IntNode(_threads),
+            s => _threads.Box.Text = s.AutoThreads ? SettingsSerializer.ThreadsAuto : Invariant(s.Threads));
         AddField(table, "retries", "Retries per failed file", _retries,
             "0 to 1,000. Default 0, as Explorer: failures are listed at the end with Try again.",
             () => IntNode(_retries), s => _retries.Box.Text = Invariant(s.Retries));

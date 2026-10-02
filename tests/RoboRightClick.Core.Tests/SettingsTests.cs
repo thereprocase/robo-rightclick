@@ -8,6 +8,7 @@ public class SettingsTests
     public void Defaults_match_the_install_contract()
     {
         var d = Settings.Default;
+        Assert.True(d.AutoThreads);
         Assert.Equal(32, d.Threads);
         Assert.Equal(0, d.Retries);
         Assert.Equal(0, d.RetryWaitSeconds);
@@ -23,6 +24,7 @@ public class SettingsTests
     {
         var s = Settings.Default with
         {
+            AutoThreads = false,
             Threads = 16,
             Retries = 3,
             RetryWaitSeconds = 2,
@@ -54,6 +56,7 @@ public class SettingsTests
             """);
 
         Assert.Empty(result.Problems);
+        Assert.False(result.Settings.AutoThreads);
         Assert.Equal(8, result.Settings.Threads);
         Assert.Equal(LoggingMode.Ephemeral, result.Settings.Logging);
     }
@@ -63,6 +66,7 @@ public class SettingsTests
     {
         var result = SettingsSerializer.Parse("""{ "threads": 500, "conflictDefault": "skip", "logging": "loud" }""");
 
+        Assert.True(result.Settings.AutoThreads);
         Assert.Equal(32, result.Settings.Threads);
         Assert.Equal(ConflictPolicy.Skip, result.Settings.ConflictDefault);
         Assert.Equal(LoggingMode.Normal, result.Settings.Logging);
