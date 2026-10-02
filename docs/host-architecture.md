@@ -121,7 +121,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | **UI (main, STA)** | WinForms message loop; COM class objects (registered here, so activations and every `VerbCommand` call arrive here through the loop); clipboard (owner window lives here); all forms, NotifyIcon, toasts. | Never blocks and never touches the file system: a stat on a dead SMB share would freeze the tray and every right-click. `VerbCommand.Execute` reads the selection, calls `IVerbHandler.Invoke`, returns. `VerbDispatcher` runs verbs one at a time in click order; clipboard retries are awaited delays, so the loop keeps pumping. |
 | **Scan** | One dedicated thread per scanning job (`TaskCreationOptions.LongRunning`), at most `JobQueuePolicy.MaxConcurrentScans` (4). | Lazy enumeration; checks cancellation per directory and every 1,000 entries; reports `ScanProgress`. |
 | **Job workers** | `Job.RunAsync` continuations on the thread pool; steps sequential inside a job, jobs parallel. | Never touch UI objects. Ask the user only through `IJobPrompts`. Clipboard clear goes through `JobServices.ClearClipboardIfUnchanged`, which posts to the UI thread. Never call the sink, an event or the UI while holding the job lock. |
-| **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches, and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The pipe is always drained, so a slow sink or antivirus on robocopy.log never stalls robocopy. |
+| **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches (64), and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The channel absorbs bursts: a sink that is briefly slow (antivirus scanning robocopy.log) does not hold up the pipe, and a sink or parser that throws never stops the drain. It is bounded on purpose, so memory stays bounded: a sink that stays slower than robocopy's output, or blocks, fills the channel, the reader then waits, and robocopy waits on its next log write until the consumer catches up. |
 | **Progress sampler** | One `PeriodicTimer` loop for the app (333 ms). | Skips runs whose gate is closed. Disposing a run's tracking blocks until its in-flight callback returns. |
 
 Shared state: each `Job` guards lifecycle, ledger, progress and errors with one private lock;
@@ -241,8 +241,10 @@ docs/parity.md). The `Directory\Background` key has no `MultiSelectModel`
 (`ShellVerbs.MultiSelectModelFor`): a background click selects nothing, and with `Single`
 Explorer hid the item (testlog 2026-10-02). Autostart on
 reinstall comes from `Registration.ResolveStartWithWindows`: an explicit `--autostart` /
-`--no-autostart` wins (and is written to config.json), otherwise the existing config's choice
-is kept. No `Icon` value yet (the exe has no icon resource; see open questions).
+`--no-autostart` wins (and is written to config.json, unless a newer version wrote that file),
+otherwise the existing config's choice is kept. Each verb key carries the `Icon` value in the
+table above since commit e13fa37. Whether Explorer shows those icons is unverified on Windows:
+the 2026-10-02 session ran earlier builds, which wrote no `Icon` value, and saw none.
 
 ## 5. Verbs and clipboard
 
@@ -522,6 +524,8 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Gridline fonts and layout under DPI scaling (fonts sized per `DeviceDpi` alongside `AutoScaleMode.Dpi`) | **unverified** |
 | `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | verified (testlog 2026-10-02); the planted-DLL check **unverified** |
 | Explorer ghosts icons after a Robo-Cut clipboard write | verified false: no ghosting (testlog 2026-10-02, deviation in docs/parity.md) |
+| Explorer shows each verb's `Icon` (commit e13fa37) in the classic menu | **unverified**; the 2026-10-02 builds had no icons |
+| crash.log written and rotated; an interrupted job reported once; the oversized-selection toast; install refusing an unsafe profile path | **unverified**; Core decisions tested on Linux |
 | Robocopy `/MOV` deletes the source of a "same" file it skipped | **unverified**; the design no longer depends on it either way |
 | A killed robocopy leaves its in-flight files at full length (cancel cleanup's premise) | **unverified** |
 | `CopyFileEx` sets the archive bit like Explorer's copy | **unverified** |
@@ -559,9 +563,11 @@ and asks rather than editing a file it does not own.
 2. **Preferred DropEffect for copy:** the design fixes 1. Explorer's own Ctrl+C writes 5
    (copy | link), measured 2026-10-02. Both values paste as a copy, in both directions
    (testlog 2026-10-02); 1 stays.
-3. **Menu icon:** without an `.ico` the verbs have no icon. Adding one means a binary asset and
-   an `Icon` registry value. Explorer's own classic Cut, Copy and Paste show no icon either
-   (measured 2026-10-02).
+3. **Menu icon:** settled in commit e13fa37. Each verb has an `.ico` written beside the
+   installed exe and an `Icon` registry value pointing at it (section 4); uninstall deletes
+   both. Explorer's own classic Cut, Copy and Paste show no icon (measured 2026-10-02), so this
+   is a deviation, listed in docs/parity.md. That Explorer displays the icons is unverified
+   on Windows.
 4. **Uninstall deletes config and logs** (the privacy-preserving choice). A `--keep-data` flag is
    possible if users want settings to survive reinstall.
 5. **CLI `--wait`** (block until the paste finishes) would make VM automation simpler. It needs a
