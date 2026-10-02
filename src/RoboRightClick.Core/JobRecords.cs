@@ -28,7 +28,17 @@ public static class JobRecords
     public const int MaxRecordedErrors = 1_000;
 
     /// <summary>
-    /// job.json: indented JSON, camelCase keys, timestamps as ISO 8601 UTC, states as
+    /// The format version written as "version" into job.json and every history.jsonl line.
+    /// Records without it are version 1. Readers take the fields they know and ignore the
+    /// rest, so a record from a newer version still reads; only rewriting one is refused
+    /// (<see cref="IsNewerVersion"/>), because that would drop what this version does not know.
+    /// </summary>
+    public const int CurrentVersion = 1;
+
+    public const string VersionKey = "version";
+
+    /// <summary>
+    /// job.json: indented JSON starting with "version", camelCase keys, timestamps as ISO 8601 UTC, states as
     /// camelCase names. Bounded by construction: states, commands (argument strings),
     /// summary and at most <see cref="MaxRecordedErrors"/> errors; never per-file data.
     /// </summary>
@@ -38,6 +48,7 @@ public static class JobRecords
         using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
         {
             w.WriteStartObject();
+            w.WriteNumber(VersionKey, CurrentVersion);
 
             w.WriteStartObject("job");
             w.WriteString("id", record.Job.Id);
@@ -104,7 +115,7 @@ public static class JobRecords
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
-    /// <summary>One history.jsonl line (no trailing newline): id, verb, sources, destination, created, finished, final state, counts, error count.</summary>
+    /// <summary>One history.jsonl line (no trailing newline): version, id, verb, sources, destination, created, finished, final state, counts, error count.</summary>
     public static string ToHistoryLine(JobDescription job, JobSummary summary, DateTimeOffset finishedAt)
     {
         using var stream = new MemoryStream();
@@ -113,6 +124,7 @@ public static class JobRecords
         using (var w = new Utf8JsonWriter(stream))
         {
             w.WriteStartObject();
+            w.WriteNumber(VersionKey, CurrentVersion);
             w.WriteString("id", job.Id);
             w.WriteString("verb", CamelCase(job.Verb));
             WriteStrings(w, "sources", job.Sources);
@@ -164,6 +176,28 @@ public static class JobRecords
             return null;
         }
     }
+
+    /// <summary>
+    /// The record's "version": 1 when missing (records from before the field existed), null
+    /// when present but not a positive integer (a damaged or foreign record).
+    /// </summary>
+    internal static int? RecordVersion(JsonElement root)
+    {
+        if (!root.TryGetProperty(VersionKey, out var version))
+        {
+            return 1;
+        }
+        return version.ValueKind == JsonValueKind.Number && version.TryGetInt32(out var value) && value >= 1
+            ? value
+            : null;
+    }
+
+    /// <summary>
+    /// True when <paramref name="root"/> must not be rewritten by this version: its version
+    /// is newer than <see cref="CurrentVersion"/>, or present but unreadable.
+    /// </summary>
+    internal static bool IsNewerVersion(JsonElement root) =>
+        RecordVersion(root) is not { } version || version > CurrentVersion;
 
     // Exact match against the names ToJson writes. Enum.TryParse is too lenient for a file
     // that may be damaged: it accepts numbers, padding and comma lists that it ORs together,

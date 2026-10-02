@@ -77,6 +77,16 @@ public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string>
     /// else in a readable file, but an unreadable one would be overwritten by defaults and lost.
     /// </summary>
     public bool Unreadable { get; init; }
+
+    /// <summary>The format version the file declares; a file without one is version 1.</summary>
+    public int Version { get; init; } = SettingsSerializer.CurrentVersion;
+
+    /// <summary>
+    /// The file comes from a newer RoboRightClick (after a downgrade). Its known fields are
+    /// loaded, but nothing may save over it: this version would drop the fields it does not
+    /// know, and the newer version would lose them.
+    /// </summary>
+    public bool WrittenByNewerVersion => Version > SettingsSerializer.CurrentVersion;
 }
 
 /// <summary>
@@ -85,6 +95,20 @@ public sealed record SettingsLoadResult(Settings Settings, IReadOnlyList<string>
 /// </summary>
 public static class SettingsSerializer
 {
+    /// <summary>
+    /// The config.json format this build writes, as its "version" field. Raise it when a
+    /// change means an older build would misread or lose something on save; an older build
+    /// then loads what it knows and refuses to save over the file.
+    /// </summary>
+    public const int CurrentVersion = 1;
+
+    public const string VersionKey = "version";
+
+    /// <summary>Why a save was refused (<see cref="MayOverwrite"/>); path-free, shown in a message box or the Settings window.</summary>
+    public const string NewerVersionSaveRefusal =
+        "config.json was written by a newer version of RoboRightClick, so this version does not save over it. "
+        + "Install the newer version to change settings, or delete config.json to start again from the defaults.";
+
     private static readonly JsonDocumentOptions DocumentOptions = new()
     {
         CommentHandling = JsonCommentHandling.Skip,
@@ -108,6 +132,14 @@ public static class SettingsSerializer
             return new(Settings.Default, ["config is not a JSON object; using defaults"]) { Unreadable = true };
         }
 
+        var version = ReadVersion(root, problems);
+        var newer = version > CurrentVersion;
+        if (newer)
+        {
+            problems.Add($"written by a newer version of RoboRightClick (format {version}, this one reads {CurrentVersion}); "
+                + "the settings this version knows are used and the file is left unchanged");
+        }
+
         var d = Settings.Default;
         var s = d with
         {
@@ -125,20 +157,34 @@ public static class SettingsSerializer
             ExtraArgs = ReadExtraArgs(root, problems),
         };
 
-        foreach (var property in root)
+        // A newer file is expected to hold settings this version does not know; the one
+        // problem about its version covers them.
+        if (!newer)
         {
-            if (!KnownKeys.Contains(property.Key))
+            foreach (var property in root)
             {
-                problems.Add($"unknown setting '{property.Key}' ignored");
+                if (!KnownKeys.Contains(property.Key))
+                {
+                    problems.Add($"unknown setting '{property.Key}' ignored");
+                }
             }
         }
-        return new(s, problems);
+        return new(s, problems) { Version = version };
     }
+
+    /// <summary>
+    /// Whether a save may replace the config text now on disk (null: no file). False only
+    /// for a file a newer version wrote; an unreadable file may be replaced, because the
+    /// store keeps a .bad copy of it first.
+    /// </summary>
+    public static bool MayOverwrite(string? existingText) =>
+        existingText is null || !Parse(existingText).WrittenByNewerVersion;
 
     public static string Serialize(Settings s)
     {
         var root = new JsonObject
         {
+            [VersionKey] = CurrentVersion,
             ["threads"] = s.AutoThreads ? JsonValue.Create(ThreadsAuto) : JsonValue.Create(s.Threads),
             ["retries"] = s.Retries,
             ["retryWaitSeconds"] = s.RetryWaitSeconds,
@@ -160,7 +206,7 @@ public static class SettingsSerializer
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
-        "threads", "retries", "retryWaitSeconds", "conflictDefault", "maxConcurrentJobs",
+        VersionKey, "threads", "retries", "retryWaitSeconds", "conflictDefault", "maxConcurrentJobs",
         "logging", "logRetentionJobs", "startWithWindows", "notifyOnComplete", "showProgressWindow", "extraArgs",
     };
 
@@ -172,6 +218,25 @@ public static class SettingsSerializer
 
     /// <summary>The config text for automatic, per-drive thread counts.</summary>
     public const string ThreadsAuto = "auto";
+
+    /// <summary>
+    /// "version": missing means 1 (files from before the field existed). Anything that is not
+    /// a positive integer is a damaged field, read as the current version, the way any other
+    /// field falls back to its default.
+    /// </summary>
+    private static int ReadVersion(JsonObject root, List<string> problems)
+    {
+        if (!root.TryGetPropertyValue(VersionKey, out var node) || node is null)
+        {
+            return 1;
+        }
+        if (node is JsonValue v && v.TryGetValue<int>(out var version) && version >= 1)
+        {
+            return version;
+        }
+        problems.Add($"'{VersionKey}' must be a positive integer; read as {CurrentVersion}");
+        return CurrentVersion;
+    }
 
     /// <summary>"threads" is either "auto" or a fixed count; anything else falls back to auto.</summary>
     private static bool ReadThreads(JsonObject root, Settings defaults, List<string> problems, out int threads)

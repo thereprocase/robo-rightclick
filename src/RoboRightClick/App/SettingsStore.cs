@@ -15,7 +15,9 @@ namespace RoboRightClick.App;
 /// config folder, debounced by about 500 ms, and reloaded. If the last load found the file
 /// unreadable as JSON, the first save copies it to config.json.bad first, so a typo never
 /// silently costs the user their whole file. The config folder is the only place ephemeral
-/// mode writes.
+/// mode writes. A file written by a newer version (<see cref="SettingsLoadResult.WrittenByNewerVersion"/>)
+/// is loaded for the settings this version knows and never saved over: every save first
+/// re-reads the file and refuses with <see cref="NewerConfigException"/>.
 /// </remarks>
 internal sealed class SettingsStore : IDisposable
 {
@@ -46,6 +48,7 @@ internal sealed class SettingsStore : IDisposable
     // of overwriting the newer settings in memory.
     private int _generation;
     private bool _lastLoadUnreadable;
+    private bool _lastLoadNewer;
     private int _readAttempts;
 
     private SynchronizationContext? _ui;
@@ -104,6 +107,11 @@ internal sealed class SettingsStore : IDisposable
     /// <see cref="Install.RegistryWriter.SetStartWithWindows"/>. The watcher ignores the
     /// app's own write.
     /// </summary>
+    /// <exception cref="NewerConfigException">
+    /// config.json was written by a newer version (known from the last load, or found on disk
+    /// now): nothing is written and <see cref="Current"/> is unchanged. It is an IOException,
+    /// so every caller's existing save-failure message shows it.
+    /// </exception>
     /// <exception cref="IOException">The file could not be written; <see cref="Current"/> is unchanged.</exception>
     /// <exception cref="UnauthorizedAccessException">As above.</exception>
     public void Save(Settings settings)
@@ -112,6 +120,15 @@ internal sealed class SettingsStore : IDisposable
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+
+            // Checked against the file as it is now: a newer version may have written it since
+            // the last load, and a user may have deleted a newer file to start over. Only when
+            // it cannot be read does the last load decide.
+            var onDisk = TryReadConfigText(out var readFailed);
+            if (readFailed ? _lastLoadNewer : !SettingsSerializer.MayOverwrite(onDisk))
+            {
+                throw new NewerConfigException();
+            }
             Directory.CreateDirectory(Paths.ConfigDirectory);
             if (_lastLoadUnreadable && File.Exists(Paths.ConfigFile))
             {
@@ -122,6 +139,7 @@ internal sealed class SettingsStore : IDisposable
             _generation++;
             _lastKnownText = text;
             _lastLoadUnreadable = false;
+            _lastLoadNewer = false;
             _current = settings;
             _loadProblems = [];
 
@@ -180,12 +198,14 @@ internal sealed class SettingsStore : IDisposable
         if (text is null)
         {
             _lastLoadUnreadable = false;
+            _lastLoadNewer = false;
             _current = Settings.Default;
             _loadProblems = [];
             return;
         }
         var result = SettingsSerializer.Parse(text);
         _lastLoadUnreadable = result.Unreadable;
+        _lastLoadNewer = result.WrittenByNewerVersion;
         _current = result.Settings;
         _loadProblems = result.Problems;
     }
@@ -335,5 +355,17 @@ internal sealed class SettingsStore : IDisposable
             readFailed = true;
             return null;
         }
+    }
+}
+
+/// <summary>
+/// A save refused because config.json comes from a newer version. Derived from IOException
+/// so the tray's and the Settings window's save-failure handling show its message as is.
+/// </summary>
+internal sealed class NewerConfigException : IOException
+{
+    public NewerConfigException()
+        : base(SettingsSerializer.NewerVersionSaveRefusal)
+    {
     }
 }

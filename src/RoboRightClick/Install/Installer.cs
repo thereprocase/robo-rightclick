@@ -30,6 +30,10 @@ internal static class Installer
     private const string BusyMessage =
         "RoboRightClick is still running and has jobs in progress. Finish or cancel them, then try again.";
 
+    private const string NewerConfigKeptMessage =
+        "config.json was written by a newer version of RoboRightClick and was left unchanged; "
+        + "the start-with-Windows choice applies to the registry only.";
+
     /// <summary>
     /// 1. If a tray is running, SingleInstance.RequestExitAndWait (fails with a message if
     /// it will not exit because jobs are active). 2. Copy the running exe to
@@ -38,7 +42,8 @@ internal static class Installer
     /// RegistryWriter.Write(Registration.InstallValues(new InstallTarget(installedExe,
     /// Registration.ResolveStartWithWindows(command.StartWithWindows, existing), userSid,
     /// version))). 5. Write the default config.json only if none exists, or write back the
-    /// existing one with an explicit --autostart/--no-autostart applied. 6. Start the
+    /// existing one with an explicit --autostart/--no-autostart applied, unless a newer
+    /// version wrote it (then it is left as it is, and the message says so). 6. Start the
     /// installed exe (tray) with <see cref="CommandLine.AfterInstallSwitch"/>, so it shows the
     /// first-run hint once. 7. Message: "Installed. Right-click files → Show more options
     /// → Robo-Copy / Robo-Cut / Robo-Paste." (none with --quiet; the exit code is the result).
@@ -68,10 +73,13 @@ internal static class Installer
                 RegistryWriter.SetStartWithWindows(false, paths.InstalledExe);
             }
 
-            WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
+            var configKept = !WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
             StartTray(paths);
-            return Succeed("Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste.", quiet);
+            return Succeed(
+                "Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste."
+                    + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty),
+                quiet);
         }
         catch (Exception ex)
         {
@@ -253,7 +261,13 @@ internal static class Installer
         return result.Settings;
     }
 
-    private static void WriteConfig(
+    /// <summary>
+    /// Writes config.json as described on <see cref="Install"/>. Returns false when an
+    /// explicit autostart choice was not written because the file comes from a newer version
+    /// (<see cref="SettingsSerializer.MayOverwrite"/>): the Run value still follows the
+    /// choice, the file stays exactly as the newer version left it.
+    /// </summary>
+    private static bool WriteConfig(
         AppPaths paths, bool? explicitChoice, bool startWithWindows,
         Settings? existing, string? existingText, bool existingHadProblems)
     {
@@ -261,13 +275,18 @@ internal static class Installer
         {
             Directory.CreateDirectory(paths.ConfigDirectory);
             WriteAtomically(paths.ConfigFile, SettingsSerializer.Serialize(Settings.Default with { StartWithWindows = startWithWindows }));
-            return;
+            return true;
         }
 
         // A plain reinstall leaves the user's file, comments and all, exactly as it is.
         if (explicitChoice is null)
         {
-            return;
+            return true;
+        }
+
+        if (!SettingsSerializer.MayOverwrite(existingText))
+        {
+            return false;
         }
 
         if (existingHadProblems && existingText is not null)
@@ -276,6 +295,7 @@ internal static class Installer
             File.WriteAllText(paths.ConfigFile + UninstallPlan.BackupSuffix, existingText);
         }
         WriteAtomically(paths.ConfigFile, SettingsSerializer.Serialize(existing with { StartWithWindows = startWithWindows }));
+        return true;
     }
 
     private static void WriteAtomically(string path, string contents)

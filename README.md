@@ -116,6 +116,12 @@ Limits. The guarantee covers what this app writes, not what Windows records:
 | `notifyOnComplete` | `true` | toast when a job finishes (path-free in ephemeral mode) |
 | `showProgressWindow` | `true` | open a progress window for each paste, like Explorer's copy dialog |
 | `extraArgs.copy` / `extraArgs.move` | `""` | extra robocopy switches from an allow-list (`/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n`); anything else is rejected |
+| `version` | `1` | the file's format version, written by the app; leave it as it is. A file without it is read as version 1 |
+
+A config.json written by a newer version of the app (a higher `version`) is read by an older
+one for the settings it knows, with a tray warning, and is never saved over: saving from the
+older version's Settings window or tray menu fails with a message instead, and a reinstall of
+the older version leaves the file unchanged.
 
 ## Building
 
