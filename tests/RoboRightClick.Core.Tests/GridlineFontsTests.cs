@@ -39,6 +39,15 @@ public class GridlineFontsTests
         Assert.Single(matches);
     }
 
+    [Theory]
+    [MemberData(nameof(Cuts))]
+    public void Each_cut_is_loaded_from_the_file_that_has_its_family(FontCut cut)
+    {
+        var font = EmbeddedFonts().Single(f => f.File == GridlineFonts.FileName(cut));
+        Assert.Equal(GridlineFonts.FamilyName(cut), font.Family);
+        Assert.Equal("Regular", font.Subfamily);
+    }
+
     [Fact]
     public void Mono_cuts_fall_back_to_a_monospaced_font_and_sans_cuts_to_segoe()
     {

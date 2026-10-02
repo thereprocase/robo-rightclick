@@ -38,6 +38,18 @@ public static class GridlineFonts
         _ => throw new ArgumentOutOfRangeException(nameof(cut)),
     };
 
+    /// <summary>The embedded file that holds <paramref name="cut"/> (src/RoboRightClick/Fonts/).</summary>
+    public static string FileName(FontCut cut) => cut switch
+    {
+        FontCut.Sans => "IBMPlexSans-Regular.ttf",
+        FontCut.SansMedium => "IBMPlexSans-Medium.ttf",
+        FontCut.SansSemiBold => "IBMPlexSans-SemiBold.ttf",
+        FontCut.Mono => "IBMPlexMono-Regular.ttf",
+        FontCut.MonoMedium => "IBMPlexMono-Medium.ttf",
+        FontCut.MonoSemiBold => "IBMPlexMono-SemiBold.ttf",
+        _ => throw new ArgumentOutOfRangeException(nameof(cut)),
+    };
+
     public static bool IsMono(FontCut cut) => cut is FontCut.Mono or FontCut.MonoMedium or FontCut.MonoSemiBold;
 
     /// <summary>The system font used when the Plex cut cannot be loaded: Segoe UI for Sans, Consolas for Mono.</summary>

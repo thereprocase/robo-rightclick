@@ -88,31 +88,66 @@ internal static class Gridline
             return;
         }
         _loaded = true;
+        var problems = new List<string>();
+        var memory = new Dictionary<string, (IntPtr Data, int Length)>(StringComparer.Ordinal);
         var assembly = typeof(Gridline).Assembly;
-        foreach (var name in assembly.GetManifestResourceNames().Where(n => n.StartsWith("RoboRightClick.Fonts.", StringComparison.Ordinal)))
+        foreach (var cut in GridlineFonts.All)
         {
+            var file = GridlineFonts.FileName(cut);
             try
             {
-                using var stream = assembly.GetManifestResourceStream(name);
+                using var stream = assembly.GetManifestResourceStream("RoboRightClick.Fonts." + file);
                 if (stream is null)
                 {
+                    problems.Add(file + ": missing");
                     continue;
                 }
                 var bytes = new byte[stream.Length];
                 stream.ReadExactly(bytes);
                 // Both APIs keep using the data, so the memory lives for the process.
-                var memory = Marshal.AllocCoTaskMem(bytes.Length);
-                Marshal.Copy(bytes, 0, memory, bytes.Length);
-                FontMemory.Add(memory);
-                Collection.AddMemoryFont(memory, bytes.Length);
+                var data = Marshal.AllocCoTaskMem(bytes.Length);
+                Marshal.Copy(bytes, 0, data, bytes.Length);
+                FontMemory.Add(data);
+                memory[file] = (data, bytes.Length);
                 uint count = 0;
-                _ = App.AppNative.AddFontMemResourceEx(memory, (uint)bytes.Length, 0, ref count);
+                if (App.AppNative.AddFontMemResourceEx(data, (uint)bytes.Length, 0, ref count) == 0)
+                {
+                    problems.Add(file + ": GDI refused it");
+                }
             }
             catch (Exception ex) when (ex is IOException or ArgumentException or ExternalException)
             {
-                // That cut fails the check below and uses its fallback.
+                problems.Add(file + ": " + ex.GetType().Name);
             }
         }
+
+        // On Windows 11 build 26200, GDI+ now and then left the last font added out of the
+        // collection with no error (about one start in four). Each family is checked and added
+        // again until it is there.
+        foreach (var cut in GridlineFonts.All)
+        {
+            var file = GridlineFonts.FileName(cut);
+            if (!memory.TryGetValue(file, out var font))
+            {
+                continue;
+            }
+            for (var attempt = 1; attempt <= 3 && Family(GridlineFonts.FamilyName(cut)) is null; attempt++)
+            {
+                try
+                {
+                    Collection.AddMemoryFont(font.Data, font.Length);
+                }
+                catch (Exception ex) when (ex is ArgumentException or ExternalException)
+                {
+                    problems.Add(file + ": " + ex.GetType().Name);
+                }
+                if (attempt > 1)
+                {
+                    problems.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{file}: GDI+ attempt {attempt}"));
+                }
+            }
+        }
+
         foreach (var cut in GridlineFonts.All)
         {
             if (Family(GridlineFonts.FamilyName(cut)) is { } family && GdiResolves(family))
@@ -122,7 +157,7 @@ internal static class Gridline
         }
         // Path-free, like the app's other debug lines; read with a debug-output viewer.
         System.Diagnostics.Trace.WriteLine(string.Create(System.Globalization.CultureInfo.InvariantCulture,
-            $"RoboRightClick fonts: {Resolved.Count} of {GridlineFonts.All.Count} Plex cuts resolved by GDI; fallback for: {string.Join(",", GridlineFonts.All.Except(Resolved))}; loaded families: {string.Join(",", Collection.Families.Select(f => f.Name))}"));
+            $"RoboRightClick fonts: {Resolved.Count} of {GridlineFonts.All.Count} Plex cuts resolved by GDI; fallback for: {string.Join(",", GridlineFonts.All.Except(Resolved))}; notes: {string.Join("; ", problems)}"));
     }
 
     private static FontFamily? Family(string name) => Collection.Families.FirstOrDefault(f => f.Name == name);
