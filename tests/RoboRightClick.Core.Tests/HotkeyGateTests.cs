@@ -151,6 +151,26 @@ public class HotkeyLatchTests
         Assert.Equal(Trigger, latch.Next(LatchInput.KeyDown, true, 20 + HotkeyLatch.RepeatWindowMs + 1));
     }
 
+    /// <summary>
+    /// Why the hook thread resets the latch when File Explorer stops being the foreground
+    /// window: the press's key-up is then released where the hook does not see it, and a
+    /// latch left swallowing would take the next key-up of that key, one whose key-down went
+    /// to the focused window, which would leave the key down there.
+    /// </summary>
+    [Fact]
+    public void A_latch_left_swallowing_takes_an_unrelated_key_up_and_a_reset_one_passes_it()
+    {
+        var stale = new HotkeyLatch();
+        Assert.Equal(Trigger, stale.Next(LatchInput.KeyDown, true, 10));
+        Assert.Equal(Swallow, stale.Next(LatchInput.KeyUp, false, 5_000));
+
+        var reset = new HotkeyLatch();
+        Assert.Equal(Trigger, reset.Next(LatchInput.KeyDown, true, 10));
+        reset.Reset();
+        Assert.False(reset.Swallowing);
+        Assert.Equal(Pass, reset.Next(LatchInput.KeyUp, false, 5_000));
+    }
+
     [Fact]
     public void Other_messages_and_an_idle_key_up_pass()
     {

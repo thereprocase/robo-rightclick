@@ -245,6 +245,13 @@ internal sealed unsafe class PasteHotkey : IDisposable
         else
         {
             RemoveKeyboardHook();
+
+            // The hook no longer sees the key, so a press it was taking may be released
+            // unseen. A latch left swallowing would take the next key-up of that key, whose
+            // key-down may have gone to the focused window, leaving the key down there. Not
+            // in RemoveKeyboardHook: the 10 s reinstall inside File Explorer must keep a held
+            // press latched, or its next repeat would paste again.
+            _latch.Reset();
         }
     }
 
