@@ -23,6 +23,23 @@ public readonly record struct ClipboardFormat(uint StandardId, string? Registere
 
 public sealed record ClipboardEntry(ClipboardFormat Format, byte[] Data);
 
+public enum DropFilesStatus
+{
+    Ok,
+
+    /// <summary>The legacy narrow form; the host decodes it with DragQueryFileW.</summary>
+    Ansi,
+
+    /// <summary>Over <see cref="ClipboardPayload.MaxDropFilesBytes"/> or <see cref="ClipboardPayload.MaxDropFilesPaths"/>: refused, not truncated.</summary>
+    TooLarge,
+}
+
+public sealed record DropFilesResult(IReadOnlyList<string> Paths, DropFilesStatus Status)
+{
+    public static readonly DropFilesResult Empty = new([], DropFilesStatus.Ok);
+    public static readonly DropFilesResult TooLarge = new([], DropFilesStatus.TooLarge);
+}
+
 /// <summary>
 /// What Robo-Copy and Robo-Cut put on the Windows clipboard, and how Robo-Paste reads
 /// it back. The byte layouts live here so they are tested; the host only moves the
@@ -90,24 +107,39 @@ public static class ClipboardPayload
     }
 
     /// <summary>
-    /// Reads a wide DROPFILES block. Returns null for the legacy ANSI form, which the
-    /// host decodes with DragQueryFileW instead because it depends on the code page.
+    /// Largest CF_HDROP block Robo-Paste reads. Any process can put data on the clipboard, so
+    /// the decoder never trusts its size: about 250,000 paths of 128 characters fit, which is
+    /// far beyond a hand-made selection (select the parent folder instead).
     /// </summary>
-    public static IReadOnlyList<string>? DecodeDropFiles(ReadOnlySpan<byte> data)
+    public const int MaxDropFilesBytes = 64 * 1024 * 1024;
+
+    /// <summary>Most paths one paste accepts.</summary>
+    public const int MaxDropFilesPaths = 250_000;
+
+    /// <summary>
+    /// Reads a wide DROPFILES block. The legacy ANSI form is reported as
+    /// <see cref="DropFilesStatus.Ansi"/> for the host to decode with DragQueryFileW, because
+    /// it depends on the code page; the host applies the same limits to that path.
+    /// </summary>
+    public static DropFilesResult DecodeDropFiles(ReadOnlySpan<byte> data)
     {
+        if (data.Length > MaxDropFilesBytes)
+        {
+            return DropFilesResult.TooLarge;
+        }
         if (data.Length < DropFilesHeaderSize)
         {
-            return [];
+            return DropFilesResult.Empty;
         }
         var start = BinaryPrimitives.ReadUInt32LittleEndian(data);
         var wide = BinaryPrimitives.ReadInt32LittleEndian(data[16..]) != 0;
         if (!wide)
         {
-            return null;
+            return new DropFilesResult([], DropFilesStatus.Ansi);
         }
         if (start < DropFilesHeaderSize || start >= data.Length)
         {
-            return [];
+            return DropFilesResult.Empty;
         }
 
         var text = Encoding.Unicode.GetString(data[(int)start..]);
@@ -120,10 +152,14 @@ public static class ClipboardPayload
             {
                 break; // missing terminator, or the empty string that ends the list
             }
+            if (paths.Count == MaxDropFilesPaths)
+            {
+                return DropFilesResult.TooLarge;
+            }
             paths.Add(text[position..end]);
             position = end + 1;
         }
-        return paths;
+        return new DropFilesResult(paths, DropFilesStatus.Ok);
     }
 
     public static byte[] EncodeDropEffect(DropEffect effect)

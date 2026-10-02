@@ -4,15 +4,20 @@ namespace RoboRightClick.Logging;
 
 /// <summary>
 /// Normal-mode sink for one job: jobs\&lt;folder&gt;\job.json (rewritten from a
-/// <see cref="JobRecord"/> on each state change and at the end) and robocopy.log (UTF-8
-/// copy of the pipe output, written by the app, with one header line per command). On
-/// <see cref="JobFinished"/> it appends the history line and asks the store to prune.
-/// Called from the job thread and the pipe-reader thread; serialized by one lock.
-/// Write failures (disk full, folder deleted) are swallowed after the first one is
-/// recorded in memory: logging must never fail a copy.
+/// <see cref="JobRecord"/> on each state change and at the end, via a temp file and
+/// File.Replace, never on progress) and robocopy.log (UTF-8 copy of the pipe output,
+/// written by the app, one header line per command, through a 64 KB buffered writer
+/// flushed about once a second, on state changes and at the end). robocopy.log stops at
+/// <see cref="MaxRobocopyLogBytes"/> with one "truncated" line. On <see cref="JobFinished"/>
+/// it appends the history line; pruning is the manager's job. Called from the job thread
+/// and the run's consumer thread; serialized by one lock. Write failures (disk full, folder
+/// deleted) are swallowed after the first one is recorded in memory: logging must never
+/// fail a copy.
 /// </summary>
 internal sealed class FileJobSink : IJobSink, IDisposable
 {
+    public const long MaxRobocopyLogBytes = 50L * 1024 * 1024;
+
     public FileJobSink(JobLogStore store, string jobFolder)
     {
         Store = store;

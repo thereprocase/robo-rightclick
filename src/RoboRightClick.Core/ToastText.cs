@@ -9,10 +9,39 @@ public enum ToastKind
 
 public sealed record Toast(string Title, string Body, ToastKind Kind);
 
+/// <summary>Why a Robo-Copy, Robo-Cut or Robo-Paste click did nothing. Each has one fixed, path-free sentence.</summary>
+public enum VerbRefusal
+{
+    /// <summary>No files on the clipboard.</summary>
+    ClipboardEmpty,
+
+    /// <summary>The clipboard holds items that are not files on a drive (zip contents, mail attachments).</summary>
+    ClipboardNotFiles,
+
+    /// <summary>More than <see cref="ClipboardPayload.MaxDropFilesPaths"/> paths, or a block over the byte limit.</summary>
+    ClipboardTooLarge,
+
+    /// <summary>Another program kept the clipboard open through every retry.</summary>
+    ClipboardBusy,
+
+    /// <summary>The paste target has no file-system path (Libraries, This PC, Home).</summary>
+    DestinationNotFileSystem,
+
+    /// <summary>More than one destination folder selected.</summary>
+    NotOneDestination,
+
+    /// <summary>Robo-Copy/Robo-Cut on items with no file-system path.</summary>
+    SelectionNotFiles,
+
+    /// <summary>The same cut is already being pasted.</summary>
+    AlreadyBeingMoved,
+}
+
 /// <summary>
 /// Notification text. Windows keeps toast text in the notification center database,
 /// so a job created in ephemeral mode gets text with no file or folder names at all
-/// (product invariant 2). The job's own mode decides, not the current one.
+/// (product invariant 2). The job's own mode decides, not the current one. Text that is
+/// path-free by construction (refusals, settings) is the same in both modes.
 /// </summary>
 public static class ToastText
 {
@@ -21,10 +50,19 @@ public static class ToastText
     /// <summary>
     /// The completion toast, or null for none. notifyOnComplete silences only clean
     /// finishes: errors need the user's "Try again / Skip", so they always notify.
-    /// A cancel was the user's own action and gets no toast.
+    /// A cancel was the user's own action and gets no toast, unless it left files the
+    /// user owned partly overwritten. A paste with nothing to do gets none.
     /// </summary>
     public static Toast? ForFinished(JobSnapshot job, bool notifyOnComplete)
     {
+        if (job.NoOp)
+        {
+            return null;
+        }
+        if (job.State == JobState.Canceled)
+        {
+            return job.DamagedOnCancel > 0 ? ForCanceledWithDamage(job) : null;
+        }
         if (job.State is not (JobState.Done or JobState.DoneWithErrors or JobState.Failed))
         {
             return null;
@@ -53,26 +91,88 @@ public static class ToastText
         }
 
         var verb = job.Verb == TransferVerb.Move ? "Move" : "Copy";
+        var done = job.Verb == TransferVerb.Move ? "moved" : "copied";
         var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
+        var pasted = Math.Max(0, job.Sources.Count - job.RefusedCount);
         return job.State switch
         {
+            // Top-level items, as Explorer counts them: an empty folder is still "1 item".
             JobState.Done => new Toast(
                 $"{verb} finished",
-                $"{DisplayText.Items(job.DoneFiles)} ({DisplayText.Bytes(job.DoneBytes)}) to {into}",
+                $"{DisplayText.Items(pasted)} ({DisplayText.Bytes(job.DoneBytes)}) to {into}",
+                kind),
+            JobState.DoneWithErrors when job.ErrorCount == 0 && job.RefusedCount > 0 => new Toast(
+                $"{verb} finished with errors",
+                $"{DisplayText.Items(job.RefusedCount)} could not be {done} to {into}. {job.RefusalReason}".TrimEnd(),
                 kind),
             JobState.DoneWithErrors => new Toast(
                 $"{verb} finished with errors",
-                $"{DisplayText.Items(job.ErrorCount)} could not be {(job.Verb == TransferVerb.Move ? "moved" : "copied")} to {into}. Open Jobs to try again.",
+                $"{DisplayText.Items(job.ErrorCount)} could not be {done} to {into}. Open Jobs to try again.",
                 kind),
-            _ => new Toast($"{verb} failed", $"Nothing was {(job.Verb == TransferVerb.Move ? "moved" : "copied")} to {into}. Open Jobs for details.", kind),
+            _ => new Toast(
+                $"{verb} failed",
+                job.FailureReason is { Length: > 0 } reason
+                    ? $"Nothing was {done} to {into}. {reason}"
+                    : $"Nothing was {done} to {into}. Open Jobs for details.",
+                kind),
         };
     }
 
-    /// <summary>Path-free in every mode: setting names only.</summary>
-    public static Toast ForSettingsProblems(int problemCount) => new(
-        "Settings problem",
-        problemCount == 1
-            ? "One setting in config.json was invalid; its default is used."
-            : $"{problemCount} settings in config.json were invalid; their defaults are used.",
-        ToastKind.Warning);
+    private static Toast ForCanceledWithDamage(JobSnapshot job)
+    {
+        if (job.Logging == LoggingMode.Ephemeral)
+        {
+            return new Toast("Job canceled", EphemeralBody, ToastKind.Warning);
+        }
+        var files = job.DamagedOnCancel == 1 ? "1 file was" : $"{job.DamagedOnCancel:N0} files were";
+        return new Toast(
+            job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled",
+            $"{files} being replaced when you canceled and may be incomplete. Open Jobs to finish replacing them.",
+            ToastKind.Warning);
+    }
+
+    /// <summary>Why a click did nothing. Path-free in every mode, and says what to do instead.</summary>
+    public static Toast ForRefusal(VerbRefusal refusal) => refusal switch
+    {
+        VerbRefusal.ClipboardEmpty => new("Nothing to paste", "The clipboard has no files. Use Robo-Copy or Ctrl+C first.", ToastKind.Info),
+        VerbRefusal.ClipboardNotFiles => new(
+            "Can't Robo-Paste these items",
+            "They aren't files on a drive (for example items inside a zip file or an email). Use Paste instead.",
+            ToastKind.Warning),
+        VerbRefusal.ClipboardTooLarge => new(
+            "Too many items",
+            $"Robo-Paste accepts up to {ClipboardPayload.MaxDropFilesPaths:N0} items at once. Copy their folder instead.",
+            ToastKind.Warning),
+        VerbRefusal.ClipboardBusy => new(
+            "Clipboard is busy",
+            "Another app is using the clipboard. Try again in a moment.",
+            ToastKind.Warning),
+        VerbRefusal.DestinationNotFileSystem => new(
+            "Can't Robo-Paste here",
+            "Robo-Paste works in folders on a drive or network share.",
+            ToastKind.Warning),
+        VerbRefusal.NotOneDestination => new("Can't Robo-Paste here", "Select one destination folder.", ToastKind.Warning),
+        VerbRefusal.SelectionNotFiles => new(
+            "Can't Robo-Copy these items",
+            "Only files and folders on a drive or network share can be Robo-copied or Robo-cut.",
+            ToastKind.Warning),
+        VerbRefusal.AlreadyBeingMoved => new("Already moving", "These items are already being moved.", ToastKind.Info),
+        _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
+    };
+
+    /// <summary>
+    /// Path-free in every mode: setting names only. Shows the first problem so the user
+    /// knows what to fix; Settings lists the rest.
+    /// </summary>
+    public static Toast ForSettingsProblems(IReadOnlyList<string> problems)
+    {
+        var first = problems.Count > 0 ? problems[0] : "a setting was invalid";
+        var more = problems.Count switch
+        {
+            <= 1 => string.Empty,
+            2 => " (and 1 more)",
+            _ => $" (and {problems.Count - 1} more)",
+        };
+        return new Toast("Settings problem", $"config.json: {first}{more}. Open Settings to fix.", ToastKind.Warning);
+    }
 }

@@ -6,9 +6,27 @@ public enum TransferVerb
     Move,
 }
 
-public sealed record SourceItem(string Path, bool IsDirectory);
+/// <param name="IsDirectoryLink">A junction or directory symlink selected itself (not one found inside a tree).</param>
+public sealed record SourceItem(string Path, bool IsDirectory, bool IsDirectoryLink = false);
 
 public sealed record PasteRequest(IReadOnlyList<SourceItem> Sources, string Destination, TransferVerb Verb);
+
+/// <summary>
+/// A paste as it arrives from the clipboard or the CLI: raw, untrusted paths and nothing
+/// resolved yet. Resolving it touches the disk, so it happens in the job's Scanning state
+/// on a worker thread, never on the UI thread that also serves COM calls.
+/// </summary>
+public sealed record PasteOrder(IReadOnlyList<string> Sources, string Destination, TransferVerb Verb);
+
+public enum ItemKind
+{
+    Missing,
+    File,
+    Directory,
+
+    /// <summary>A junction or directory symlink, reported without following it.</summary>
+    DirectoryLink,
+}
 
 /// <summary>
 /// The facts about the live file system that planning depends on. The host
@@ -20,6 +38,16 @@ public interface IPlanningFacts
 
     /// <summary>True when a rename between the two paths would succeed without copying data.</summary>
     bool SameVolume(string a, string b);
+
+    /// <summary>What is at <paramref name="path"/>; a reparse point at the path itself is not followed.</summary>
+    ItemKind KindOf(string path);
+
+    /// <summary>
+    /// The location with junctions, symlinks, 8.3 names and SUBST drives resolved
+    /// (GetFinalPathNameByHandle), or the input when it cannot be resolved. Used only to
+    /// compare locations, never as a robocopy argument.
+    /// </summary>
+    string FinalPath(string path);
 }
 
 public abstract record PlanStep;
@@ -55,6 +83,54 @@ public static class PastePlanner
     public const string SubfolderReason = "The destination folder is a subfolder of the source folder.";
     public const string SameFolderMoveReason = "The source and destination are the same folder.";
     public const string RootReason = "Copying an entire drive is not supported.";
+    public const string MissingReason = "This item could not be found. It may have been moved or deleted.";
+    public const string DestinationReason = "The destination folder could not be found.";
+    public const string LinkReason =
+        "Folder links (junctions and symbolic links) can only be Robo-moved within the same drive. Use Explorer's Paste for these.";
+
+    /// <summary>
+    /// The entry point for a job: validates every path with <see cref="PathPolicy"/>,
+    /// resolves what each source is, then plans. Refused items become
+    /// <see cref="PastePlan.Rejected"/> entries and the rest still run, as in Explorer.
+    /// </summary>
+    public static PastePlan Plan(PasteOrder order, IPlanningFacts facts, int fileListBudget = DefaultFileListBudget)
+    {
+        var rejected = new List<PlanIssue>();
+        var destinationKind = PathPolicy.IsAcceptable(order.Destination) ? facts.KindOf(order.Destination) : ItemKind.Missing;
+        if (destinationKind is not (ItemKind.Directory or ItemKind.DirectoryLink))
+        {
+            var reason = PathPolicy.IsAcceptable(order.Destination) ? DestinationReason : PathPolicy.UnsupportedPathReason;
+            return new PastePlan([], order.Sources.Select(s => new PlanIssue(s, reason)).ToList(), []);
+        }
+
+        var items = new List<SourceItem>();
+        foreach (var path in order.Sources)
+        {
+            if (!PathPolicy.IsAcceptable(path))
+            {
+                rejected.Add(new(path, PathPolicy.UnsupportedPathReason));
+                continue;
+            }
+            switch (facts.KindOf(path))
+            {
+                case ItemKind.Missing:
+                    rejected.Add(new(path, MissingReason));
+                    break;
+                case ItemKind.File:
+                    items.Add(new SourceItem(path, IsDirectory: false));
+                    break;
+                case ItemKind.Directory:
+                    items.Add(new SourceItem(path, IsDirectory: true));
+                    break;
+                case ItemKind.DirectoryLink:
+                    items.Add(new SourceItem(path, IsDirectory: true, IsDirectoryLink: true));
+                    break;
+            }
+        }
+
+        var plan = Plan(new PasteRequest(items, order.Destination, order.Verb), facts, fileListBudget);
+        return plan with { Rejected = [.. rejected, .. plan.Rejected] };
+    }
 
     /// <summary>
     /// Room left for file names on one robocopy command line. CreateProcess
@@ -66,6 +142,10 @@ public static class PastePlanner
     public static PastePlan Plan(PasteRequest request, IPlanningFacts facts, int fileListBudget = DefaultFileListBudget)
     {
         var destination = WinPath.TrimTrailingSeparators(request.Destination);
+        // The self/subfolder guards compare resolved locations too: a junction, 8.3 name
+        // or SUBST drive can make the destination sit inside a source under a different
+        // spelling, and robocopy would then recurse into its own output.
+        var finalDestination = WinPath.TrimTrailingSeparators(facts.FinalPath(destination));
         var move = request.Verb == TransferVerb.Move;
         var steps = new List<PlanStep>();
         var rejected = new List<PlanIssue>();
@@ -92,14 +172,43 @@ public static class PastePlanner
 
             var name = WinPath.GetFileName(path);
             var parent = WinPath.GetParent(path);
+            var finalParent = WinPath.TrimTrailingSeparators(facts.FinalPath(parent));
+            // A link itself is not followed: its location is its parent's plus its name.
+            var finalPath = source.IsDirectoryLink
+                ? WinPath.Combine(finalParent, name)
+                : WinPath.TrimTrailingSeparators(facts.FinalPath(path));
 
-            if (source.IsDirectory && (WinPath.AreSame(destination, path) || WinPath.IsStrictlyUnder(destination, path)))
+            if (source.IsDirectory && (IsSelfOrUnder(destination, path) || IsSelfOrUnder(finalDestination, finalPath)))
             {
                 rejected.Add(new(path, SubfolderReason));
                 continue;
             }
 
-            if (WinPath.AreSame(parent, destination))
+            var sameFolder = WinPath.AreSame(parent, destination) || WinPath.AreSame(finalParent, finalDestination);
+
+            if (source.IsDirectoryLink)
+            {
+                // Robocopy follows a link given as its source root (/XJD only skips links
+                // inside a tree), so a cross-volume /MOVE would empty the link's target.
+                // Only a same-volume rename, which moves the link itself, is safe.
+                var linkTarget = WinPath.Combine(destination, name);
+                if (move && !sameFolder && facts.SameVolume(path, destination) && !facts.Exists(linkTarget))
+                {
+                    claimed.Add(name);
+                    steps.Add(new RenameStep(path, linkTarget));
+                }
+                else if (move && sameFolder)
+                {
+                    noOps.Add(new(path, SameFolderMoveReason));
+                }
+                else
+                {
+                    rejected.Add(new(path, LinkReason));
+                }
+                continue;
+            }
+
+            if (sameFolder)
             {
                 if (move)
                 {
@@ -149,6 +258,9 @@ public static class PastePlanner
 
         return new PastePlan(steps, rejected, noOps);
     }
+
+    private static bool IsSelfOrUnder(string candidate, string ancestor) =>
+        WinPath.AreSame(candidate, ancestor) || WinPath.IsStrictlyUnder(candidate, ancestor);
 
     private static IEnumerable<IReadOnlyList<string>> ChunkByLength(List<string> names, int budget)
     {

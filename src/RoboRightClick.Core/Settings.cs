@@ -50,6 +50,13 @@ public sealed record Settings
     public int LogRetentionJobs { get; init; } = 100;
     public bool StartWithWindows { get; init; } = true;
     public bool NotifyOnComplete { get; init; } = true;
+
+    /// <summary>
+    /// Open a progress window for each paste, as Explorer opens its copy dialog. Without
+    /// it the only feedback is a tray icon that Windows 11 hides in the overflow by default.
+    /// </summary>
+    public bool ShowProgressWindow { get; init; } = true;
+
     public ExtraArgs ExtraArgs { get; init; } = ExtraArgs.None;
 
     public static readonly Settings Default = new();
@@ -98,6 +105,7 @@ public static class SettingsSerializer
             LogRetentionJobs = ReadInt(root, "logRetentionJobs", d.LogRetentionJobs, 1, 10_000, problems),
             StartWithWindows = ReadBool(root, "startWithWindows", d.StartWithWindows, problems),
             NotifyOnComplete = ReadBool(root, "notifyOnComplete", d.NotifyOnComplete, problems),
+            ShowProgressWindow = ReadBool(root, "showProgressWindow", d.ShowProgressWindow, problems),
             ExtraArgs = ReadExtraArgs(root, problems),
         };
 
@@ -124,6 +132,7 @@ public static class SettingsSerializer
             ["logRetentionJobs"] = s.LogRetentionJobs,
             ["startWithWindows"] = s.StartWithWindows,
             ["notifyOnComplete"] = s.NotifyOnComplete,
+            ["showProgressWindow"] = s.ShowProgressWindow,
             ["extraArgs"] = new JsonObject
             {
                 ["copy"] = s.ExtraArgs.Copy,
@@ -136,7 +145,7 @@ public static class SettingsSerializer
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
         "threads", "retries", "retryWaitSeconds", "conflictDefault", "maxConcurrentJobs",
-        "logging", "logRetentionJobs", "startWithWindows", "notifyOnComplete", "extraArgs",
+        "logging", "logRetentionJobs", "startWithWindows", "notifyOnComplete", "showProgressWindow", "extraArgs",
     };
 
     private static string ToJsonName<T>(T value) where T : struct, Enum
@@ -218,10 +227,10 @@ public static class SettingsSerializer
             problems.Add($"'extraArgs.{key}' must be a string; ignored");
             return string.Empty;
         }
-        var rejected = RobocopyArgs.FindForbiddenSwitches(text);
+        var rejected = RobocopyArgs.ExtraArgProblems(text);
         if (rejected.Count > 0)
         {
-            problems.Add($"'extraArgs.{key}' contains {string.Join(", ", rejected)}, which would break paste semantics or the logging guarantee; ignored");
+            problems.Add($"'extraArgs.{key}' ignored: {string.Join("; ", rejected)}");
             return string.Empty;
         }
         return text.Trim();

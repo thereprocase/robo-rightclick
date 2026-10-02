@@ -6,8 +6,10 @@ namespace RoboRightClick.UI;
 /// <summary>
 /// <see cref="IJobPrompts"/> for the real UI: posts to the UI thread, shows a modeless
 /// <see cref="ConflictDialog"/> (several jobs may ask at once, as several Explorer copy
-/// dialogs can) and completes the task when it closes. Cancellation closes the dialog
-/// and returns null.
+/// dialogs can), owned by the job's progress window when one is open, and completes the
+/// task when it closes. Cancellation closes the dialog and returns null.
+/// <see cref="Shutdown"/> closes every open dialog and makes later requests return null at
+/// once, so exit never waits on a question nobody will answer.
 /// </summary>
 internal sealed class UiPrompts : IJobPrompts
 {
@@ -21,7 +23,11 @@ internal sealed class UiPrompts : IJobPrompts
     public Task<ConflictChoice?> ResolveConflictsAsync(
         JobSnapshot job,
         IReadOnlyList<FileConflict> conflicts,
-        bool allowKeepBoth,
         CancellationToken cancellationToken) =>
         throw new NotImplementedException();
+
+    /// <summary>Brings the job's open conflict dialog to the front; false when it has none.</summary>
+    public bool Activate(Guid jobId) => throw new NotImplementedException();
+
+    public void Shutdown() => throw new NotImplementedException();
 }

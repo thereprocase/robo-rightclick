@@ -24,15 +24,23 @@ public enum JobState
     Canceled,
 }
 
+/// <remarks>
+/// Every non-terminal state can end Failed, so an unexpected exception anywhere ends the
+/// job instead of stranding it. Scanning goes straight to Finalizing when nothing is left
+/// to run (everything refused or already in place), so the outcome is still computed in
+/// one place. Paused never goes to Finalizing: the job waits for resume first. Pause
+/// requested before Running is latched by the host and applied on entering Running.
+/// Cancel during Finalizing is ignored: the copy is over and its cleanup must finish.
+/// </remarks>
 public static class JobStates
 {
     private static readonly Dictionary<JobState, JobState[]> Allowed = new()
     {
-        [JobState.Queued] = [JobState.Scanning, JobState.Canceled],
-        [JobState.Scanning] = [JobState.AwaitingDecision, JobState.Running, JobState.Done, JobState.Failed, JobState.Canceled],
-        [JobState.AwaitingDecision] = [JobState.Running, JobState.Canceled],
+        [JobState.Queued] = [JobState.Scanning, JobState.Failed, JobState.Canceled],
+        [JobState.Scanning] = [JobState.AwaitingDecision, JobState.Running, JobState.Finalizing, JobState.Failed, JobState.Canceled],
+        [JobState.AwaitingDecision] = [JobState.Running, JobState.Failed, JobState.Canceled],
         [JobState.Running] = [JobState.Paused, JobState.Finalizing, JobState.Failed, JobState.Canceled],
-        [JobState.Paused] = [JobState.Running, JobState.Canceled],
+        [JobState.Paused] = [JobState.Running, JobState.Failed, JobState.Canceled],
         [JobState.Finalizing] = [JobState.Done, JobState.DoneWithErrors, JobState.Failed],
         [JobState.Done] = [],
         [JobState.DoneWithErrors] = [],
@@ -124,11 +132,22 @@ public sealed class JobProgress
         Sample(at);
     }
 
+    /// <param name="bytes">
+    /// Bytes of completed files in finished steps plus the current run's read counter.
+    /// Earlier runs' read counters must not be summed: they include partial reads of
+    /// files that failed.
+    /// </param>
     public void SetObservedBytes(long bytes, DateTimeOffset at)
     {
         ObservedBytes = Math.Max(ObservedBytes, bytes);
         Sample(at);
     }
+
+    /// <summary>
+    /// Forgets the speed samples. Called on resume, so the time spent paused does not drag
+    /// the rate down and inflate the ETA.
+    /// </summary>
+    public void ResetRate() => _samples.Clear();
 
     /// <summary>Bytes per second over the last few seconds, or null before there is enough data.</summary>
     public double? BytesPerSecond

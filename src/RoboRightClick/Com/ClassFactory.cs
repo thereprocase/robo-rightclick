@@ -11,9 +11,11 @@ internal interface IVerbHandler
 {
     /// <summary>
     /// Called on the UI (STA) thread inside Explorer's Execute call. Must return quickly:
-    /// Explorer waits on it. Implementations post the real work and return.
+    /// Explorer waits on it. Implementations post the real work and return. The paths are
+    /// untrusted (any same-user COM client can send them) and are checked by the handler.
     /// </summary>
-    void Invoke(ShellVerb verb, IReadOnlyList<string> paths);
+    /// <param name="skippedItems">Selected items that had no file-system path.</param>
+    void Invoke(ShellVerb verb, IReadOnlyList<string> paths, int skippedItems);
 }
 
 /// <summary>

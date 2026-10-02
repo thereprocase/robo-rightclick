@@ -91,8 +91,16 @@ public sealed partial class RobocopyOutputParser
         return events;
     }
 
-    /// <summary>Call when the output ends, to flush anything still held back.</summary>
-    public IReadOnlyList<RobocopyEvent> Complete()
+    /// <summary>Call when the output ends normally, to flush anything still held back.</summary>
+    public IReadOnlyList<RobocopyEvent> Complete() => Complete(processEndedNormally: true);
+
+    /// <summary>
+    /// Call when the output ends. When robocopy was killed (cancel, crash) the held file
+    /// line is dropped, not reported: it was held precisely because its ERROR line might
+    /// have been next, and a preallocated full-length partial file must never be counted
+    /// as complete (cancel cleanup would keep it and retry would skip it).
+    /// </summary>
+    public IReadOnlyList<RobocopyEvent> Complete(bool processEndedNormally)
     {
         var events = new List<RobocopyEvent>();
         if (_pendingError is { } pending)
@@ -100,7 +108,14 @@ public sealed partial class RobocopyOutputParser
             _pendingError = null;
             events.Add(new ErrorReported(pending.Code, pending.Operation, pending.Path, string.Empty));
         }
-        FlushFile(events);
+        if (processEndedNormally)
+        {
+            FlushFile(events);
+        }
+        else
+        {
+            _pendingFile = null;
+        }
         return events;
     }
 

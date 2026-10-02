@@ -5,7 +5,8 @@ namespace RoboRightClick.Com;
 /// <summary>
 /// Registers the three verb class objects with COM for the lifetime of the tray.
 /// Must be created and disposed on the UI thread: that STA's message loop is what
-/// dispatches incoming activations and Execute calls.
+/// dispatches incoming activations and Execute calls. <see cref="ComCallerSecurity.InitializeProcess"/>
+/// must have run first.
 /// </summary>
 internal sealed class ComServer : IDisposable
 {

@@ -7,6 +7,13 @@ public sealed record PlannedFile(string SourcePath, string DestinationPath, File
 
 public sealed record FileConflict(string SourcePath, string DestinationPath, FileFacts Source, FileFacts Existing)
 {
+    /// <summary>
+    /// Whether "keep both" can be offered for this file. False for a cut across volumes:
+    /// keeping both there needs an OS move that deletes the source, which invariant 1 does
+    /// not allow. A same-volume cut keeps both with a rename, and a copy always can.
+    /// </summary>
+    public bool KeepBothAllowed { get; init; } = true;
+
     public bool SourceIsNewer => Source.LastWriteUtc > Existing.LastWriteUtc;
     public bool LooksIdentical => Source.Size == Existing.Size && Source.LastWriteUtc == Existing.LastWriteUtc;
 }
@@ -32,8 +39,9 @@ public static class ConflictScan
     }
 
     /// <summary>
-    /// The policy a job runs with. Ask only survives to this point when the
-    /// scan found nothing to ask about, so it runs with robocopy's defaults.
+    /// The policy a job runs with. Ask only survives to this point when the scan found
+    /// nothing to ask about; <see cref="RobocopyArgs.ConflictFlags"/> then runs it with
+    /// Skip flags, so a file that appears after the scan is never overwritten unasked.
     /// </summary>
     public static ConflictPolicy Resolve(ConflictPolicy configured, int conflictCount, ConflictPolicy? userChoice)
     {

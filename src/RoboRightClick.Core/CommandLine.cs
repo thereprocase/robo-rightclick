@@ -5,7 +5,11 @@ public abstract record CliCommand;
 /// <summary>Run the tray app. <paramref name="StartedByCom"/> is true for COM's "-Embedding" launch.</summary>
 public sealed record CliRunTray(bool StartedByCom) : CliCommand;
 
-public sealed record CliInstall(bool StartWithWindows) : CliCommand;
+/// <param name="StartWithWindows">
+/// --autostart (true), --no-autostart (false) or neither (null: keep an existing config's
+/// choice; see <see cref="Registration.ResolveStartWithWindows"/>).
+/// </param>
+public sealed record CliInstall(bool? StartWithWindows) : CliCommand;
 
 public sealed record CliUninstall : CliCommand;
 
@@ -31,11 +35,14 @@ public static class CommandLine
     public const string Usage =
         """
         RoboRightClick                     run the tray app
-        RoboRightClick --install [--no-autostart]
+        RoboRightClick --install [--autostart | --no-autostart]
         RoboRightClick --uninstall
         RoboRightClick copy <path>...      Robo-Copy the items (same path as the right-click)
         RoboRightClick cut <path>...       Robo-Cut the items
         RoboRightClick paste <folder>      Robo-Paste the clipboard into the folder
+
+        This is a Windows GUI program: cmd and PowerShell do not wait for it. In scripts use
+        "start /wait RoboRightClick ..." or "Start-Process -Wait -PassThru" to get the exit code.
         """;
 
     public static CliCommand Parse(IReadOnlyList<string> args)
@@ -62,11 +69,15 @@ public static class CommandLine
         {
             if (rest.Count == 0)
             {
-                return new CliInstall(StartWithWindows: true);
+                return new CliInstall(StartWithWindows: null);
             }
-            return rest.Count == 1 && Is(rest[0], "--no-autostart")
-                ? new CliInstall(StartWithWindows: false)
-                : Unexpected(rest.FirstOrDefault(a => !Is(a, "--no-autostart")) ?? rest[^1]);
+            if (rest.Count > 1)
+            {
+                return Unexpected(rest[1]);
+            }
+            return Is(rest[0], "--autostart") ? new CliInstall(true)
+                : Is(rest[0], "--no-autostart") ? new CliInstall(false)
+                : Unexpected(rest[0]);
         }
         if (Is(first, "--uninstall"))
         {

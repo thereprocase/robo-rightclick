@@ -10,12 +10,17 @@ public enum ShellVerb
 /// <summary>One classic context-menu item and the COM class Explorer delegates it to.</summary>
 /// <param name="KeyName">Verb key name under each association's "shell" key.</param>
 /// <param name="Associations">Keys under HKCU\Software\Classes that get this verb.</param>
+/// <param name="MultiSelectModel">
+/// "Player": the whole selection arrives in one Execute call. "Single": the shell shows the
+/// item only for a single selection, which is how Explorer's own Paste behaves on folders.
+/// </param>
 public sealed record ShellVerbInfo(
     ShellVerb Verb,
     Guid Clsid,
     string KeyName,
     string Label,
-    IReadOnlyList<string> Associations);
+    IReadOnlyList<string> Associations,
+    string MultiSelectModel);
 
 /// <summary>
 /// The verb table. The CLSIDs are part of the installed registry footprint and of the
@@ -31,17 +36,17 @@ public static class ShellVerbs
 
     public static readonly ShellVerbInfo RoboCopy = new(
         ShellVerb.RoboCopy, new Guid("bd15dc6a-fbc1-4949-b61d-3b8fc390062f"),
-        "RoboCopy", "Robo-Copy", ["AllFilesystemObjects"]);
+        "RoboCopy", "Robo-Copy", ["AllFilesystemObjects"], "Player");
 
     public static readonly ShellVerbInfo RoboCut = new(
         ShellVerb.RoboCut, new Guid("1a061376-a3f7-41bf-a516-e635ed91acdf"),
-        "RoboCut", "Robo-Cut", ["AllFilesystemObjects"]);
+        "RoboCut", "Robo-Cut", ["AllFilesystemObjects"], "Player");
 
     // Background = right-click on empty space inside a folder; Directory and Drive =
     // right-click on a folder or drive, pasting into it, as Explorer's own Paste does.
     public static readonly ShellVerbInfo RoboPaste = new(
         ShellVerb.RoboPaste, new Guid("9d1bae79-13c3-427f-a7e6-34150d5c49ab"),
-        "RoboPaste", "Robo-Paste", [@"Directory\Background", "Directory", "Drive"]);
+        "RoboPaste", "Robo-Paste", [@"Directory\Background", "Directory", "Drive"], "Single");
 
     public static readonly IReadOnlyList<ShellVerbInfo> All = [RoboCopy, RoboCut, RoboPaste];
 
@@ -53,9 +58,9 @@ public static class ShellVerbs
     public const string NotOneFolderReason = "Robo-Paste needs exactly one destination folder.";
 
     /// <summary>
-    /// The folder a Robo-Paste targets. Static verbs cannot hide themselves for a
-    /// multi-folder selection the way Explorer's own Paste does, so that case is
-    /// refused with a message instead of guessing which folder was meant.
+    /// The folder a Robo-Paste targets. MultiSelectModel=Single already hides the item for
+    /// a multi-folder selection; this still refuses that case (the CLI and any other COM
+    /// client can send one) instead of guessing which folder was meant.
     /// </summary>
     public static (string? Folder, string? Problem) PasteDestination(IReadOnlyList<string> selectedPaths) =>
         selectedPaths.Count switch

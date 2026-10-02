@@ -13,7 +13,10 @@ internal static class ComClient
 {
     /// <summary>
     /// Returns once Execute returns, which is when the verb has been accepted, not when a
-    /// paste has finished. Throws COMException with the failing HRESULT.
+    /// paste has finished. Calls CoAllowSetForegroundWindow on the proxy before Execute, so
+    /// the tray may bring its progress or conflict window to the front as it does for
+    /// Explorer. Releases every proxy with FinalRelease. Throws COMException with the failing
+    /// HRESULT; REGDB_E_CLASSNOTREG means "not installed for this user".
     /// </summary>
     public static void Invoke(ShellVerb verb, IReadOnlyList<string> fullPaths) => throw new NotImplementedException();
 }

@@ -15,6 +15,7 @@ public class SettingsTests
         Assert.Equal(0, d.MaxConcurrentJobs);
         Assert.Equal(LoggingMode.Normal, d.Logging);
         Assert.Equal(ExtraArgs.None, d.ExtraArgs);
+        Assert.True(d.ShowProgressWindow);
     }
 
     [Fact]
@@ -31,7 +32,8 @@ public class SettingsTests
             LogRetentionJobs = 7,
             StartWithWindows = false,
             NotifyOnComplete = false,
-            ExtraArgs = new ExtraArgs("/J", "/XJ"),
+            ShowProgressWindow = false,
+            ExtraArgs = new ExtraArgs("/J", "/Z /IORATE:50M"),
         };
 
         var result = SettingsSerializer.Parse(SettingsSerializer.Serialize(s));
@@ -78,9 +80,9 @@ public class SettingsTests
     [Fact]
     public void Forbidden_extra_args_are_dropped_with_a_problem()
     {
-        var result = SettingsSerializer.Parse("""{ "extraArgs": { "copy": "/MIR", "move": "/XJ" } }""");
+        var result = SettingsSerializer.Parse("""{ "extraArgs": { "copy": "/MIR", "move": "/Z" } }""");
 
-        Assert.Equal(new ExtraArgs(string.Empty, "/XJ"), result.Settings.ExtraArgs);
+        Assert.Equal(new ExtraArgs(string.Empty, "/Z"), result.Settings.ExtraArgs);
         Assert.Contains(result.Problems, p => p.Contains("/MIR"));
     }
 

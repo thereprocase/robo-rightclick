@@ -38,37 +38,69 @@ public static class RobocopyArgs
     /// </summary>
     public const string MetadataFlags = "/COPY:DAT /DCOPY:DA /A+:A /XJD";
 
+    /// <summary>Longest extraArgs value accepted, per verb.</summary>
+    public const int MaxExtraArgsLength = 1_024;
+
     /// <summary>
-    /// Switches users may not pass through extraArgs: they would delete files at
-    /// the destination (/MIR, /PURGE), turn the paste into a no-op that still
-    /// reports success (/L, /CREATE), write a log behind ephemeral mode's back
-    /// (/LOG, /UNILOG, /TEE), or fight flags this class owns.
+    /// The only switches users may add through extraArgs. An allow-list, not a deny-list:
+    /// robocopy strips quotes from its arguments, so a deny-list can be bypassed by quoting
+    /// ("/MIR"), and any switch that changes which files are selected (/S, /XF, /XO, /MAX,
+    /// ...) would make the app's own accounting of planned files wrong, which cancel cleanup
+    /// and retry depend on. These change only how each selected file is copied.
+    /// Extending this list is a reviewed change.
     /// </summary>
-    public static readonly IReadOnlySet<string> ForbiddenSwitches = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+    public static readonly IReadOnlySet<string> AllowedSwitches = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        "/MIR", "/PURGE", "/CREATE", "/L", "/NOCOPY",
-        "/LOG", "/LOG+", "/UNILOG", "/UNILOG+", "/TEE",
-        "/MOV", "/MOVE", "/MT", "/UNICODE", "/NOSD", "/NODD",
-        "/JOB", "/SAVE", "/QUIT", "/EFSRAW", "/IPG",
+        "/J", "/Z", "/SL", "/COMPRESS", "/NOOFFLOAD", "/FFT", "/DST",
     };
 
-    public static IReadOnlyList<string> FindForbiddenSwitches(string extraArgs)
+    /// <summary>Allowed switches that take a size value, such as /IORATE:50M.</summary>
+    public static readonly IReadOnlySet<string> AllowedSizeSwitches = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
-        var found = new List<string>();
+        "/IORATE", "/IOMAXSIZE", "/THRESHOLD",
+    };
+
+    /// <summary>
+    /// Problems with an extraArgs value, one per offending token; empty means it is safe to
+    /// append. Every token must be a bare '/'-switch from <see cref="AllowedSwitches"/> or
+    /// <see cref="AllowedSizeSwitches"/>: no quotes, no '^', no positional tokens (robocopy
+    /// would read those as extra file filters).
+    /// </summary>
+    public static IReadOnlyList<string> ExtraArgProblems(string extraArgs)
+    {
+        var problems = new List<string>();
+        if (extraArgs.Length > MaxExtraArgsLength)
+        {
+            problems.Add($"longer than {MaxExtraArgsLength} characters");
+            return problems;
+        }
         foreach (var token in extraArgs.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (!token.StartsWith('/'))
+            if (!IsAllowedToken(token))
             {
-                continue;
-            }
-            var colon = token.IndexOf(':');
-            var name = colon < 0 ? token : token[..colon];
-            if (ForbiddenSwitches.Contains(name) && !found.Contains(name, StringComparer.OrdinalIgnoreCase))
-            {
-                found.Add(name.ToUpperInvariant());
+                problems.Add($"'{token}' is not an allowed extra switch");
             }
         }
-        return found;
+        return problems;
+    }
+
+    /// <remarks>
+    /// Exact names and a digits-plus-unit value grammar leave no room for quotes, carets or
+    /// other characters robocopy's argument parser would reinterpret.
+    /// </remarks>
+    private static bool IsAllowedToken(string token)
+    {
+        var colon = token.IndexOf(':');
+        if (colon < 0)
+        {
+            return AllowedSwitches.Contains(token);
+        }
+        var value = token[(colon + 1)..];
+        var digits = value.Length > 0 && char.IsAsciiLetter(value[^1]) ? value[..^1] : value;
+        return AllowedSizeSwitches.Contains(token[..colon])
+            && digits.Length is > 0 and <= 12
+            && digits.All(char.IsAsciiDigit)
+            && (digits.Length == value.Length || "KMGkmg".Contains(value[^1]));
     }
 
     public static string ConflictFlags(ConflictPolicy policy) => policy switch
@@ -78,24 +110,27 @@ public static class RobocopyArgs
         ConflictPolicy.Replace => "/IS /IT /IM",
         // Explorer's "Skip": never touch a file that already exists.
         ConflictPolicy.Skip => "/XC /XN /XO",
-        ConflictPolicy.KeepNewer => "/XO",
-        // Ask is resolved to one of the above before a job runs; with no
-        // conflicts found, robocopy's defaults already match Explorer.
-        ConflictPolicy.Ask => string.Empty,
+        // Replace only where the source is newer: exclude older and same-time-but-changed
+        // sources. Used as-is only for copies; a cut with KeepNewer is split by
+        // ExecutionPlanner so kept files never reach a /MOV run.
+        ConflictPolicy.KeepNewer => "/XC /XO",
+        // Ask reaches a run only when the scan found no conflicts. Skip flags then make
+        // a file that appears at the destination after the scan (another program, the
+        // user) get skipped rather than silently overwritten without the prompt.
+        ConflictPolicy.Ask => "/XC /XN /XO",
         _ => throw new ArgumentOutOfRangeException(nameof(policy)),
     };
 
-    /// <param name="excludedFiles">
-    /// Full source paths robocopy must leave alone (/XF). Used when the user decides per
-    /// file: files to skip, and files kept both ways that are copied in-process under a
-    /// new name afterwards.
-    /// </param>
+    /// <summary>
+    /// One robocopy argument string. Files the user chose to keep are never protected by a
+    /// filter here: <see cref="ExecutionPlanner"/> leaves them out of every step by
+    /// construction (robocopy /MOV can delete the source of a "same" file it skipped).
+    /// </summary>
     public static string Build(
         RobocopyStep step,
         Settings settings,
         ConflictPolicy resolvedPolicy,
-        string logPipeName,
-        IReadOnlyList<string>? excludedFiles = null)
+        string logPipeName)
     {
         var sb = new StringBuilder();
         sb.Append(Quote(step.SourceDirectory)).Append(' ').Append(Quote(step.DestinationDirectory));
@@ -128,20 +163,8 @@ public static class RobocopyArgs
             sb.Append(' ').Append(conflict);
         }
 
-        if (excludedFiles is { Count: > 0 })
-        {
-            // Robocopy reads /XF operands until the next switch, so the list goes last
-            // among the app's own flags. Whether a user /XF in extraArgs adds to this
-            // list or replaces it is unverified on Windows.
-            sb.Append(" /XF");
-            foreach (var path in excludedFiles)
-            {
-                sb.Append(' ').Append(Quote(path));
-            }
-        }
-
         var extra = step.Move ? settings.ExtraArgs.Move : settings.ExtraArgs.Copy;
-        if (!string.IsNullOrWhiteSpace(extra) && FindForbiddenSwitches(extra).Count == 0)
+        if (!string.IsNullOrWhiteSpace(extra) && ExtraArgProblems(extra).Count == 0)
         {
             sb.Append(' ').Append(extra.Trim());
         }
@@ -151,11 +174,26 @@ public static class RobocopyArgs
     /// <summary>
     /// Quotes one argument. A trailing backslash would escape the closing
     /// quote under the C runtime's argument rules ("C:\" becomes C:"), so
-    /// root paths get a harmless "." appended instead.
+    /// root paths get a harmless "." appended instead. A value containing a quote or a
+    /// control character is refused outright: there is no escaping that robocopy's parser
+    /// is known to honor, and <see cref="PathPolicy"/> never lets such a path through.
     /// </summary>
     public static string Quote(string value)
     {
+        if (value.Any(c => c == '"' || c < 0x20))
+        {
+            throw new ArgumentException("Robocopy arguments cannot contain quotes or control characters.", nameof(value));
+        }
         var v = value.EndsWith('\\') ? value + "." : value;
         return "\"" + v + "\"";
     }
+
+    /// <summary>CreateProcess's limit for the whole command line, including the terminating NUL.</summary>
+    public const int MaxCommandLineLength = 32_767;
+
+    /// <summary>
+    /// Length of the command line CreateProcess will receive: quoted exe, a space, the
+    /// arguments and the NUL. A run whose line does not fit must fail before starting.
+    /// </summary>
+    public static int CommandLineLength(string exePath, string arguments) => Quote(exePath).Length + 1 + arguments.Length + 1;
 }

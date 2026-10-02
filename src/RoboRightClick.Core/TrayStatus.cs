@@ -5,8 +5,10 @@ namespace RoboRightClick.Core;
 /// and handed to the UI thread. Everything the tray, the Jobs window and toasts show
 /// comes from snapshots, never from live job objects.
 /// </summary>
+/// <param name="Sources">The top-level items pasted, as they came from the clipboard.</param>
 /// <param name="Logging">The mode the job was created under; a later toggle does not change it.</param>
-/// <param name="Acknowledged">The user has seen a DoneWithErrors/Failed outcome (opened it in Jobs or chose Skip).</param>
+/// <param name="ErrorCount">Retryable per-file errors (robocopy and in-process); see <see cref="RefusedCount"/> for the rest.</param>
+/// <param name="Acknowledged">The user has seen a DoneWithErrors/Failed/damaged-Canceled outcome (opened it, or chose Skip).</param>
 public sealed record JobSnapshot(
     Guid Id,
     Guid? ParentId,
@@ -25,9 +27,34 @@ public sealed record JobSnapshot(
     int ErrorCount,
     bool Acknowledged)
 {
+    /// <summary>Items refused at planning (into own subfolder, a drive root, a folder link). "Try again" cannot help these.</summary>
+    public int RefusedCount { get; init; }
+
+    /// <summary>The first refusal's reason: a fixed planner sentence that never contains a path.</summary>
+    public string? RefusalReason { get; init; }
+
+    /// <summary>
+    /// Pre-existing files that were being replaced when the user canceled. Robocopy
+    /// allocates full length first, so they may look whole but hold partial data.
+    /// </summary>
+    public int DamagedOnCancel { get; init; }
+
+    /// <summary>Why a Failed job could not run, as a plain sentence with no path (from <see cref="FailureText"/>).</summary>
+    public string? FailureReason { get; init; }
+
+    /// <summary>Cancel was requested and cleanup is still running ("Canceling…").</summary>
+    public bool CancelRequested { get; init; }
+
+    /// <summary>Why a Queued job has not started.</summary>
+    public JobWait Wait { get; init; }
+
+    /// <summary>The paste had nothing to do (every item already in place): no toast, no clipboard clear.</summary>
+    public bool NoOp { get; init; }
+
     public bool NeedsAttention =>
         State == JobState.AwaitingDecision
-        || (!Acknowledged && State is JobState.DoneWithErrors or JobState.Failed);
+        || (!Acknowledged && State is JobState.DoneWithErrors or JobState.Failed)
+        || (!Acknowledged && State == JobState.Canceled && DamagedOnCancel > 0);
 }
 
 public enum TrayIconState
@@ -70,7 +97,9 @@ public sealed record TrayStatus(TrayIconState Icon, bool Ephemeral, string Toolt
             }
             parts.Add(jobsText);
 
-            var running = active.Where(j => j.State == JobState.Running).ToList();
+            // A job being canceled no longer moves data; counting it would show a speed and
+            // an ETA for work that will not happen.
+            var running = active.Where(j => j.State == JobState.Running && !j.CancelRequested).ToList();
             var speed = running.Sum(j => j.BytesPerSecond ?? 0);
             if (speed > 0)
             {

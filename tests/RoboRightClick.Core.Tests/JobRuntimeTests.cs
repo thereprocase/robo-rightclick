@@ -14,9 +14,10 @@ public class CancelCleanupTests
         var plan = CancelCleanup.Select(
             [File("done.bin"), File("partial.bin")],
             completedSources: [@"C:\SRC\done.bin"],
-            preExistingDestinations: [],
+            presentBeforeStep: [],
             move: false,
-            sourceStillExists: _ => true);
+            sourceStillExists: _ => true,
+            claimedByOtherJob: _ => false);
 
         Assert.Equal([@"D:\dst\partial.bin"], plan.Delete);
         Assert.Empty(plan.LeftInPlace);
@@ -28,9 +29,10 @@ public class CancelCleanupTests
         var plan = CancelCleanup.Select(
             [File("existing.bin")],
             completedSources: [],
-            preExistingDestinations: [@"d:\DST\existing.bin"],
+            presentBeforeStep: [@"d:\DST\existing.bin"],
             move: false,
-            sourceStillExists: _ => true);
+            sourceStillExists: _ => true,
+            claimedByOtherJob: _ => false);
 
         Assert.Empty(plan.Delete);
         Assert.Equal([@"D:\dst\existing.bin"], plan.LeftInPlace);
@@ -42,9 +44,10 @@ public class CancelCleanupTests
         var plan = CancelCleanup.Select(
             [File("moved.bin"), File("inflight.bin")],
             completedSources: [],
-            preExistingDestinations: [],
+            presentBeforeStep: [],
             move: true,
-            sourceStillExists: p => !p.EndsWith("moved.bin", StringComparison.Ordinal));
+            sourceStillExists: p => !p.EndsWith("moved.bin", StringComparison.Ordinal),
+            claimedByOtherJob: _ => false);
 
         Assert.Equal([@"D:\dst\inflight.bin"], plan.Delete);
     }
@@ -101,16 +104,6 @@ public class JobOutcomeTests
         var b = PipeNames.ForStep(id, 0, 2);
         Assert.NotEqual(a, b);
         Assert.Equal(@"/UNILOG:\\.\pipe\" + a, RobocopyArgs.LogPipeArgument(a));
-    }
-
-    [Fact]
-    public void Excluded_files_become_one_quoted_xf_list_before_extra_args()
-    {
-        var step = new RobocopyStep(@"C:\src", @"D:\dst", [], Recursive: true, Move: false);
-        var s = Settings.Default with { ExtraArgs = new ExtraArgs("/J", "") };
-        var args = RobocopyArgs.Build(step, s, ConflictPolicy.Replace, "p", [@"C:\src\a b.txt", @"C:\src\sub\c.txt"]);
-        Assert.EndsWith(@" /IS /IT /IM /XF ""C:\src\a b.txt"" ""C:\src\sub\c.txt"" /J", args);
-        Assert.DoesNotContain("/XF", RobocopyArgs.Build(step, s, ConflictPolicy.Replace, "p", []));
     }
 }
 

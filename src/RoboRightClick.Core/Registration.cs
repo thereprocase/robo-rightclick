@@ -1,7 +1,21 @@
+using System.Globalization;
+
 namespace RoboRightClick.Core;
 
-/// <summary>A REG_SZ value under HKEY_CURRENT_USER. An empty <paramref name="Name"/> is the key's default value.</summary>
-public sealed record RegistryValue(string Key, string Name, string Data);
+public enum RegistryDataKind
+{
+    /// <summary>REG_SZ.</summary>
+    String,
+
+    /// <summary>REG_DWORD; Data is the decimal value.</summary>
+    DWord,
+
+    /// <summary>REG_BINARY self-relative security descriptor; Data is SDDL the host converts.</summary>
+    SecurityDescriptor,
+}
+
+/// <summary>A value under HKEY_CURRENT_USER. An empty <paramref name="Name"/> is the key's default value.</summary>
+public sealed record RegistryValue(string Key, string Name, string Data, RegistryDataKind Kind = RegistryDataKind.String);
 
 /// <summary>Something uninstall deletes under HKEY_CURRENT_USER.</summary>
 public abstract record RegistryRemoval(string Key);
@@ -11,6 +25,12 @@ public sealed record RemoveKeyTree(string Key) : RegistryRemoval(Key);
 
 /// <summary>Deletes one value, leaving its (shared) key in place.</summary>
 public sealed record RemoveValue(string Key, string Name) : RegistryRemoval(Key);
+
+/// <summary>What install needs to know to produce the registry footprint.</summary>
+/// <param name="ExePath">The installed executable (AppPaths.InstalledExe).</param>
+/// <param name="UserSid">The installing user's SID, for the COM launch and access descriptors.</param>
+/// <param name="Version">Shown in Settings → Apps → Installed apps.</param>
+public sealed record InstallTarget(string ExePath, bool StartWithWindows, string UserSid, string Version);
 
 /// <summary>
 /// The complete per-user registry footprint, as data. Install writes exactly
@@ -23,6 +43,9 @@ public static class Registration
     public const string ClassesRoot = @"Software\Classes";
     public const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public const string RunValueName = AppInfo.Name;
+
+    /// <summary>The per-user "Installed apps" entry, so the app can be removed the usual way.</summary>
+    public const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\" + AppInfo.Name;
 
     /// <summary>Registry form of a GUID: "{XXXXXXXX-...}".</summary>
     public static string FormatGuid(Guid guid) => guid.ToString("B").ToUpperInvariant();
@@ -40,11 +63,16 @@ public static class Registration
     /// </summary>
     public static string LocalServerCommand(string exePath) => "\"" + exePath + "\"";
 
-    public static IReadOnlyList<RegistryValue> InstallValues(string exePath, bool startWithWindows)
+    public static string UninstallCommand(string exePath) => LocalServerCommand(exePath) + " --uninstall";
+
+    public static IReadOnlyList<RegistryValue> InstallValues(InstallTarget target)
     {
+        var exe = target.ExePath;
         var values = new List<RegistryValue>
         {
             new(AppIdKey, string.Empty, AppInfo.Name),
+            new(AppIdKey, "AccessPermission", ComSecurity.AccessPermissionSddl(target.UserSid), RegistryDataKind.SecurityDescriptor),
+            new(AppIdKey, "LaunchPermission", ComSecurity.LaunchPermissionSddl(target.UserSid), RegistryDataKind.SecurityDescriptor),
         };
 
         foreach (var verb in ShellVerbs.All)
@@ -52,24 +80,30 @@ public static class Registration
             var clsidKey = ClsidKey(verb.Clsid);
             values.Add(new(clsidKey, string.Empty, $"{AppInfo.Name} {verb.Label}"));
             values.Add(new(clsidKey, "AppID", FormatGuid(ShellVerbs.AppId)));
-            values.Add(new(clsidKey + @"\LocalServer32", string.Empty, LocalServerCommand(exePath)));
+            values.Add(new(clsidKey + @"\LocalServer32", string.Empty, LocalServerCommand(exe)));
 
             foreach (var association in verb.Associations)
             {
                 var verbKey = VerbKey(association, verb);
                 values.Add(new(verbKey, "MUIVerb", verb.Label));
-                // Player: Explorer hands the whole selection to one Execute call
-                // instead of one call per item (and no 15-item cap).
-                values.Add(new(verbKey, "MultiSelectModel", "Player"));
+                values.Add(new(verbKey, "MultiSelectModel", verb.MultiSelectModel));
                 // DelegateExecute lives on the verb's "command" subkey, as in
                 // Microsoft's ExecuteCommandVerb sample (RegisterExtension.cpp).
                 values.Add(new(verbKey + @"\command", "DelegateExecute", FormatGuid(verb.Clsid)));
             }
         }
 
-        if (startWithWindows)
+        values.Add(new(UninstallKey, "DisplayName", AppInfo.Name));
+        values.Add(new(UninstallKey, "DisplayVersion", target.Version));
+        values.Add(new(UninstallKey, "DisplayIcon", exe));
+        values.Add(new(UninstallKey, "InstallLocation", WinPath.GetParent(exe)));
+        values.Add(new(UninstallKey, "UninstallString", UninstallCommand(exe)));
+        values.Add(new(UninstallKey, "NoModify", "1", RegistryDataKind.DWord));
+        values.Add(new(UninstallKey, "NoRepair", "1", RegistryDataKind.DWord));
+
+        if (target.StartWithWindows)
         {
-            values.Add(RunValue(exePath));
+            values.Add(RunValue(exe));
         }
         return values;
     }
@@ -91,7 +125,22 @@ public static class Registration
                 removals.Add(new RemoveKeyTree(VerbKey(association, verb)));
             }
         }
+        removals.Add(new RemoveKeyTree(UninstallKey));
         removals.Add(new RemoveValue(RunKey, RunValueName));
         return removals;
     }
+
+    /// <summary>
+    /// The autostart choice a (re)install applies: an explicit --autostart/--no-autostart
+    /// wins and is also written to config.json; otherwise an existing config's setting is
+    /// kept, so a plain reinstall never flips what the user chose in Settings.
+    /// </summary>
+    public static bool ResolveStartWithWindows(bool? explicitChoice, Settings? existingConfig) =>
+        explicitChoice ?? existingConfig?.StartWithWindows ?? Settings.Default.StartWithWindows;
+
+    /// <summary>REG_DWORD data as the host writes it.</summary>
+    public static int DWordValue(RegistryValue value) =>
+        value.Kind == RegistryDataKind.DWord
+            ? int.Parse(value.Data, NumberStyles.None, CultureInfo.InvariantCulture)
+            : throw new ArgumentException("Not a DWORD value.", nameof(value));
 }

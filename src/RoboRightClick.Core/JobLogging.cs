@@ -9,12 +9,16 @@ public sealed record JobDescription(
     string Destination,
     DateTimeOffset CreatedAt);
 
+/// <param name="Errors">At most <see cref="JobRecords.MaxRecordedErrors"/>; the full count is <see cref="TotalErrors"/>.</param>
 public sealed record JobSummary(
     Guid Id,
     JobState FinalState,
     long CompletedFiles,
     long CompletedBytes,
-    IReadOnlyList<ErrorReported> Errors);
+    IReadOnlyList<ErrorReported> Errors)
+{
+    public int TotalErrors { get; init; }
+}
 
 /// <summary>
 /// Everything about a job that could ever be persisted flows through this
@@ -52,6 +56,15 @@ public sealed class NullJobSink : IJobSink
 public static class JobSinks
 {
     /// <summary>
+    /// The logging mode for a job derived from another one ("Try again", a re-run, a
+    /// re-plan): ephemeral wins in both directions. A child of an ephemeral job must not
+    /// write its parent's paths to disk because the user switched back to normal since,
+    /// and a child created while ephemeral mode is on follows the current promise.
+    /// </summary>
+    public static LoggingMode ForDerivedJob(LoggingMode parent, LoggingMode current) =>
+        parent == LoggingMode.Ephemeral || current == LoggingMode.Ephemeral ? LoggingMode.Ephemeral : LoggingMode.Normal;
+
+    /// <summary>
     /// Picks the sink for a new job. The file sink factory is not even invoked
     /// in ephemeral mode, so nothing that could create a file is constructed.
     /// </summary>
@@ -84,13 +97,22 @@ public static class JobLogNames
     }
 
     /// <summary>
-    /// Folders to delete so that at most <paramref name="keep"/> remain.
-    /// Anything not named like a job folder is never selected, so a stray
-    /// user file in the logs directory is left alone.
+    /// Folders to delete so that at most <paramref name="keep"/> finished jobs remain.
+    /// Anything not named like a job folder is never selected, so a stray user file in the
+    /// logs directory is left alone. Folders of jobs still running are never selected and
+    /// do not count towards <paramref name="keep"/>: a long job is the oldest folder, and
+    /// pruning it would delete its live log.
     /// </summary>
-    public static IReadOnlyList<string> SelectForPruning(IEnumerable<string> folderNames, int keep)
+    public static IReadOnlyList<string> SelectForPruning(
+        IEnumerable<string> folderNames,
+        int keep,
+        IReadOnlySet<string>? activeFolders = null)
     {
-        var jobs = folderNames.Where(IsJobFolderName).OrderByDescending(n => n, StringComparer.Ordinal).ToList();
+        var jobs = folderNames
+            .Where(IsJobFolderName)
+            .Where(n => activeFolders is null || !activeFolders.Contains(n))
+            .OrderByDescending(n => n, StringComparer.Ordinal)
+            .ToList();
         return jobs.Skip(Math.Max(0, keep)).ToList();
     }
 }

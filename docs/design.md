@@ -35,7 +35,7 @@ Each item is registered with `DelegateExecute={its own CLSID}` and `MultiSelectM
 
 There's no helper process and no shared memory. After a successful cut-paste, the clipboard is cleared, matching Explorer.
 
-**Install** is `RoboRightClick.exe --install`. It copies itself to `%LOCALAPPDATA%\Programs\RoboRightClick\`, writes the HKCU keys and the default config, and adds an optional `Run` key. `--uninstall` removes exactly what install wrote. Neither command touches any Explorer setting.
+**Install** is `RoboRightClick.exe --install` (or double-clicking the downloaded exe, which offers to install). It copies itself to `%LOCALAPPDATA%\Programs\RoboRightClick\`, writes the HKCU keys (including an Installed apps entry, so it can be removed from Settings) and the default config, and adds an optional `Run` key. `--uninstall` removes exactly what install wrote. Neither command touches any Explorer setting. A per-user install, like every per-user app, gives no protection against other processes of the same user replacing the installed exe or its registry keys.
 
 ## Defaults: what Explorer does, verb by verb and state by state, but MT32
 
@@ -45,14 +45,14 @@ There's no helper process and no shared memory. After a successful cut-paste, th
 | Copy folder | recursive, merges into existing folder | `robocopy <dir> <dest>\<name> /E /MT:32` |
 | Move, same volume | rename (instant) | `File/Directory.Move`, no robocopy. If there's a name collision, use the robocopy `/MOVE` path |
 | Move, cross volume | copy then delete source | `/MOV` (files) or `/MOVE` (dirs). Robocopy deletes each source file **only after that file copied successfully**. The job ends `DoneWithErrors` if anything fails, and **failed sources are never deleted** |
-| Name conflict | Replace / Skip / Let me decide dialog | preflight scan, then the same three-choice dialog. Replace = `/IS /IT /IM`; Skip = `/XC /XN /XO`; Decide = per-file list (any Keep-both files are copied in-process as `name (2).ext`) |
+| Name conflict | Replace / Skip / Let me decide dialog | preflight scan, then the same three-choice dialog. Replace = `/IS /IT /IM`; Skip = `/XC /XN /XO` for a copy; Decide = per-file list (any Keep-both files are copied in-process as `name (2).ext`, or renamed for a same-volume cut). For a cut, and for Decide, files the user keeps are left out of every robocopy run by construction (host-architecture.md section 6), so `/MOV` can never delete their sources |
 | Paste copy into the same folder | `X - Copy`, `X - Copy (2)` | same naming. Folders go through robocopy to the new name; single files use in-process `CopyFileEx` |
 | Paste into own subfolder | error for that item, others continue | same message, same continue behavior |
 | Per-file error | prompt: Try again / Skip | `/R:0 /W:0` (Explorer doesn't retry silently either). Errors are **collected and shown at the end of the job** as "Try again (these N) / Skip". This is the one deliberate deviation, because robocopy can't block mid-run |
 | Cancel | stops; deletes the partially written file | kill robocopy, then delete any destination files that were in flight and didn't exist before the job started |
 | Pause / resume | yes | `NtSuspendProcess` / `NtResumeProcess` on the robocopy process |
 | Metadata | measured in docs/parity.md | `/COPY:DAT /DCOPY:DA /A+:A /XJD`; remaining deviations are listed in parity.md |
-| Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited) |
+| Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited), except that a paste whose source or destination overlaps where another running paste writes waits for it (deviation, docs/parity.md) |
 
 Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP`. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
 
@@ -70,11 +70,12 @@ Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /N
   "logRetentionJobs": 100,
   "startWithWindows": true,
   "notifyOnComplete": true,
+  "showProgressWindow": true,        // per-job progress window, like Explorer's copy dialog
   "extraArgs": { "copy": "", "move": "" }
 }
 ```
 
-Validation rejects `extraArgs` that break paste semantics or the logging guarantee: `/MIR`, `/PURGE`, `/CREATE`, `/LOG*`, `/UNILOG*`, `/TEE`, `/EFSRAW`, and `/IPG` (which conflicts with `/MT`). An unknown or invalid config falls back to the defaults and shows a one-line tray warning.
+`extraArgs` accepts only an allow-list of switches that change how each selected file is copied, not which files are selected or where output goes: `/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n` (n with an optional K/M/G), at most 1,024 characters. Anything else is refused: a deny-list could be bypassed by quoting, and selection switches would break the app's accounting of which files a run touches. An invalid field falls back to its default and shows a one-line tray warning naming the setting.
 
 ## Queue states and tracking
 
@@ -111,7 +112,9 @@ All job output goes through one `IJobSink` interface:
   - Clipboard writes set `ExcludeClipboardContentFromMonitorProcessing`, so file lists stay out of clipboard history and cloud clipboard.
   - The only file write is the `logging` setting itself in config.json.
 
-  Switching ephemeral mode on while normal-mode jobs are running affects only new jobs. The tray says so.
+  Switching ephemeral mode on while normal-mode jobs are running affects only new jobs. The tray says so, and offers to delete the job logs already on disk.
+
+  **What ephemeral mode does not cover.** The guarantee is that the app writes no job data. Windows itself may still record traces the app cannot prevent: robocopy's command line (with paths) is visible to other processes of the user and to process-creation auditing (event 4688, Sysmon); Prefetch; the NTFS USN journal and file-system metadata of the copied files themselves; the pagefile and hibernation file; and a crash dump if Windows Error Reporting is configured machine-wide and the OS, not the app, ends the process. While ephemeral jobs run, the app handles its own crashes by ending without a WER report. The single-file runtime may extract native libraries to `%TEMP%\.net`; those contain no job data.
 
 ## Milestones (each gated, recorded in `docs/testlog.md`)
 
@@ -145,7 +148,7 @@ All job output goes through one `IJobSink` interface:
 - **Ephemeral audit:** snapshot `%APPDATA%`, `%LOCALAPPDATA%` and `%TEMP%` plus the toast DB before and after five ephemeral jobs. Expect zero new files and zero occurrences of the test path strings.
 - Throughput vs Explorer: 10k small files and 2× 4 GB files. Record the numbers and don't advertise speedups that weren't measured.
 
-**M5: release.** `scripts/publish.sh` produces a self-contained single-file win-x64 build (`EnableCompressionInSingleFile`), zipped with a SHA256. The README covers install/uninstall and the "Show more options" placement, with no slogans. Tag `v0.1.0`. There's no GitHub Actions in v1 because builds are local. If CI is added later, actions must be SHA-pinned with minimal permissions.
+**M5: release.** `scripts/publish.sh` produces a self-contained single-file win-x64 build (uncompressed, because Explorer waits on the tray's cold start when COM launches it), zipped with a SHA256. The README covers install/uninstall and the "Show more options" placement, with no slogans. Tag `v1.0.0-beta.1`. There's no GitHub Actions in v1 because builds are local. If CI is added later, actions must be SHA-pinned with minimal permissions.
 
 ## Verification summary
 

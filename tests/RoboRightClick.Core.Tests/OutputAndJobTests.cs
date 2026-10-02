@@ -256,6 +256,18 @@ public class ConflictAndLoggingTests
         Assert.Empty(JobLogNames.SelectForPruning(names, keep: 10));
     }
 
+    [Fact]
+    public void Pruning_never_selects_a_running_jobs_folder_and_does_not_count_it()
+    {
+        var names = new[] { "20260930-090000-cccccccc", "20261001-090000-aaaaaaaa", "20261002-090000-bbbbbbbb" };
+        var active = new HashSet<string> { "20260930-090000-cccccccc" };
+
+        // The oldest folder belongs to a job still running: it stays, and keep=1 still
+        // keeps one finished job besides it.
+        Assert.Equal(["20261001-090000-aaaaaaaa"], JobLogNames.SelectForPruning(names, keep: 1, active));
+        Assert.Equal(["20261002-090000-bbbbbbbb", "20261001-090000-aaaaaaaa"], JobLogNames.SelectForPruning(names, keep: 0, active));
+    }
+
     private sealed class RecordingSink : IJobSink
     {
         public void JobCreated(JobDescription job) { }

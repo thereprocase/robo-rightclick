@@ -15,7 +15,9 @@ public class ClipboardPayloadTests
         Assert.Equal(1, BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(16)));
         // Double-NUL terminated list.
         Assert.Equal([0, 0, 0, 0], bytes[^4..]);
-        Assert.Equal(paths, ClipboardPayload.DecodeDropFiles(bytes));
+        var decoded = ClipboardPayload.DecodeDropFiles(bytes);
+        Assert.Equal(DropFilesStatus.Ok, decoded.Status);
+        Assert.Equal(paths, decoded.Paths);
     }
 
     [Fact]
@@ -23,16 +25,16 @@ public class ClipboardPayloadTests
     {
         var bytes = new byte[24];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, 20);
-        Assert.Null(ClipboardPayload.DecodeDropFiles(bytes));
+        Assert.Equal(DropFilesStatus.Ansi, ClipboardPayload.DecodeDropFiles(bytes).Status);
     }
 
     [Fact]
     public void Truncated_drop_files_do_not_throw()
     {
-        Assert.Empty(ClipboardPayload.DecodeDropFiles(new byte[3])!);
+        Assert.Empty(ClipboardPayload.DecodeDropFiles(new byte[3]).Paths);
         var bytes = ClipboardPayload.EncodeDropFiles([@"C:\a"]);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, 4000);
-        Assert.Empty(ClipboardPayload.DecodeDropFiles(bytes)!);
+        Assert.Empty(ClipboardPayload.DecodeDropFiles(bytes).Paths);
     }
 
     [Theory]
@@ -79,5 +81,20 @@ public class ClipboardPayloadTests
         Assert.Equal(
             ClipboardPayload.CF_HDROP,
             ClipboardPayload.ForFiles([@"C:\a"], TransferVerb.Copy, LoggingMode.Normal)[0].Format.StandardId);
+    }
+
+    [Fact]
+    public void Oversized_clipboard_data_is_refused_not_truncated()
+    {
+        var huge = new byte[ClipboardPayload.MaxDropFilesBytes + 1];
+        Assert.Equal(DropFilesStatus.TooLarge, ClipboardPayload.DecodeDropFiles(huge).Status);
+
+        var tooMany = ClipboardPayload.EncodeDropFiles(Enumerable.Repeat(@"C:\a", ClipboardPayload.MaxDropFilesPaths + 1).ToList());
+        var result = ClipboardPayload.DecodeDropFiles(tooMany);
+        Assert.Equal(DropFilesStatus.TooLarge, result.Status);
+        Assert.Empty(result.Paths);
+
+        var atLimit = ClipboardPayload.EncodeDropFiles(Enumerable.Repeat(@"C:\a", ClipboardPayload.MaxDropFilesPaths).ToList());
+        Assert.Equal(ClipboardPayload.MaxDropFilesPaths, ClipboardPayload.DecodeDropFiles(atLimit).Paths.Count);
     }
 }

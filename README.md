@@ -34,7 +34,8 @@ A tray icon shows queued and running jobs. Each job's log is kept on disk, unles
 | `logRetentionJobs` | `100` | job logs kept in normal mode |
 | `startWithWindows` | `true` | start the tray app at sign-in |
 | `notifyOnComplete` | `true` | toast when a job finishes (path-free in ephemeral mode) |
-| `extraArgs.copy` / `extraArgs.move` | `""` | extra robocopy switches. Switches that could delete files at the destination or write logs (`/MIR`, `/PURGE`, `/LOG`, …) are rejected |
+| `showProgressWindow` | `true` | open a progress window for each paste, like Explorer's copy dialog |
+| `extraArgs.copy` / `extraArgs.move` | `""` | extra robocopy switches from an allow-list (`/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n`); anything else is rejected |
 
 ## Building
 

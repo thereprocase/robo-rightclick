@@ -41,3 +41,25 @@ through the real UI in M4).
   rather than interrupting mid-copy. Robocopy can't pause on an error and wait for input.
 - **Long paths are copied.** Explorer skipped them in the measured run. This deviation is an
   improvement and is kept on purpose.
+
+Design deviations (decided, not yet measured against Explorer):
+
+- **Overlapping pastes run one after another.** Explorer runs every paste at once and asks
+  about each conflict as it writes. Robo-Paste asks once, after its scan, so a second paste
+  whose files overlap where another running paste writes waits until that one finishes;
+  otherwise its scan would miss files about to appear and a copy could overwrite files a cut
+  had just moved. Pastes into unrelated folders still run in parallel.
+- **No keep-both for a cut between drives.** It would need the app itself to delete the source
+  after copying, which invariant 1 rules out until an ADR exists. Keep-both works for copies
+  and for cuts within one drive (a rename). The conflict dialog says why the option is missing.
+- **A selected folder link (junction or directory symlink) is only moved within a drive.**
+  Robocopy follows a link given as its source root, so a cross-drive move would empty the
+  link's target. Copying a selected link, or moving it to another drive, is refused with a
+  message pointing to Explorer's Paste. Explorer's own behavior here is not yet measured.
+- **Files that appear at the destination after the scan are skipped, not overwritten.**
+  Explorer would ask about them; Robo-Paste reports them in the job summary.
+- **"Keep newer" also keeps a destination with the same time but a different size.**
+  (`/XC /XO`). Explorer has no such option; it exists only as a configured default.
+- **A retried cut can leave empty source folders.** After "Try again" moves the files that
+  failed the first time, their now-empty source folders stay. Removing them would be an
+  app-initiated deletion in the source tree, which needs an ADR under invariant 1.

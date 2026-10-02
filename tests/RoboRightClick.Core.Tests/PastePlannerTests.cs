@@ -12,6 +12,12 @@ public class PastePlannerTests
 
         // Volume = drive letter for these tests.
         public bool SameVolume(string a, string b) => WinPath.Comparer.Equals(WinPath.GetRoot(a), WinPath.GetRoot(b));
+
+        // These tests hand the planner resolved SourceItems; only the PasteOrder entry
+        // point asks for kinds, and no path here is a link or an 8.3 alias.
+        public ItemKind KindOf(string path) => throw new NotSupportedException();
+
+        public string FinalPath(string path) => path;
     }
 
     private static PasteRequest Request(TransferVerb verb, string destination, params (string Path, bool Dir)[] sources) =>

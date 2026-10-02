@@ -5,6 +5,10 @@ namespace RoboRightClick.Core.Tests;
 public class RegistrationTests
 {
     private const string Exe = @"C:\Users\Test User\AppData\Local\Programs\RoboRightClick\RoboRightClick.exe";
+    private const string Sid = "S-1-5-21-1000-2000-3000-1001";
+
+    private static IReadOnlyList<RegistryValue> Install(bool startWithWindows) =>
+        Registration.InstallValues(new InstallTarget(Exe, startWithWindows, Sid, "1.0.0-beta.1"));
 
     [Fact]
     public void Uninstall_removes_every_key_and_value_install_writes()
@@ -13,7 +17,7 @@ public class RegistrationTests
         var trees = removals.OfType<RemoveKeyTree>().Select(r => r.Key).ToList();
         var values = removals.OfType<RemoveValue>().ToList();
 
-        foreach (var written in Registration.InstallValues(Exe, startWithWindows: true))
+        foreach (var written in Install(startWithWindows: true))
         {
             var coveredByTree = trees.Any(t => WinPath.AreSame(written.Key, t) || WinPath.IsStrictlyUnder(written.Key, t));
             var coveredByValue = values.Any(v => WinPath.AreSame(v.Key, written.Key) && v.Name == written.Name);
@@ -24,7 +28,7 @@ public class RegistrationTests
     [Fact]
     public void Uninstall_deletes_only_trees_that_install_itself_created()
     {
-        var writtenKeys = Registration.InstallValues(Exe, startWithWindows: true).Select(v => v.Key).ToList();
+        var writtenKeys = Install(startWithWindows: true).Select(v => v.Key).ToList();
         foreach (var tree in Registration.UninstallRemovals().OfType<RemoveKeyTree>())
         {
             // A tree removal must be a key install writes a value into, never a shared
@@ -37,13 +41,15 @@ public class RegistrationTests
     [Fact]
     public void Nothing_touches_explorer_settings_or_leaves_hkcu_classes_and_run()
     {
-        var keys = Registration.InstallValues(Exe, startWithWindows: true).Select(v => v.Key)
+        var keys = Install(startWithWindows: true).Select(v => v.Key)
             .Concat(Registration.UninstallRemovals().Select(r => r.Key));
         foreach (var key in keys)
         {
             Assert.DoesNotContain(@"\Explorer", key, StringComparison.OrdinalIgnoreCase);
             Assert.True(
-                key.StartsWith(Registration.ClassesRoot + @"\", StringComparison.Ordinal) || key == Registration.RunKey,
+                key.StartsWith(Registration.ClassesRoot + @"\", StringComparison.Ordinal)
+                    || key == Registration.RunKey
+                    || key == Registration.UninstallKey,
                 key);
         }
     }
@@ -51,14 +57,14 @@ public class RegistrationTests
     [Fact]
     public void Each_verb_delegates_to_its_own_class_with_player_selection()
     {
-        var values = Registration.InstallValues(Exe, startWithWindows: false);
+        var values = Install(startWithWindows: false);
         foreach (var verb in ShellVerbs.All)
         {
             foreach (var association in verb.Associations)
             {
                 var verbKey = Registration.VerbKey(association, verb);
                 Assert.Contains(new RegistryValue(verbKey + @"\command", "DelegateExecute", Registration.FormatGuid(verb.Clsid)), values);
-                Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", "Player"), values);
+                Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", verb.MultiSelectModel), values);
                 Assert.Contains(new RegistryValue(verbKey, "MUIVerb", verb.Label), values);
             }
             Assert.Contains(new RegistryValue(Registration.ClsidKey(verb.Clsid) + @"\LocalServer32", "", "\"" + Exe + "\""), values);
@@ -69,8 +75,8 @@ public class RegistrationTests
     [Fact]
     public void Run_value_is_written_only_when_asked_but_always_removed()
     {
-        Assert.DoesNotContain(Registration.InstallValues(Exe, startWithWindows: false), v => v.Key == Registration.RunKey);
-        Assert.Contains(Registration.RunValue(Exe), Registration.InstallValues(Exe, startWithWindows: true));
+        Assert.DoesNotContain(Install(startWithWindows: false), v => v.Key == Registration.RunKey);
+        Assert.Contains(Registration.RunValue(Exe), Install(startWithWindows: true));
         Assert.Contains(new RemoveValue(Registration.RunKey, Registration.RunValueName), Registration.UninstallRemovals());
     }
 
@@ -125,8 +131,10 @@ public class CommandLineTests
     [Fact]
     public void Install_and_uninstall()
     {
-        Assert.Equal(new CliInstall(true), CommandLine.Parse(["--install"]));
+        Assert.Equal(new CliInstall(null), CommandLine.Parse(["--install"]));
+        Assert.Equal(new CliInstall(true), CommandLine.Parse(["--install", "--autostart"]));
         Assert.Equal(new CliInstall(false), CommandLine.Parse(["--install", "--no-autostart"]));
+        Assert.IsType<CliError>(CommandLine.Parse(["--install", "--autostart", "--no-autostart"]));
         Assert.IsType<CliError>(CommandLine.Parse(["--install", "--bogus"]));
         Assert.IsType<CliUninstall>(CommandLine.Parse(["--UNINSTALL"]));
         Assert.IsType<CliError>(CommandLine.Parse(["--uninstall", "now"]));

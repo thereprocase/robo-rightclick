@@ -8,9 +8,11 @@ namespace RoboRightClick.Verbs;
 
 /// <summary>
 /// What each verb does once the COM layer has its paths. Invoked on the UI thread from
-/// Execute; everything here is posted back to the same thread so Execute returns
-/// immediately and verbs still run in click order (a copy followed at once by a paste
-/// sees its own clipboard write).
+/// Execute; the work is queued on the same thread so Execute returns immediately. Verbs run
+/// strictly one after another in click order (an async queue: the next starts when the
+/// previous one's clipboard access finished), so a copy followed at once by a paste sees
+/// its own clipboard write. No file-system call happens here: the UI thread also serves
+/// every COM call, and one stat on a dead network share would freeze every right-click.
 /// </summary>
 internal sealed class VerbDispatcher : IVerbHandler
 {
@@ -19,14 +21,12 @@ internal sealed class VerbDispatcher : IVerbHandler
         ClipboardService clipboard,
         JobManager jobs,
         SettingsStore settings,
-        FileSystemFacts fileSystem,
         Notifier notifier)
     {
         Ui = ui;
         ClipboardService = clipboard;
         Jobs = jobs;
         SettingsStore = settings;
-        FileSystem = fileSystem;
         Notifier = notifier;
     }
 
@@ -34,18 +34,21 @@ internal sealed class VerbDispatcher : IVerbHandler
     public ClipboardService ClipboardService { get; }
     public JobManager Jobs { get; }
     public SettingsStore SettingsStore { get; }
-    public FileSystemFacts FileSystem { get; }
     public Notifier Notifier { get; }
 
     /// <summary>
-    /// RoboCopy / RoboCut: <see cref="ClipboardService.WriteFiles"/> with the current
-    /// logging mode. Nothing else: like Explorer, copying to the clipboard starts no job.
-    /// RoboPaste: <see cref="ShellVerbs.PasteDestination"/> on the selection, then
-    /// <see cref="ClipboardService.ReadFiles"/>; the verb comes from
-    /// <see cref="ClipboardPayload.VerbForPaste"/>; IsDirectory per source from
-    /// <see cref="FileSystemFacts"/>; then <see cref="JobManager.Enqueue"/> with the
-    /// clipboard sequence number for a cut. "Nothing to paste" and a refused destination
-    /// become a toast (no paths in it, whatever the mode).
+    /// RoboCopy / RoboCut: <paramref name="selection"/> paths through
+    /// <see cref="PathPolicy"/> (any refused path: <see cref="VerbRefusal.SelectionNotFiles"/>,
+    /// nothing written), then <see cref="ClipboardService.WriteFilesAsync"/> with the current
+    /// logging mode. Like Explorer, copying to the clipboard starts no job.
+    /// RoboPaste: <see cref="ShellVerbs.PasteDestination"/>, then
+    /// <see cref="ClipboardService.ReadFilesAsync"/>; the verb from
+    /// <see cref="ClipboardPayload.VerbForPaste"/>. A move whose every source's parent is the
+    /// destination (string comparison only) is Explorer's no-op: nothing happens, no toast.
+    /// Otherwise <see cref="JobManager.Enqueue"/> with a <see cref="PasteOrder"/> and the
+    /// clipboard sequence number for a cut. Every refusal is a <see cref="ToastText.ForRefusal"/>
+    /// toast; none carries a path.
     /// </summary>
-    public void Invoke(ShellVerb verb, IReadOnlyList<string> paths) => throw new NotImplementedException();
+    /// <param name="skippedItems">Selected items with no file-system path (virtual folders).</param>
+    public void Invoke(ShellVerb verb, IReadOnlyList<string> selection, int skippedItems) => throw new NotImplementedException();
 }

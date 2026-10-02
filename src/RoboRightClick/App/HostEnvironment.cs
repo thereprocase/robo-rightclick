@@ -15,6 +15,16 @@ internal static class HostEnvironment
         typeof(HostEnvironment).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
         ?? "unknown";
 
+    /// <summary>The user's SID in S-1-... form (WindowsIdentity.GetCurrent().User), for the COM security descriptors.</summary>
+    public static string UserSid => throw new NotImplementedException();
+
+    /// <summary>
+    /// True when this process runs from <see cref="AppPaths.InstalledExe"/>. A plain start
+    /// from anywhere else (the beta tester double-clicking the download) offers to install
+    /// instead of starting a tray that no menu item points at.
+    /// </summary>
+    public static bool RunningFromInstallLocation => throw new NotImplementedException();
+
     /// <summary>
     /// The running executable. Environment.ProcessPath, not Assembly.Location: a
     /// single-file app has no assembly path.

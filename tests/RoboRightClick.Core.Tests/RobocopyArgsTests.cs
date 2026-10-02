@@ -15,7 +15,7 @@ public class RobocopyArgsTests
 
         Assert.Equal(
             "\"C:\\src\" \"D:\\dst\" \"a b.txt\" \"c.txt\" /MT:32 /R:0 /W:0 /COPY:DAT /DCOPY:DA /A+:A /XJD " +
-            "/NP /NDL /NC /NJH /NJS /BYTES /FP /UNILOG:\\\\.\\pipe\\rrc-test-1",
+            "/NP /NDL /NC /NJH /NJS /BYTES /FP /UNILOG:\\\\.\\pipe\\rrc-test-1 /XC /XN /XO",
             args);
     }
 
@@ -67,7 +67,8 @@ public class RobocopyArgsTests
     [Theory]
     [InlineData(ConflictPolicy.Replace, "/IS /IT /IM")]
     [InlineData(ConflictPolicy.Skip, "/XC /XN /XO")]
-    [InlineData(ConflictPolicy.KeepNewer, "/XO")]
+    [InlineData(ConflictPolicy.KeepNewer, "/XC /XO")]
+    [InlineData(ConflictPolicy.Ask, "/XC /XN /XO")]
     public void Conflict_policy_flags_are_appended(ConflictPolicy policy, string flags) =>
         Assert.EndsWith(" " + flags, RobocopyArgs.Build(FileStep, Settings.Default, policy, Pipe));
 
@@ -81,9 +82,9 @@ public class RobocopyArgsTests
     [Fact]
     public void Extra_args_are_appended_per_verb()
     {
-        var s = Settings.Default with { ExtraArgs = new ExtraArgs("/J", "/XJ") };
+        var s = Settings.Default with { ExtraArgs = new ExtraArgs("/J", "/Z") };
         Assert.EndsWith(" /J", RobocopyArgs.Build(FileStep, s, ConflictPolicy.Ask, Pipe));
-        Assert.EndsWith(" /XJ", RobocopyArgs.Build(FileStep with { Move = true }, s, ConflictPolicy.Ask, Pipe));
+        Assert.EndsWith(" /Z", RobocopyArgs.Build(FileStep with { Move = true }, s, ConflictPolicy.Ask, Pipe));
     }
 
     [Fact]
@@ -95,18 +96,85 @@ public class RobocopyArgsTests
     }
 
     [Theory]
-    [InlineData("/MIR", "/MIR")]
-    [InlineData("/j /purge", "/PURGE")]
-    [InlineData("/LOG+:C:\\x.log", "/LOG+")]
-    [InlineData("/unilog:x /tee", "/UNILOG,/TEE")]
-    [InlineData("/MT:64", "/MT")]
-    [InlineData("/L", "/L")]
-    [InlineData("/J /XJ /SL", "")]
-    [InlineData("/XF *.tmp", "")]
-    public void FindForbiddenSwitches(string extra, string expected)
+    [InlineData("")]
+    [InlineData("/J /Z /SL")]
+    [InlineData("/compress /NoOffload /FFT /DST")]
+    [InlineData("/IORATE:50M /IOMAXSIZE:1048576 /THRESHOLD:2g")]
+    public void Allowed_extra_args_have_no_problems(string extra) =>
+        Assert.Empty(RobocopyArgs.ExtraArgProblems(extra));
+
+    [Theory]
+    // Destructive or log-writing switches.
+    [InlineData("/MIR")]
+    [InlineData("/j /purge")]
+    [InlineData("/LOG+:C:\\x.log")]
+    [InlineData("/unilog:x")]
+    [InlineData("/TEE")]
+    [InlineData("/MT:64")]
+    [InlineData("/L")]
+    // Robocopy strips quotes, so a quoted switch is still the switch.
+    [InlineData("\"/MIR\"")]
+    [InlineData("\"/LOG:C:\\x.txt\"")]
+    [InlineData("/MI\"R\"")]
+    [InlineData("/MI^R")]
+    // Selection changers: they would make the app's planned-file accounting wrong.
+    [InlineData("/S")]
+    [InlineData("/E")]
+    [InlineData("/LEV:1")]
+    [InlineData("/IF *.txt")]
+    [InlineData("/XF *.tmp")]
+    [InlineData("/XD x")]
+    [InlineData("/XO")]
+    [InlineData("/MAX:10")]
+    // Never-ending or output-breaking runs, privilege tricks.
+    [InlineData("/MON:1")]
+    [InlineData("/MOT:1")]
+    [InlineData("/RH:0100-0200")]
+    [InlineData("/NFL")]
+    [InlineData("/ZB")]
+    [InlineData("/B")]
+    // Positional tokens become extra file filters; dash switches are not examined by name.
+    [InlineData("*.txt")]
+    [InlineData("-MIR")]
+    // Malformed values.
+    [InlineData("/IORATE:")]
+    [InlineData("/IORATE:5X")]
+    [InlineData("/IORATE:5\"M")]
+    [InlineData("/IORATE:1^0")]
+    [InlineData("/IORATE:1\"/MIR")]
+    [InlineData("/J:1")]
+    public void Unsafe_extra_args_are_refused(string extra) =>
+        Assert.NotEmpty(RobocopyArgs.ExtraArgProblems(extra));
+
+    [Fact]
+    public void Extra_args_have_a_length_cap()
     {
-        var found = string.Join(",", RobocopyArgs.FindForbiddenSwitches(extra));
-        Assert.Equal(expected, found);
+        var longArgs = string.Join(' ', Enumerable.Repeat("/J", 400));
+        Assert.True(longArgs.Length > RobocopyArgs.MaxExtraArgsLength);
+        Assert.NotEmpty(RobocopyArgs.ExtraArgProblems(longArgs));
+    }
+
+    [Fact]
+    public void Quoted_log_switch_in_settings_built_in_code_is_never_emitted()
+    {
+        var s = Settings.Default with { ExtraArgs = new ExtraArgs("\"/LOG:C:\\x.txt\"", "\"/UNILOG:C:\\y.txt\"") };
+        Assert.DoesNotContain("x.txt", RobocopyArgs.Build(FileStep, s, ConflictPolicy.Ask, Pipe));
+        Assert.DoesNotContain("y.txt", RobocopyArgs.Build(FileStep with { Move = true }, s, ConflictPolicy.Ask, Pipe));
+    }
+
+    [Theory]
+    [InlineData("a\"b")]
+    [InlineData("C:\\x\" \"D:\\y\" /MIR \"")]
+    [InlineData("a\tb")]
+    [InlineData("a\nb")]
+    public void Quote_refuses_values_that_could_break_out_of_the_argument(string value) =>
+        Assert.Throws<ArgumentException>(() => RobocopyArgs.Quote(value));
+
+    [Fact]
+    public void Command_line_length_counts_exe_arguments_and_terminator()
+    {
+        Assert.Equal(1 + 4 + 1 + 1 + 3 + 1, RobocopyArgs.CommandLineLength("r.ex", "abc"));
+        Assert.Equal(32_767, RobocopyArgs.MaxCommandLineLength);
     }
 
     [Theory]

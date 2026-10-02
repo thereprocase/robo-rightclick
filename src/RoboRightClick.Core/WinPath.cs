@@ -100,6 +100,37 @@ public static class WinPath
         return c.Length > prefix.Length && c.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The form used to match a path robocopy printed (/FP) against a planned path. Robocopy
+    /// may print the "C:\." that <see cref="RobocopyArgs.Quote"/> gives a root as
+    /// "C:\.\name", and long paths with an extended-length prefix; both sides go through
+    /// this before comparing with <see cref="Comparer"/>.
+    /// </summary>
+    public static string NormalizeForMatch(string path)
+    {
+        var p = path.Replace('/', Separator);
+        if (p.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            p = @"\\" + p[8..];
+        }
+        else if (p.StartsWith(@"\\?\", StringComparison.Ordinal))
+        {
+            p = p[4..];
+        }
+        while (p.Contains(@"\.\", StringComparison.Ordinal))
+        {
+            p = p.Replace(@"\.\", @"\", StringComparison.Ordinal);
+        }
+        if (p.EndsWith(@"\.", StringComparison.Ordinal))
+        {
+            p = p[..^1];
+        }
+        return TrimTrailingSeparators(p);
+    }
+
+    /// <summary>True when one path is the other or contains it: the two locations share files.</summary>
+    public static bool Overlap(string a, string b) => AreSame(a, b) || IsStrictlyUnder(a, b) || IsStrictlyUnder(b, a);
+
     /// <summary>Splits "name.ext" into ("name", ".ext"); dotfiles like ".gitignore" have no extension.</summary>
     public static (string Stem, string Extension) SplitExtension(string fileName)
     {

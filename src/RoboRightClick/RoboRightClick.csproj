@@ -14,8 +14,11 @@
     <RootNamespace>RoboRightClick</RootNamespace>
   </PropertyGroup>
 
+  <!-- Uncompressed on purpose: when COM starts the tray for a right-click, Explorer waits
+       for it, and decompressing the bundle on every launch adds to that wait. Disk size
+       does not matter here; first-activation time does (measured in M0 spike 1). -->
   <PropertyGroup Condition="'$(PublishSingleFile)' == 'true'">
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
