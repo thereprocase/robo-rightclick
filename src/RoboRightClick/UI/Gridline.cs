@@ -1074,57 +1074,23 @@ internal static class Gridline
     }
 
     /// <summary>
-    /// A modal Gridline confirmation: one pane with the question and two buttons, the safe
-    /// one focused and default. Returns true for <paramref name="confirm"/>.
+    /// A modal Gridline confirmation: the question and two buttons, the safe one focused and
+    /// default, so Enter or Escape never does the destructive thing. Returns true for
+    /// <paramref name="confirm"/>.
     /// </summary>
-    public static bool Confirm(IWin32Window? owner, string title, string question, string confirm, string confirmId, string decline, string declineId)
-    {
-        return Ask(owner, title, question, confirm, confirmId, decline, declineId);
-    }
+    public static bool Confirm(IWin32Window? owner, string title, string question, string confirm, string confirmId, string decline, string declineId) =>
+        MessageDialog.Show(owner, new MessageContent(title, question),
+        [
+            new DialogButton(confirm, confirmId, DialogResult.Yes),
+            new DialogButton(decline, declineId, DialogResult.No, IsDefault: true, IsCancel: true),
+        ]) == DialogResult.Yes;
 
     /// <summary>A modal Gridline notice with one OK button, for outcomes the user must not miss.</summary>
-    public static void Inform(IWin32Window? owner, string title, string text) =>
-        Ask(owner, title, text, "OK", "OK", decline: null, declineId: null);
-
-    private static bool Ask(IWin32Window? owner, string title, string question, string confirm, string confirmId, string? decline, string? declineId)
-    {
-        using var dialog = new ConfirmDialog(title, question, confirm, confirmId, decline, declineId);
-        if (owner is null)
-        {
-            dialog.StartPosition = FormStartPosition.CenterScreen;
-        }
-        return dialog.ShowDialog(owner) == DialogResult.Yes;
-    }
-
-    private sealed class ConfirmDialog : Window
-    {
-        public ConfirmDialog(string title, string question, string confirm, string confirmId, string? decline, string? declineId)
-        {
-            BeginBuild();
-            Text = title;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
-            ShowInTaskbar = false;
-            StartPosition = FormStartPosition.CenterParent;
-            ClientSize = new Size(440, 180);
-            Padding = new Padding(Space3);
-
-            var yes = new Button(confirm, confirmId) { DialogResult = DialogResult.Yes };
-            // The safe answer is the default, so Enter or Escape never deletes anything.
-            var no = decline is null ? yes : new Button(decline, declineId ?? decline) { DialogResult = DialogResult.No };
-            var pane = new Pane(title) { Dock = DockStyle.Fill };
-            pane.Controls.Add(Stack(TextLabel(question)));
-            var buttons = decline is null ? ButtonRow(yes) : ButtonRow(yes, no);
-            buttons.Dock = DockStyle.Bottom;
-            Controls.Add(pane);
-            Controls.Add(buttons);
-            AcceptButton = no;
-            CancelButton = no;
-            ActiveControl = no;
-            EndBuild();
-        }
-    }
+    public static void Inform(IWin32Window? owner, string title, string text, MessageTone tone = MessageTone.Neutral, string? heading = null) =>
+        MessageDialog.Show(owner, new MessageContent(title, text) { Tone = tone, Heading = heading },
+        [
+            new DialogButton("OK", "OK", DialogResult.OK, IsDefault: true, IsCancel: true),
+        ]);
 
     /// <summary>
     /// An app-owned context menu in Gridline style: the square renderer below, a check margin

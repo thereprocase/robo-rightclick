@@ -1,13 +1,15 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using RoboRightClick.App;
 using RoboRightClick.Core;
+using RoboRightClick.UI;
 
 namespace RoboRightClick.Install;
 
 /// <summary>
 /// Per-user install and uninstall. No admin rights, no Explorer settings, and no Explorer
 /// restart: classic static verbs are read from the registry on each right-click. Results
-/// are shown in a message box (these are one-time user actions, and a GUI-subsystem exe's
+/// are shown in a Gridline dialog (these are one-time user actions, and a GUI-subsystem exe's
 /// console output arrives after the prompt has returned); exit codes are
 /// <see cref="CliExitCodes"/>. A per-user install gives no protection against other
 /// processes of the same user replacing the installed exe; that is true of every per-user
@@ -60,12 +62,12 @@ internal static class Installer
             // would later refuse to remove must not happen at all.
             if (UninstallPlan.InstallRefusal(paths, Environment.GetFolderPath(Environment.SpecialFolder.System)) is { } refusal)
             {
-                return Fail(refusal, quiet);
+                return Fail("Can't install", refusal, quiet);
             }
 
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
-                return Fail(BusyMessage, quiet);
+                return Fail("Jobs are still running", BusyMessage, quiet);
             }
 
             CopyExecutable(HostEnvironment.ExecutablePath, paths);
@@ -87,56 +89,66 @@ internal static class Installer
 
             StartTray(paths);
             return Succeed(
-                "Installed. Right-click files → Show more options → Robo-Copy / Robo-Cut / Robo-Paste."
+                $"{AppInfo.Name} is installed.",
+                "Right-click files or folders and choose Show more options, then Robo-Copy or Robo-Cut. "
+                    + "Right-click the destination folder, or the empty space inside it, and choose Robo-Paste. "
+                    + "The app's icon near the clock opens Jobs and Settings; Windows may put it under the ^ arrow."
                     + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty),
                 quiet);
         }
         catch (Exception ex)
         {
-            return Fail($"Install failed: {ex.Message}", quiet);
+            return Fail("Install failed", $"{ex.Message} Close any program that uses the install folder and run the install again.", quiet);
         }
     }
 
     /// <summary>
-    /// A plain start from outside the install folder (a double-clicked download): "RoboRightClick
-    /// isn't installed for this user. [Install] [Cancel]". Install runs <see cref="Install"/>
-    /// with no autostart override; Cancel exits 0.
+    /// A plain start from outside the install folder (a double-clicked download): a Gridline
+    /// dialog says the app isn't installed for this user, what installing does and where it
+    /// goes, with a "Start with Windows" box. Install runs <see cref="Install"/>; Cancel,
+    /// Escape or the close box exit 0 and change nothing.
     /// </summary>
     public static int OfferInstall(AppPaths paths)
     {
-        const string heading = "RoboRightClick isn't installed for this user.";
-        const string text = "Installing adds Robo-Copy, Robo-Cut and Robo-Paste to the right-click menu. "
-            + "It needs no administrator rights.";
-
-        // TaskDialog throws unless visual styles are on. This runs before any window exists,
-        // which is when enabling them is allowed; if they still are not available, a plain
-        // message box asks the same question.
-        if (!Application.UseVisualStyles)
+        Settings? existing;
+        try
         {
-            Application.EnableVisualStyles();
+            existing = ReadExistingConfig(paths, out _, out _);
         }
-        if (!Application.UseVisualStyles)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            var answer = MessageBox.Show(
-                heading + "\n\n" + text, AppInfo.Name, MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
-            return answer == DialogResult.OK
-                ? Install(new CliInstall(StartWithWindows: null), paths)
-                : CliExitCodes.Ok;
+            existing = null;
         }
+        var startDefault = Registration.ResolveStartWithWindows(explicitChoice: null, existing);
+        var startWithWindows = new Gridline.CheckBox("Start with Windows when I sign in", "StartWithWindows") { Checked = startDefault };
 
-        var install = new TaskDialogButton("Install");
-        var page = new TaskDialogPage
+        var content = new MessageContent($"Install {AppInfo.Name}",
+            "Installing adds Robo-Copy, Robo-Cut and Robo-Paste to the right-click menu, under Show more options. "
+                + "It is installed for your user account only and needs no administrator rights.")
         {
-            Caption = AppInfo.Name,
-            Heading = heading,
-            Text = text,
-            Buttons = { install, TaskDialogButton.Cancel },
-            DefaultButton = install,
+            PaneTitle = "Install for this user",
+            Heading = $"{AppInfo.Name} isn't installed for this user.",
+            Facts =
+            [
+                ("Version", HostEnvironment.Version),
+                ("Installs to", paths.InstallDirectory),
+                ("Settings", paths.ConfigFile),
+                ("Remove with", "Settings > Apps > Installed apps, or RoboRightClick.exe --uninstall"),
+            ],
         };
+        var answer = MessageDialog.Show(owner: null, content,
+        [
+            new DialogButton("Install", "Install", DialogResult.OK, IsDefault: true),
+            new DialogButton("Cancel", "Cancel", DialogResult.Cancel, IsCancel: true),
+        ], startWithWindows);
+        if (answer != DialogResult.OK)
+        {
+            return CliExitCodes.Ok;
+        }
 
-        return TaskDialog.ShowDialog(page) == install
-            ? Install(new CliInstall(StartWithWindows: null), paths)
-            : CliExitCodes.Ok;
+        // An unchanged box passes no choice, so a reinstall leaves an existing config.json as it is.
+        bool? choice = startWithWindows.Checked == startDefault ? null : startWithWindows.Checked;
+        return Install(new CliInstall(choice), paths);
     }
 
     /// <summary>
@@ -169,7 +181,7 @@ internal static class Installer
 
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
-                return Fail(BusyMessage, quiet);
+                return Fail("Jobs are still running", BusyMessage, quiet);
             }
 
             // Job folders are listed once the tray has stopped, so none appears afterwards.
@@ -181,9 +193,11 @@ internal static class Installer
             // The message comes before the cleanup process starts: it waits only about 30
             // seconds for this process to exit, and a message box can stay open longer.
             var message = leftBehind == 0
-                ? "RoboRightClick was uninstalled."
-                : $"RoboRightClick was uninstalled. {leftBehind} item(s) were left in place because they were not created by it or could not be removed.";
-            var code = Succeed(message, quiet);
+                ? "The right-click items, the tray icon, the settings and the job logs were removed."
+                : leftBehind == 1
+                    ? "The right-click items and the tray icon were removed. 1 item was left in place because RoboRightClick did not create it or could not remove it."
+                    : $"The right-click items and the tray icon were removed. {leftBehind} items were left in place because RoboRightClick did not create them or could not remove them.";
+            var code = Succeed($"{AppInfo.Name} was uninstalled.", message, quiet);
 
             if (selfDelete is not null)
             {
@@ -193,7 +207,7 @@ internal static class Installer
         }
         catch (Exception ex)
         {
-            return Fail($"Uninstall failed: {ex.Message}", quiet);
+            return Fail("Uninstall failed", $"{ex.Message} Close any program that uses RoboRightClick's files and run the uninstall again.", quiet);
         }
     }
 
@@ -476,21 +490,37 @@ internal static class Installer
         })?.Dispose();
     }
 
-    private static int Succeed(string message, bool quiet)
+    private static int Succeed(string heading, string message, bool quiet)
     {
         if (!quiet)
         {
-            MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Notice(heading, message, MessageTone.Neutral);
         }
         return CliExitCodes.Ok;
     }
 
-    private static int Fail(string message, bool quiet)
+    private static int Fail(string heading, string message, bool quiet)
     {
         if (!quiet)
         {
-            MessageBox.Show(message, AppInfo.Name, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Notice(heading, message, MessageTone.Danger);
         }
         return CliExitCodes.Failed;
+    }
+
+    /// <summary>A Gridline notice; a plain message box if the window itself cannot be built, so the result is never lost.</summary>
+    private static void Notice(string heading, string message, MessageTone tone)
+    {
+        try
+        {
+            MessageDialog.Show(owner: null,
+                new MessageContent(AppInfo.Name, message) { PaneTitle = heading.TrimEnd('.'), Tone = tone },
+                [new DialogButton("OK", "OK", DialogResult.OK, IsDefault: true, IsCancel: true)]);
+        }
+        catch (Exception ex) when (ex is ExternalException or InvalidOperationException or ArgumentException or OutOfMemoryException)
+        {
+            MessageBox.Show(heading + "\n\n" + message, AppInfo.Name, MessageBoxButtons.OK,
+                tone == MessageTone.Danger ? MessageBoxIcon.Error : MessageBoxIcon.Information);
+        }
     }
 }
