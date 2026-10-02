@@ -52,6 +52,7 @@ internal sealed unsafe class PasteHotkey : IDisposable
     private nint _foregroundHook;
     private long _keyboardHookInstalledAt;
     private bool _enabled;
+    private HotkeySpec? _activeSpec;
     private int _virtualKey;
     private bool _shift;
     private readonly HotkeyLatch _latch = new();
@@ -194,6 +195,14 @@ internal sealed unsafe class PasteHotkey : IDisposable
         {
             return;
         }
+        // Every settings reload posts the spec, whatever changed. Only a different spec may
+        // reset the latch: a reset in the middle of a held press would paste a second time.
+        // A foreground hook that Windows refused is tried again on any reload.
+        if (Equals(update.Spec, _activeSpec) && (update.Spec is null || _foregroundHook != 0))
+        {
+            return;
+        }
+        _activeSpec = update.Spec;
         _latch.Reset();
         _copyCutNoted = false;
         _hasCaptured = false;
