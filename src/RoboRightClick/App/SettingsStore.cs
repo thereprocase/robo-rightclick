@@ -1,4 +1,6 @@
+using System.Text;
 using RoboRightClick.Core;
+using RoboRightClick.Install;
 
 namespace RoboRightClick.App;
 
@@ -19,6 +21,38 @@ internal sealed class SettingsStore : IDisposable
 {
     public const string BadCopySuffix = ".bad";
 
+    /// <summary>Fixed name, so a crash between write and replace leaves at most one stray file.</summary>
+    public const string TempSuffix = ".tmp";
+
+    /// <summary>Editors save in several steps (truncate, write, rename); wait for them to settle.</summary>
+    public static readonly TimeSpan Debounce = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>Reads that fail (an editor still holds the file) are retried this many times, one debounce apart.</summary>
+    private const int MaxReadAttempts = 5;
+
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
+
+    // Guards everything below that the watcher's timer thread and the UI thread share.
+    private readonly Lock _gate = new();
+
+    private volatile Settings _current = Settings.Default;
+    private volatile IReadOnlyList<string> _loadProblems = [];
+
+    // The text this process last loaded or saved. The watcher compares against it to ignore
+    // the app's own writes and touches that change nothing.
+    private string? _lastKnownText;
+
+    // Bumped on every load, reload and save. A reload read before a save is dropped instead
+    // of overwriting the newer settings in memory.
+    private int _generation;
+    private bool _lastLoadUnreadable;
+    private int _readAttempts;
+
+    private SynchronizationContext? _ui;
+    private FileSystemWatcher? _watcher;
+    private System.Threading.Timer? _debounceTimer;
+    private bool _disposed;
+
     public SettingsStore(AppPaths paths)
     {
         Paths = paths;
@@ -26,19 +60,43 @@ internal sealed class SettingsStore : IDisposable
 
     public AppPaths Paths { get; }
 
-    public Settings Current => throw new NotImplementedException();
+    public Settings Current => _current;
 
     /// <summary>Problems from the last load.</summary>
-    public IReadOnlyList<string> LoadProblems => throw new NotImplementedException();
+    public IReadOnlyList<string> LoadProblems => _loadProblems;
 
     /// <summary>Raised on the UI thread after <see cref="Current"/> changes (save or external edit).</summary>
     public event EventHandler<Settings>? Changed;
 
     /// <summary>Reads config.json; a missing file means defaults and is not created here (install writes it).</summary>
-    public void Load() => throw new NotImplementedException();
+    public void Load()
+    {
+        var text = TryReadConfigText(out var readFailed);
+        lock (_gate)
+        {
+            _generation++;
+            Apply(text);
+            if (readFailed)
+            {
+                // A file that exists but could not be read is treated like one that could not
+                // be parsed: defaults for now, and a .bad copy before anything overwrites it.
+                _lastLoadUnreadable = true;
+                _loadProblems = ["config could not be read; using defaults"];
+            }
+        }
+    }
 
     /// <summary>Starts watching for external edits; events are posted to <paramref name="ui"/>.</summary>
-    public void Watch(SynchronizationContext ui) => throw new NotImplementedException();
+    public void Watch(SynchronizationContext ui)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _ui = ui;
+            _debounceTimer ??= new System.Threading.Timer(_ => OnDebounceElapsed(), null, Timeout.Infinite, Timeout.Infinite);
+            StartWatcherIfPossible();
+        }
+    }
 
     /// <summary>
     /// Writes via a temp file in the same folder and File.Replace/Move, so a crash never
@@ -46,11 +104,229 @@ internal sealed class SettingsStore : IDisposable
     /// <see cref="Install.RegistryWriter.SetStartWithWindows"/>. The watcher ignores the
     /// app's own write.
     /// </summary>
-    public void Save(Settings settings) => throw new NotImplementedException();
+    /// <exception cref="IOException">The file could not be written; <see cref="Current"/> is unchanged.</exception>
+    /// <exception cref="UnauthorizedAccessException">As above.</exception>
+    public void Save(Settings settings)
+    {
+        var text = SettingsSerializer.Serialize(settings);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            Directory.CreateDirectory(Paths.ConfigDirectory);
+            if (_lastLoadUnreadable && File.Exists(Paths.ConfigFile))
+            {
+                File.Copy(Paths.ConfigFile, Paths.ConfigFile + BadCopySuffix, overwrite: true);
+            }
+            WriteAtomically(text);
+
+            _generation++;
+            _lastKnownText = text;
+            _lastLoadUnreadable = false;
+            _current = settings;
+            _loadProblems = [];
+
+            // The folder may only now exist (first save on a machine that never installed).
+            if (_ui is not null)
+            {
+                StartWatcherIfPossible();
+            }
+        }
+
+        try
+        {
+            // The Run value always names the installed exe: that is the one the Run key may start.
+            RegistryWriter.SetStartWithWindows(settings.StartWithWindows, Paths.InstalledExe);
+        }
+        finally
+        {
+            // Raised even when the registry write failed: config.json and Current did change.
+            RaiseChanged(settings);
+        }
+    }
 
     public void Dispose()
     {
+        FileSystemWatcher? watcher;
+        System.Threading.Timer? timer;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+            watcher = _watcher;
+            timer = _debounceTimer;
+            _watcher = null;
+            _debounceTimer = null;
+        }
+        watcher?.Dispose();
+        timer?.Dispose();
     }
 
     private void OnChanged(Settings settings) => Changed?.Invoke(this, settings);
+
+    /// <summary>Caller holds <see cref="_gate"/>.</summary>
+    private void Apply(string? text)
+    {
+        _lastKnownText = text;
+        if (text is null)
+        {
+            _lastLoadUnreadable = false;
+            _current = Settings.Default;
+            _loadProblems = [];
+            return;
+        }
+        var result = SettingsSerializer.Parse(text);
+        _lastLoadUnreadable = StartupRules.IsUnreadableConfig(text);
+        _current = result.Settings;
+        _loadProblems = result.Problems;
+    }
+
+    private void WriteAtomically(string text)
+    {
+        var temp = Paths.ConfigFile + TempSuffix;
+        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            var bytes = Utf8NoBom.GetBytes(text);
+            stream.Write(bytes);
+
+            // On disk before the rename, or a power cut could leave a renamed but empty file.
+            stream.Flush(flushToDisk: true);
+        }
+        if (File.Exists(Paths.ConfigFile))
+        {
+            File.Replace(temp, Paths.ConfigFile, destinationBackupFileName: null);
+        }
+        else
+        {
+            File.Move(temp, Paths.ConfigFile);
+        }
+    }
+
+    /// <summary>Caller holds <see cref="_gate"/>. Without the folder there is nothing to watch yet; <see cref="Save"/> retries.</summary>
+    private void StartWatcherIfPossible()
+    {
+        if (_watcher is not null || _disposed || !Directory.Exists(Paths.ConfigDirectory))
+        {
+            return;
+        }
+        var watcher = new FileSystemWatcher(Paths.ConfigDirectory, AppPaths.ConfigFileName)
+        {
+            IncludeSubdirectories = false,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size | NotifyFilters.CreationTime,
+        };
+        watcher.Changed += (_, _) => ScheduleReload();
+        watcher.Created += (_, _) => ScheduleReload();
+        watcher.Renamed += (_, _) => ScheduleReload();
+
+        // A buffer overflow loses events, not changes: reload and compare.
+        watcher.Error += (_, _) => ScheduleReload();
+        watcher.EnableRaisingEvents = true;
+        _watcher = watcher;
+    }
+
+    private void ScheduleReload()
+    {
+        lock (_gate)
+        {
+            _readAttempts = 0;
+            _debounceTimer?.Change(Debounce, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>On a timer thread: read and parse here, so the UI thread never waits on the disk.</summary>
+    private void OnDebounceElapsed()
+    {
+        int generation;
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            generation = _generation;
+        }
+
+        var text = TryReadConfigText(out var readFailed);
+        if (readFailed)
+        {
+            lock (_gate)
+            {
+                if (!_disposed && ++_readAttempts < MaxReadAttempts)
+                {
+                    _debounceTimer?.Change(Debounce, Timeout.InfiniteTimeSpan);
+                }
+            }
+            return;
+        }
+
+        // A deleted file keeps the settings in memory: editors that save by delete-and-rename
+        // pass through this state, and the next start reads whatever is there then.
+        if (text is null)
+        {
+            return;
+        }
+
+        SynchronizationContext? ui;
+        lock (_gate)
+        {
+            if (_disposed || text == _lastKnownText)
+            {
+                return;
+            }
+            ui = _ui;
+        }
+        ui?.Post(_ => ApplyReload(text, generation), null);
+    }
+
+    /// <summary>On the UI thread, so <see cref="Changed"/> fires there and never overlaps a save.</summary>
+    private void ApplyReload(string text, int generationAtRead)
+    {
+        Settings current;
+        lock (_gate)
+        {
+            if (_disposed || _generation != generationAtRead || text == _lastKnownText)
+            {
+                return;
+            }
+            _generation++;
+            Apply(text);
+            current = _current;
+        }
+        OnChanged(current);
+    }
+
+    private void RaiseChanged(Settings settings)
+    {
+        var ui = _ui;
+        if (ui is null || SynchronizationContext.Current == ui)
+        {
+            OnChanged(settings);
+        }
+        else
+        {
+            ui.Post(_ => OnChanged(settings), null);
+        }
+    }
+
+    /// <summary>The file's text, or null when it does not exist. <paramref name="readFailed"/> when it exists but could not be read.</summary>
+    private string? TryReadConfigText(out bool readFailed)
+    {
+        readFailed = false;
+        try
+        {
+            return File.ReadAllText(Paths.ConfigFile, Utf8NoBom);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Loading never fails: an unreadable file at startup means defaults for now.
+            readFailed = true;
+            return null;
+        }
+    }
 }
