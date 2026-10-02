@@ -1,0 +1,237 @@
+﻿[
+    {
+        "path":  "deep",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "empty",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\empty",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "target",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\target",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "target\\inside-target.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  23,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\target\\inside-target.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\archive-off.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  16,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\archive-off.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\filelink.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  8,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\filelink.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\hidden.txt",
+        "dir":  false,
+        "attributes":  "Hidden, Archive",
+        "length":  8,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\hidden.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\normal.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  8,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\normal.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\readonly.txt",
+        "dir":  false,
+        "attributes":  "ReadOnly, Archive",
+        "length":  10,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\readonly.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\system.txt",
+        "dir":  false,
+        "attributes":  "System, Archive",
+        "length":  8,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\system.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\with-ads.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  13,
+        "created":  "2019-06-07T08:09:10.0000000Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\plain\\with-ads.txt",
+        "streams":  [
+                        "custom:14",
+                        "Zone.Identifier:26"
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7642506Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7688723Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7688723Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:37:29.7732275Z",
+        "modified":  "2026-10-02T20:31:29.4488001Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\long-path-file.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  4,
+        "created":  "2026-10-02T20:31:29.4488001Z",
+        "modified":  "2026-10-02T20:31:29.4488001Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-robo2\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\long-path-file.txt",
+        "streams":  [
+
+                    ]
+    }
+]

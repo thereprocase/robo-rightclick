@@ -1,0 +1,1 @@
+﻿robocopy exit 1 with /MT:32 /R:0 /W:0 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP

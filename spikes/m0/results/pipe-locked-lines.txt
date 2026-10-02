@@ -1,0 +1,9 @@
+52	﻿
+53		  		    4096	C:\m0\cap-src\locked.bin
+54	2026/10/02 16:29:47 ERROR 32 (0x00000020) Copying File C:\m0\cap-src\locked.bin
+54	The process cannot access the file because it is being used by another process.
+54	
+55	ERROR: RETRY LIMIT EXCEEDED.
+55	
+56		  		    4096	C:\m0\cap-src\plain.txt
+153	<exit 9>

@@ -1,0 +1,2 @@
+
+ Log File : \\.\pipe\rrc-m0-full

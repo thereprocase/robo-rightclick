@@ -1,0 +1,224 @@
+﻿[
+    {
+        "path":  "deep",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.6808421Z",
+        "modified":  "2026-10-02T20:36:00.6911973Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\deep",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "dirlink-to-target",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.6755606Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\dirlink-to-target",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "empty",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.7275011Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\empty",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "junction-to-target",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.6755606Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\junction-to-target",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.7380928Z",
+        "modified":  "2026-10-02T20:36:00.8218861Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "target",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.8581627Z",
+        "modified":  "2026-10-02T20:36:00.8686295Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\target",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "target\\inside-target.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  23,
+        "created":  "2026-10-02T20:36:00.8686295Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\target\\inside-target.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\archive-off.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  16,
+        "created":  "2026-10-02T20:36:00.7648533Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\archive-off.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\filelink.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  8,
+        "created":  "2026-10-02T20:36:00.7859090Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\filelink.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\hidden.txt",
+        "dir":  false,
+        "attributes":  "Hidden, Archive",
+        "length":  8,
+        "created":  "2026-10-02T20:36:00.7911931Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\hidden.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\normal.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  8,
+        "created":  "2026-10-02T20:36:00.8014281Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\normal.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\readonly.txt",
+        "dir":  false,
+        "attributes":  "ReadOnly, Archive",
+        "length":  10,
+        "created":  "2026-10-02T20:36:00.8066231Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\readonly.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\system.txt",
+        "dir":  false,
+        "attributes":  "System, Archive",
+        "length":  8,
+        "created":  "2026-10-02T20:36:00.8166815Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\system.txt",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "plain\\with-ads.txt",
+        "dir":  false,
+        "attributes":  "Archive",
+        "length":  13,
+        "created":  "2026-10-02T20:36:00.8218861Z",
+        "modified":  "2020-01-02T03:04:05.0000000Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\plain\\with-ads.txt",
+        "streams":  [
+                        "custom:14",
+                        "Zone.Identifier:26"
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.6911973Z",
+        "modified":  "2026-10-02T20:36:00.6962703Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.6962703Z",
+        "modified":  "2026-10-02T20:36:00.7066968Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    },
+    {
+        "path":  "deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "dir":  true,
+        "attributes":  "Directory",
+        "length":  null,
+        "created":  "2026-10-02T20:36:00.7066968Z",
+        "modified":  "2026-10-02T20:31:29.4435521Z",
+        "linkType":  null,
+        "target":  "\\\\?\\C:\\\\m0\\par-explorer\\par-src\\deep\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\\dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "streams":  [
+
+                    ]
+    }
+]
