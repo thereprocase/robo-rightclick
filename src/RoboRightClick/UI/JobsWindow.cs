@@ -52,14 +52,14 @@ internal sealed class JobsWindow : Gridline.Window
     private static readonly (string Caption, int Width)[] Columns =
     [
         ("State", 96),
-        ("Job", 180),
-        ("To", 150),
+        ("Job", 172),
+        ("To", 144),
         ("Progress", 96),
         ("Done", 136),
         ("Files", 96),
-        ("Speed", 80),
+        ("Speed", 92),
         ("ETA", 76),
-        ("Errors", 56),
+        ("Errors", 66),
         ("Status", 200),
     ];
 
