@@ -214,6 +214,8 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception ex)
         {
+            // The failure a beta tester is most likely to report, so it goes to crash.log too.
+            CrashPolicy.LogHandled(ex);
             MessageBox.Show(
                 $"{AppInfo.Name} could not start.\n\n{ex.Message}",
                 AppInfo.Name,

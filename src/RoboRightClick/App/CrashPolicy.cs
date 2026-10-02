@@ -38,7 +38,7 @@ internal static class CrashPolicy
     /// <param name="ephemeralJobsActive">Asked at crash time; must not take locks that a crashing thread may hold (read a volatile counter).</param>
     /// <param name="killChildren">Best-effort kill of every robocopy the app started (the kill-on-close job object also does this when the process ends).</param>
     /// <param name="crashLogAllowed">
-    /// Asked at crash time, lock-free like <paramref name="ephemeralJobsActive"/>: whether
+    /// Asked at crash time, without taking locks a crashing thread may hold: whether
     /// <see cref="CrashLog.MayWrite"/> holds (a tray in normal mode, no ephemeral job this session).
     /// </param>
     public static void Install(Func<bool> ephemeralJobsActive, Action killChildren, Func<bool> crashLogAllowed)
@@ -99,6 +99,19 @@ internal static class CrashPolicy
         {
             Volatile.Write(ref s_showingMessage, 0);
         }
+    }
+
+    /// <summary>
+    /// A failure the tray catches and reports in its own message box (it could not start):
+    /// appended to crash.log under the same rules as an unhandled exception, with no second box.
+    /// </summary>
+    public static void LogHandled(Exception exception)
+    {
+        if (EphemeralJobsActive())
+        {
+            return;
+        }
+        TryAppendCrashLog(exception, Environment.CurrentManagedThreadId == s_uiThreadId);
     }
 
     /// <summary>

@@ -64,6 +64,28 @@ public static class CrashLog
     public static bool MayWrite(LoggingMode? currentMode, bool ephemeralJobsThisSession) =>
         currentMode == LoggingMode.Normal && !ephemeralJobsThisSession;
 
+    /// <summary>
+    /// The logging mode for a tray process that has no job manager yet (it failed while
+    /// starting, before any job could exist): the "logging" setting as config.json holds it
+    /// now, the default when there is no file, and unknown (null, so no log) when the file
+    /// exists but could not be read or is not a JSON object, because it may say ephemeral.
+    /// </summary>
+    /// <param name="configText">config.json's text, or null when there is no such file.</param>
+    /// <param name="configReadFailed">The file exists but reading it failed.</param>
+    public static LoggingMode? ModeFromConfig(string? configText, bool configReadFailed)
+    {
+        if (configReadFailed)
+        {
+            return null;
+        }
+        if (configText is null)
+        {
+            return Settings.Default.Logging;
+        }
+        var result = SettingsSerializer.Parse(configText);
+        return result.Unreadable ? null : result.Settings.Logging;
+    }
+
     /// <summary>Rotate before appending when the existing file plus the entry would exceed <see cref="RotateAtBytes"/>.</summary>
     public static bool ShouldRotate(long existingBytes, long entryBytes) =>
         existingBytes > 0 && existingBytes + entryBytes > RotateAtBytes;

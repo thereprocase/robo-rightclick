@@ -26,6 +26,22 @@ public class CrashLogTests
         Assert.False(CrashLog.MayWrite(null, ephemeralJobsThisSession: false));
     }
 
+    [Theory]
+    // A tray that fails while starting has no job manager yet: config.json decides.
+    [InlineData(null, false, true)]
+    [InlineData("""{ "logging": "normal" }""", false, true)]
+    [InlineData("""{ "threads": 4 }""", false, true)]
+    [InlineData("""{ "logging": "ephemeral" }""", false, false)]
+    [InlineData("""{ "version": 2, "logging": "ephemeral", "future": 1 }""", false, false)]
+    // Unreadable: it may say ephemeral.
+    [InlineData(null, true, false)]
+    [InlineData("""{ "logging": "ephemeral" """, false, false)]
+    [InlineData("[]", false, false)]
+    public void A_failed_start_is_logged_only_when_config_json_says_normal_mode(string? configText, bool readFailed, bool expected)
+    {
+        Assert.Equal(expected, CrashLog.MayWrite(CrashLog.ModeFromConfig(configText, readFailed), ephemeralJobsThisSession: false));
+    }
+
     [Fact]
     public void Paths_live_in_the_data_folder()
     {

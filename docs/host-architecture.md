@@ -483,18 +483,21 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
    (`Application.ThreadException`) or any other (`AppDomain.UnhandledException`), appends one
    entry to `%LOCALAPPDATA%\RoboRightClick\crash.log` (`AppPaths.CrashLogFile`): exception
    types outermost first, messages with path-looking parts replaced by `[path]` (Core
-   `PathHeuristic.Scrub`, the heuristic `FailureText` uses; an unquoted path-looking word
-   takes the rest of its line, since a path with spaces has no other end), stack traces, app
-   version, UTC
-   time, Windows build. No job data is added; a stack trace is written as the runtime reports
-   it. The file is rotated to `crash.1.log` (one kept) before it would pass 256 KB, an entry
-   is at most 32K characters, and one run writes at most 20 entries. Nothing is written in
-   ephemeral mode, once any ephemeral job has existed in this session, or outside a running
-   tray (install, uninstall, CLI) (`CrashLog.MayWrite`). While ephemeral jobs run, a crash
-   ends the process without a WER report, as before (`CrashPolicy`). Uninstall deletes both
-   files. This reverses the beta's original "no crash log" rule, with the owner's approval:
-   without one, a beta bug report depends on the tester remembering a message box, which is
-   not enough to find a fault. Cross-compiles; unverified on Windows.
+   `PathHeuristic.Scrub`, the heuristic `FailureText` uses; an unquoted path-looking word takes
+   the rest of its line, since a path with spaces has no other end), stack traces, app version,
+   UTC time, Windows build. No job data is added; a stack trace is written as the runtime
+   reports it. The file is rotated to `crash.1.log` (one kept) before it would pass 256 KB, an
+   entry is at most 32K characters, and one run writes at most 20 entries. Nothing is written
+   in ephemeral mode, once any ephemeral job has existed in this session, or outside the tray
+   (install, uninstall, CLI) (`CrashLog.MayWrite`). A tray that fails before its job manager
+   exists (the caught "could not start" error included, `CrashPolicy.LogHandled`) has no job
+   yet, so config.json's `logging` decides, and an unreadable file means no log
+   (`CrashLog.ModeFromConfig`). After teardown the last session's manager still decides. While
+   ephemeral jobs run, a crash ends the process without a WER report, as before
+   (`CrashPolicy`). Uninstall deletes both files. This reverses the beta's original "no crash
+   log" rule, with the owner's approval: without one, a beta bug report depends on the tester
+   remembering a message box, which is not enough to find a fault. Cross-compiles; unverified
+   on Windows.
 7. Sign-out with active jobs: shutdown is vetoed with a reason; if Windows ends the session
    anyway, jobs are canceled with cleanup within 5 s. A job.json left non-terminal is reported
    once at the next start (normal mode).
