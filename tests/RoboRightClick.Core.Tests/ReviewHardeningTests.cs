@@ -476,6 +476,12 @@ public class InstallFootprintTests
         Assert.Equal(RegistryDataKind.SecurityDescriptor, access.Kind);
         Assert.Equal($"O:{Sid}G:{Sid}D:(A;;0x3;;;{Sid})(A;;0x3;;;SY)S:(ML;;NX;;;ME)", access.Data);
         Assert.Equal($"O:{Sid}G:{Sid}D:(A;;0xb;;;{Sid})(A;;0xb;;;SY)S:(ML;;NX;;;ME)", launch.Data);
+
+        // The registry descriptor and the one ComCallerSecurity passes to CoInitializeSecurity
+        // must be the same; a drift would let the AppID admit callers the process refuses, or
+        // the other way round.
+        Assert.Equal(ComSecurity.AccessPermissionSddl(Sid), access.Data);
+        Assert.Equal(ComSecurity.LaunchPermissionSddl(Sid), launch.Data);
     }
 
     [Theory]

@@ -145,7 +145,7 @@ internal static class Installer
             // plan refuses leaves the installation exactly as it was, tray included.
             _ = UninstallPlan.For(paths, [], runningFromInstall);
             var selfDelete = runningFromInstall
-                ? UninstallPlan.SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory)
+                ? UninstallPlan.SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory, Environment.GetFolderPath(Environment.SpecialFolder.System))
                 : null;
 
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))

@@ -52,6 +52,9 @@ internal sealed class SettingsWindow : Gridline.Window
     private string _loadedState = string.Empty;
     private bool _loading;
 
+    // A save is in flight off the UI thread; a second press waits for it instead of racing it.
+    private bool _saving;
+
     private static readonly (ConflictPolicy Policy, string Label)[] ConflictChoices =
     [
         (ConflictPolicy.Ask, "Ask: Replace, Skip or Let me decide (as Explorer)"),
@@ -475,22 +478,36 @@ internal sealed class SettingsWindow : Gridline.Window
         ShowLoadProblems(Store.LoadProblems);
     }
 
-    private void SaveAndClose()
+    /// <summary>The write runs off the UI thread (<see cref="SettingsStore.SaveAsync"/>); async void is the button handler.</summary>
+    private async void SaveAndClose()
     {
         Revalidate();
-        if (_valid is not { } settings)
+        if (_valid is not { } settings || _saving)
         {
             return;
         }
+        _saving = true;
         try
         {
-            Store.Save(settings);
+            await Store.SaveAsync(settings);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException or ObjectDisposedException)
         {
+            if (IsDisposed)
+            {
+                return;
+            }
             // Save also writes the Run value for "Start with Windows", so registry refusals land here too.
             _saveError.Text = $"Couldn't save the settings: {ex.Message} Your changes are still here; close any program that has config.json open and press Save again.";
             _saveError.Visible = true;
+            return;
+        }
+        finally
+        {
+            _saving = false;
+        }
+        if (IsDisposed)
+        {
             return;
         }
         _loadedState = ToJson(_fields).ToJsonString();

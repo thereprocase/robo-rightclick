@@ -101,11 +101,22 @@ public sealed record UninstallPlan(
     /// the exe is retried for about 30 seconds because it fails while the process is alive.
     /// The folder is removed with rd without /s: if anything else is in it, it stays.
     /// </summary>
-    public static string SelfDeleteArguments(string exePath, string installDir)
+    /// <param name="systemDirectory">
+    /// %SystemRoot%\System32 as the host resolved it. The one-second sleep runs PING.EXE from
+    /// there by absolute path, never by a PATH or working-directory lookup.
+    /// </param>
+    public static string SelfDeleteArguments(string exePath, string installDir, string systemDirectory)
     {
         RequireSafe(exePath);
         RequireSafe(installDir);
+        RequireSafe(systemDirectory);
         RequireLeaf(installDir, AppInfo.Name);
+        if (WinPath.GetRoot(systemDirectory).Length < 3 || !systemDirectory.Contains(':'))
+        {
+            throw new ArgumentException("The system directory must be a fully qualified drive path.", nameof(systemDirectory));
+        }
+        RequireLeaf(systemDirectory, "System32");
+        var ping = WinPath.Combine(systemDirectory, "PING.EXE");
         if (!WinPath.AreSame(WinPath.GetParent(exePath), installDir)
             || !WinPath.Comparer.Equals(WinPath.GetFileName(exePath), AppInfo.ExeName))
         {
@@ -116,7 +127,7 @@ public sealed record UninstallPlan(
         // ping is the one-second sleep: timeout.exe refuses to run without console input.
         return "/d /s /c \"for /l %n in (1,1,30) do @(del /f /q \"" + exePath + "\" >nul 2>&1 & "
             + "if not exist \"" + exePath + "\" (rd \"" + installDir + "\" >nul 2>&1 & exit /b 0) "
-            + "else (ping -n 2 127.0.0.1 >nul))\"";
+            + "else (\"" + ping + "\" -n 2 127.0.0.1 >nul))\"";
     }
 
     private static void RequireSafe(string path)

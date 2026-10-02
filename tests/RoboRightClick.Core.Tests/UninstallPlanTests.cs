@@ -11,6 +11,8 @@ public class UninstallPlanTests
 
     private static readonly AppPaths Paths = AppPaths.From(Local, Roaming);
 
+    private const string System32 = @"C:\Windows\System32";
+
     private static string[] Roots => [Paths.InstallDirectory, Paths.ConfigDirectory, Paths.DataDirectory];
 
     private static bool UnderAppPaths(string path) =>
@@ -128,7 +130,7 @@ public class UninstallPlanTests
 
         Assert.Throws<ArgumentException>(() => UninstallPlan.For(bad, [], runningFromInstallDir: false));
         Assert.Throws<ArgumentException>(() => UninstallPlan.For(bad, [], runningFromInstallDir: true));
-        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(bad.InstalledExe, bad.InstallDirectory));
+        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(bad.InstalledExe, bad.InstallDirectory, System32));
     }
 
     [Fact]
@@ -154,7 +156,7 @@ public class UninstallPlanTests
     [Fact]
     public void SelfDelete_command_uses_a_non_recursive_remove_and_a_bounded_retry()
     {
-        var args = UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, Paths.InstallDirectory);
+        var args = UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, Paths.InstallDirectory, System32);
 
         Assert.StartsWith("/d /s /c \"", args);
         var command = args["/d /s /c ".Length..];
@@ -166,11 +168,27 @@ public class UninstallPlanTests
     }
 
     [Fact]
+    public void SelfDelete_sleeps_with_ping_by_absolute_path_only()
+    {
+        var command = UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, Paths.InstallDirectory, System32);
+        Assert.Contains("\"C:\\Windows\\System32\\PING.EXE\" -n 2 127.0.0.1", command);
+        Assert.DoesNotContain("(ping ", command, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(@"System32")]
+    [InlineData(@"\\srv\share\System32")]
+    [InlineData(@"C:\Windows\Temp")]
+    [InlineData(@"C:\Win&dows\System32")]
+    public void SelfDelete_refuses_a_system_directory_that_is_not_one(string systemDirectory) =>
+        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, Paths.InstallDirectory, systemDirectory));
+
+    [Fact]
     public void SelfDelete_refuses_an_exe_that_is_not_the_installed_one()
     {
-        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(@"C:\Windows\System32\cmd.exe", Paths.InstallDirectory));
-        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, @"C:\Users\Test User\Documents"));
+        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(@"C:\Windows\System32\cmd.exe", Paths.InstallDirectory, System32));
+        Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(Paths.InstalledExe, @"C:\Users\Test User\Documents", System32));
         Assert.Throws<ArgumentException>(() => UninstallPlan.SelfDeleteArguments(
-            WinPath.Combine(Paths.InstallDirectory, "other.exe"), Paths.InstallDirectory));
+            WinPath.Combine(Paths.InstallDirectory, "other.exe"), Paths.InstallDirectory, System32));
     }
 }

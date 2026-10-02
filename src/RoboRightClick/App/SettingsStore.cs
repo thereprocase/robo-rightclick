@@ -144,6 +144,13 @@ internal sealed class SettingsStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// <see cref="Save"/> on the thread pool, for callers on the UI thread: %APPDATA% can be
+    /// redirected to a network share, and that thread also serves every right-click.
+    /// <see cref="Changed"/> still arrives on the UI thread. Exceptions as for Save.
+    /// </summary>
+    public Task SaveAsync(Settings settings) => Task.Run(() => Save(settings));
+
     public void Dispose()
     {
         FileSystemWatcher? watcher;

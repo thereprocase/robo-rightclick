@@ -498,7 +498,7 @@ internal sealed class TrayApplication : ApplicationContext
     {
         var before = _settings.Current;
         var to = before.Logging == LoggingMode.Ephemeral ? LoggingMode.Normal : LoggingMode.Ephemeral;
-        if (!TrySaveSettings(before with { Logging = to }))
+        if (!await TrySaveSettingsAsync(before with { Logging = to }))
         {
             return;
         }
@@ -530,11 +530,11 @@ internal sealed class TrayApplication : ApplicationContext
         }
     }
 
-    private bool TrySaveSettings(Settings settings)
+    private async Task<bool> TrySaveSettingsAsync(Settings settings)
     {
         try
         {
-            _settings.Save(settings);
+            await _settings.SaveAsync(settings);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
