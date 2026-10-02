@@ -42,9 +42,9 @@ You build on Linux. The target is Windows. That split drives most of the rules b
    robocopy `/MOV`/`/MOVE` deleting each file only after it has copied. The app itself never
    deletes sources after a robocopy run.
 2. **Ephemeral mode writes nothing about jobs to disk.** All job data goes through
-   `IJobSink`, and ephemeral mode composes `NullJobSink`. Robocopy is never given
-   `/LOG`, `/UNILOG` or `/TEE`. Toasts carry no paths. Clipboard writes are excluded from
-   clipboard history.
+   `IJobSink`, and ephemeral mode composes `NullJobSink`. Robocopy's only log target is
+   `/UNILOG:\\.\pipe\<name>`, a named pipe the app owns. Never a file, never `/LOG` or `/TEE`.
+   Toasts carry no paths. Clipboard writes are excluded from clipboard history.
 3. **Defaults match Explorer.** Explorer's actual behavior is recorded in docs/parity.md. If
    the defaults deviate from it, the deviation is listed there with the reason.
 4. **Install is per-user and leaves Explorer settings alone.** Only HKCU keys that install

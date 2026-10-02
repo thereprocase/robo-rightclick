@@ -8,18 +8,35 @@ namespace RoboRightClick.Core;
 /// </summary>
 public static class RobocopyArgs
 {
-    /// <summary>
-    /// Flags that are always present. /UNICODE makes redirected stdout UTF-16 so
-    /// non-ASCII names survive; the rest make each output line one file event.
-    /// Robocopy is never given /LOG or /UNILOG: all output is read from stdout,
-    /// so robocopy itself never writes a file in any logging mode.
-    /// </summary>
-    public const string OutputFlags = "/UNICODE /NP /NDL /NC /NJH /NJS /BYTES /FP";
+    /// <summary>Flags that make each output line one file event the parser understands.</summary>
+    public const string OutputFlags = "/NP /NDL /NC /NJH /NJS /BYTES /FP";
 
-    // Explorer copies data, attributes and modified time, and lets ACLs
-    // inherit from the destination. Directory timestamp handling is
-    // provisional until the M0 parity capture is recorded in docs/parity.md.
-    public const string MetadataFlags = "/COPY:DAT /DCOPY:DAT";
+    /// <summary>
+    /// Robocopy's output channel. Redirected stdout cannot carry non-ASCII
+    /// names (with /UNICODE it emits a UTF-16 BOM and then narrow text with '?'
+    /// substitutions, observed 2026-10-02), so output goes through /UNILOG
+    /// into a named pipe the app owns: true UTF-16, and nothing is written to
+    /// disk in any logging mode.
+    /// </summary>
+    public static string LogPipeArgument(string pipeName)
+    {
+        if (pipeName.Length is 0 or > 200 || !pipeName.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+        {
+            throw new ArgumentException("Pipe names are limited to ASCII letters, digits and '-'.", nameof(pipeName));
+        }
+        return @"/UNILOG:\\.\pipe\" + pipeName;
+    }
+
+    /// <summary>
+    /// Closest robocopy match to Explorer's copy, measured side by side on
+    /// Windows build 26200 (docs/parity.md):
+    /// /COPY:DAT keeps data, attributes, streams and modified time, with ACLs
+    /// inherited from the destination as Explorer does; /A+:A sets the archive
+    /// bit Explorer sets on every copy; /DCOPY:DA gives new folders a fresh
+    /// created time; /XJD stops robocopy following junctions and directory
+    /// symlinks, which Explorer does not follow either.
+    /// </summary>
+    public const string MetadataFlags = "/COPY:DAT /DCOPY:DA /A+:A /XJD";
 
     /// <summary>
     /// Switches users may not pass through extraArgs: they would delete files at
@@ -68,7 +85,7 @@ public static class RobocopyArgs
         _ => throw new ArgumentOutOfRangeException(nameof(policy)),
     };
 
-    public static string Build(RobocopyStep step, Settings settings, ConflictPolicy resolvedPolicy)
+    public static string Build(RobocopyStep step, Settings settings, ConflictPolicy resolvedPolicy, string logPipeName)
     {
         var sb = new StringBuilder();
         sb.Append(Quote(step.SourceDirectory)).Append(' ').Append(Quote(step.DestinationDirectory));
@@ -93,6 +110,7 @@ public static class RobocopyArgs
         sb.Append(" /W:").Append(settings.RetryWaitSeconds);
         sb.Append(' ').Append(MetadataFlags);
         sb.Append(' ').Append(OutputFlags);
+        sb.Append(' ').Append(LogPipeArgument(logPipeName));
 
         var conflict = ConflictFlags(resolvedPolicy);
         if (conflict.Length > 0)

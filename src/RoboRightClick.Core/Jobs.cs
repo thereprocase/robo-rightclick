@@ -104,10 +104,18 @@ public sealed class JobProgress
     public long CompletedBytes { get; private set; }
     public long CompletedFiles { get; private set; }
 
-    /// <summary>Bytes already written for files still in flight, from destination size polling.</summary>
-    public long InFlightBytes { get; private set; }
+    /// <summary>
+    /// Bytes robocopy has read so far in this job, from its process I/O
+    /// counters. Polling destination sizes does not work: robocopy allocates
+    /// each file at full length before writing (observed 2026-10-02).
+    /// </summary>
+    public long ObservedBytes { get; private set; }
 
-    public long DoneBytes => Math.Min(TotalBytes, CompletedBytes + InFlightBytes);
+    /// <summary>
+    /// Completed files are exact but arrive only when each file finishes;
+    /// observed bytes move continuously. Whichever is further along wins.
+    /// </summary>
+    public long DoneBytes => Math.Min(TotalBytes, Math.Max(CompletedBytes, ObservedBytes));
 
     public void FileCompleted(long size, DateTimeOffset at)
     {
@@ -116,9 +124,9 @@ public sealed class JobProgress
         Sample(at);
     }
 
-    public void SetInFlightBytes(long bytes, DateTimeOffset at)
+    public void SetObservedBytes(long bytes, DateTimeOffset at)
     {
-        InFlightBytes = Math.Max(0, bytes);
+        ObservedBytes = Math.Max(ObservedBytes, bytes);
         Sample(at);
     }
 

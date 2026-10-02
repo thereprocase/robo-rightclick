@@ -49,10 +49,10 @@ There's no helper process and no shared memory. After a successful cut-paste, th
 | Per-file error | prompt: Try again / Skip | `/R:0 /W:0` (Explorer doesn't retry silently either). Errors are **collected and shown at the end of the job** as "Try again (these N) / Skip". This is the one deliberate deviation, because robocopy can't block mid-run |
 | Cancel | stops; deletes the partially written file | kill robocopy, then delete any destination files that were in flight and didn't exist before the job started |
 | Pause / resume | yes | `NtSuspendProcess` / `NtResumeProcess` on the robocopy process |
-| Metadata | data, attributes, modified time; ACLs inherit from destination | `/COPY:DAT`, no `S`. Folder timestamps, alternate data streams, hidden/system files, read-only attribute, and junctions/symlinks are set to **whatever M0's parity capture shows Explorer actually does** |
+| Metadata | measured in docs/parity.md | `/COPY:DAT /DCOPY:DA /A+:A /XJD`; remaining deviations are listed in parity.md |
 | Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited) |
 
-Always-on robocopy flags: `/MT:32 /UNICODE /NP /NDL /NC /NJH /NJS /BYTES /FP`. Output is read from **stdout only**: robocopy is never given `/LOG` or `/UNILOG`, so it never writes a log file in any mode.
+Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP`. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
 
 ## Config (simple)
 
@@ -87,7 +87,7 @@ Queued → Scanning → [AwaitingDecision] → Running ⇄ Paused → Finalizing
 - `Finalizing` covers move cleanup, clearing the clipboard, and the summary.
 - From `DoneWithErrors`, "Try again" spawns a child job containing only the failed items.
 
-**Tracking.** Per job: bytes and files done out of total, speed, ETA, current file(s), error count. Progress is driven by parsing robocopy's per-file lines. Under `/MT`, robocopy reports per file rather than per percentage, so large files that are mid-copy are filled in by polling the size of their destination file every second. The exact mechanism depends on M0.
+**Tracking.** Per job: bytes and files done out of total, speed, ETA, current file(s), error count. Completed files come from robocopy's per-file lines, which under `/MT` arrive as each file finishes. Live bytes come from robocopy's process I/O counters (`GetProcessIoCounters`). Polling destination sizes doesn't work, because robocopy allocates each file at full length up front (M0).
 
 **Jobs window.** One row per job, with pause/resume/cancel, retry failed, open destination, and open log (normal mode only).
 
@@ -100,11 +100,11 @@ Queued → Scanning → [AwaitingDecision] → Running ⇄ Paused → Finalizing
 All job output goes through one `IJobSink` interface:
 - **Normal mode** composes a `FileJobSink`. It writes `%LOCALAPPDATA%\RoboRightClick\jobs\<yyyyMMdd-HHmmss>-<id>\` containing:
   - `job.json`: verb, sources, destination, effective args, state transitions with timestamps, exit code, failures.
-  - `robocopy.log`: a copy of stdout written by us, not by robocopy.
+  - `robocopy.log`: a copy of the pipe output, written by us, not by robocopy.
 
   It also appends to `history.jsonl`. Retention prunes to the last `logRetentionJobs` jobs.
 - **Ephemeral mode** composes a `NullJobSink` and keeps history in memory only, cleared on exit. Guarantees:
-  - Nothing about a job is written to disk: no job files, no history, no robocopy log, and no temp files (none are needed at all).
+  - Nothing about a job is written to disk: no job files, no history, and no temp files (none are needed at all). Robocopy's own log goes only into the in-memory pipe.
   - Completion toasts are generic ("Job finished") and contain **no paths**, because Windows keeps toast text in the notification center.
   - Clipboard writes set `ExcludeClipboardContentFromMonitorProcessing`, so file lists stay out of clipboard history and cloud clipboard.
   - The only file write is the `logging` setting itself in config.json.
@@ -113,7 +113,7 @@ All job output goes through one `IJobSink` interface:
 
 ## Milestones (each gated, recorded in `docs/testlog.md`)
 
-**M0: spikes on a disposable Windows 11 test VM** with no network access. Gate for M2 and later. Machine-specific wrappers for the VM live in the gitignored `scripts/local/`; VM details never go into this repo.
+**M0: spikes on a disposable Windows 11 test VM** (spikes 2–4 done 2026-10-02, see docs/testlog.md; 1 and 5 need the host) with no network access. Gate for M2 and later. Machine-specific wrappers for the VM live in the gitignored `scripts/local/`; VM details never go into this repo.
 1. Out-of-process DelegateExecute with a multi-use server: a 500-item selection from the classic menu arrives in **one** call to an already-running process. Repeat for the background, folder and drive items.
 2. Redirected `robocopy /UNICODE /MT:32` stdout decodes correctly as UTF-16, with emoji and CJK filenames. Record exactly which lines appear, and when, for files that are starting versus finishing.
 3. `NtSuspendProcess` reliably pauses an `/MT:32` robocopy and resumes it cleanly.

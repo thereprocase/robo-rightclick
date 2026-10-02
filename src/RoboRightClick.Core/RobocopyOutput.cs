@@ -5,7 +5,7 @@ namespace RoboRightClick.Core;
 
 public abstract record RobocopyEvent;
 
-/// <summary>A per-file line: with /NC /FP /BYTES it is "&lt;size&gt;&lt;tab&gt;&lt;full path&gt;".</summary>
+/// <summary>A file robocopy finished copying (its size in bytes and full source path).</summary>
 public sealed record FileReported(long Size, string Path) : RobocopyEvent;
 
 /// <summary>A failed operation; robocopy prints the system message on the following line.</summary>
@@ -14,16 +14,19 @@ public sealed record ErrorReported(int Code, string Operation, string Path, stri
 public sealed record OtherOutput(string Text) : RobocopyEvent;
 
 /// <summary>
-/// Incremental parser for robocopy stdout produced with
+/// Incremental parser for robocopy's /UNILOG output produced with
 /// <see cref="RobocopyArgs.OutputFlags"/>. Feed it one line at a time.
 /// </summary>
 /// <remarks>
-/// Line shapes come from robocopy's documented output. Fixtures captured from
-/// real /MT:32 runs on Windows replace the hand-written ones once M0 records
-/// them; until then the start/finish timing of file lines under /MT is unknown.
+/// Observed on Windows build 26200 with /MT:32 (docs/testlog.md, 2026-10-02):
+/// a file's line is printed when robocopy is done with that file, and a file
+/// that fails still gets its line first, immediately followed by the ERROR
+/// line for the same path. So a file line is held back until the next line
+/// shows it was not a failure.
 /// </remarks>
 public sealed partial class RobocopyOutputParser
 {
+    private FileReported? _pendingFile;
     private (int Code, string Operation, string Path)? _pendingError;
 
     [GeneratedRegex(@"^\s*(\d+)\t(.+)$")]
@@ -37,10 +40,11 @@ public sealed partial class RobocopyOutputParser
     {
         var text = line.TrimStart('﻿').TrimEnd('\r', '\n');
         var events = new List<RobocopyEvent>();
+        var blank = text.Trim().Length == 0;
 
         if (_pendingError is { } pending)
         {
-            if (text.Trim().Length == 0)
+            if (blank)
             {
                 return events;
             }
@@ -55,39 +59,58 @@ public sealed partial class RobocopyOutputParser
             events.Add(new ErrorReported(pending.Code, pending.Operation, pending.Path, string.Empty));
         }
 
+        if (blank)
+        {
+            return events;
+        }
+
         var error = ErrorLine().Match(text);
         if (error.Success)
         {
-            _pendingError = (
-                int.Parse(error.Groups[1].Value, CultureInfo.InvariantCulture),
-                error.Groups[2].Value,
-                error.Groups[3].Value.TrimEnd());
+            var path = error.Groups[3].Value.TrimEnd();
+            if (_pendingFile is { } failed && WinPath.Comparer.Equals(failed.Path, path))
+            {
+                // The held file line belonged to this failure; it was not copied.
+                _pendingFile = null;
+            }
+            FlushFile(events);
+            _pendingError = (int.Parse(error.Groups[1].Value, CultureInfo.InvariantCulture), error.Groups[2].Value, path);
             return events;
         }
 
         var file = FileLine().Match(text);
         if (file.Success && long.TryParse(file.Groups[1].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var size))
         {
-            events.Add(new FileReported(size, file.Groups[2].Value.TrimEnd()));
+            FlushFile(events);
+            _pendingFile = new FileReported(size, file.Groups[2].Value.TrimEnd());
             return events;
         }
 
-        if (text.Trim().Length > 0)
-        {
-            events.Add(new OtherOutput(text.Trim()));
-        }
+        FlushFile(events);
+        events.Add(new OtherOutput(text.Trim()));
         return events;
     }
 
-    /// <summary>Call when the process exits, to flush an error whose message line never came.</summary>
+    /// <summary>Call when the output ends, to flush anything still held back.</summary>
     public IReadOnlyList<RobocopyEvent> Complete()
     {
-        if (_pendingError is not { } pending)
+        var events = new List<RobocopyEvent>();
+        if (_pendingError is { } pending)
         {
-            return [];
+            _pendingError = null;
+            events.Add(new ErrorReported(pending.Code, pending.Operation, pending.Path, string.Empty));
         }
-        _pendingError = null;
-        return [new ErrorReported(pending.Code, pending.Operation, pending.Path, string.Empty)];
+        FlushFile(events);
+        return events;
+    }
+
+    private void FlushFile(List<RobocopyEvent> events)
+    {
+        if (_pendingFile is { } file)
+        {
+            _pendingFile = null;
+            events.Add(file);
+        }
     }
 }
 

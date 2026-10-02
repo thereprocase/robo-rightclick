@@ -12,6 +12,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Real robocopy /UNILOG output captured on Windows (docs/testlog.md, 2026-10-02). -->
+    <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Using Include="Xunit" />
     <ProjectReference Include="../../src/RoboRightClick.Core/RoboRightClick.Core.csproj" />
   </ItemGroup>

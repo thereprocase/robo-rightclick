@@ -4,14 +4,25 @@ namespace RoboRightClick.Core.Tests;
 
 public class RobocopyOutputParserTests
 {
-    // Hand-written from robocopy's documented format. Replace with captured
-    // /MT:32 fixtures once M0 records them (see docs/testlog.md).
+    // Edge cases around the line shapes seen in the captured fixtures
+    // (CapturedOutputTests); these cover orderings the captures did not hit.
     [Fact]
-    public void File_lines_parse_size_and_full_path()
+    public void A_file_line_is_held_until_the_next_line_shows_it_did_not_fail()
     {
         var parser = new RobocopyOutputParser();
-        var e = Assert.Single(parser.Feed("\uFEFF\t\t        1048576\tC:\\src\\日本語 📁\\a.bin\r\n"));
+        Assert.Empty(parser.Feed("\uFEFF\t  \t\t1048576\tC:\\src\\日本語 📁\\a.bin\r\n"));
+        var e = Assert.Single(parser.Feed("\t  \t\t5\tC:\\src\\b.txt"));
         Assert.Equal(new FileReported(1_048_576, @"C:\src\日本語 📁\a.bin"), e);
+        Assert.Equal(new FileReported(5, @"C:\src\b.txt"), Assert.Single(parser.Complete()));
+    }
+
+    [Fact]
+    public void An_error_for_a_different_path_does_not_cancel_the_held_file()
+    {
+        var parser = new RobocopyOutputParser();
+        parser.Feed("\t  \t\t5\tC:\\src\\ok.txt");
+        var events = parser.Feed(@"2026/10/02 12:34:56 ERROR 5 (0x00000005) Copying File C:\src\other.txt");
+        Assert.Equal(new FileReported(5, @"C:\src\ok.txt"), Assert.Single(events));
     }
 
     [Fact]
@@ -30,9 +41,8 @@ public class RobocopyOutputParserTests
         parser.Feed(@"2026/10/02 12:34:56 ERROR 32 (0x00000020) Copying File \\srv\share\x.txt");
         var events = parser.Feed("\t\t5\tC:\\src\\y.txt");
 
-        Assert.Equal(2, events.Count);
-        Assert.Equal(new ErrorReported(32, "Copying File", @"\\srv\share\x.txt", ""), events[0]);
-        Assert.Equal(new FileReported(5, @"C:\src\y.txt"), events[1]);
+        Assert.Equal(new ErrorReported(32, "Copying File", @"\\srv\share\x.txt", ""), Assert.Single(events));
+        Assert.Equal(new FileReported(5, @"C:\src\y.txt"), Assert.Single(parser.Complete()));
     }
 
     [Fact]
@@ -143,7 +153,7 @@ public class JobLifecycleTests
 
         p.FileCompleted(100, T0);
         p.FileCompleted(100, T0.AddSeconds(1));
-        p.SetInFlightBytes(50, T0.AddSeconds(1.5));
+        p.SetObservedBytes(250, T0.AddSeconds(1.5));
 
         Assert.Equal(250, p.DoneBytes);
         Assert.Equal(2, p.CompletedFiles);
@@ -156,8 +166,17 @@ public class JobLifecycleTests
     {
         var p = new JobProgress(totalBytes: 10, totalFiles: 1);
         p.FileCompleted(10, T0);
-        p.SetInFlightBytes(5, T0.AddSeconds(1));
+        p.SetObservedBytes(25, T0.AddSeconds(1));
         Assert.Equal(10, p.DoneBytes);
+    }
+
+    [Fact]
+    public void Observed_bytes_never_move_backwards()
+    {
+        var p = new JobProgress(totalBytes: 100, totalFiles: 1);
+        p.SetObservedBytes(60, T0);
+        p.SetObservedBytes(40, T0.AddSeconds(1));
+        Assert.Equal(60, p.DoneBytes);
     }
 }
 
