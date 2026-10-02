@@ -8,9 +8,16 @@ prompts, `- Copy` naming, pause and cancel. The bulk data moves through
 A tray icon shows queued and running jobs. Each job's log is kept on disk, unless
 **ephemeral mode** is on, in which case the app writes nothing about any job to disk.
 
-> **Status: beta (1.0.0-beta.1). Unverified on Windows** until
-> [docs/testlog.md](docs/testlog.md) says otherwise. The release is cross-compiled on Linux;
-> the log lists what has actually been run. The plan is in [docs/design.md](docs/design.md).
+> **Status: beta (1.0.0-beta.1).** Built on Linux and cross-compiled for Windows. Install,
+> the three menu items, the clipboard and uninstall have run on one Windows 11 virtual machine
+> ([docs/testlog.md](docs/testlog.md), 2026-10-02). Everything else is unverified on Windows
+> until the test log says otherwise. The plan is in [docs/design.md](docs/design.md).
+
+## Supported Windows
+
+Windows 11 on x64. The only Windows build this beta has run on is **26200** (Windows 11
+Enterprise evaluation, in a virtual machine; docs/testlog.md 2026-10-02). Other Windows 11
+builds, Windows 10, ARM64 machines and physical machines are untested.
 
 ## Download and verify
 
@@ -30,6 +37,23 @@ folder holding both files. It prints `True` when the zip matches its `.sha256` f
 not run it. The zip is reproducible: `./scripts/publish.sh` on the release's commit produces the
 same SHA256.
 
+### The exe is not signed
+
+`RoboRightClick.exe` has no code signature: the project has no signing certificate. The
+SHA256 check above is how you know the file is the published one. Windows is cautious with
+unsigned downloads. None of the following has been observed in this project's test log yet;
+it is how Windows normally treats such a file:
+
+- **Unblock the zip before extracting it.** Windows marks downloaded files, files extracted
+  from a marked zip inherit the mark, and the installed copy of the exe may keep it. After the
+  hash check, run `Unblock-File .\RoboRightClick-<version>-win-x64.zip`, then extract.
+- **SmartScreen.** If a "Windows protected your PC" window appears when you start the exe,
+  choose **More info**, check that the app name is `RoboRightClick.exe`, then **Run anyway**.
+- **Smart App Control must be off.** When it is on (Windows Security, App & browser control,
+  Smart App Control settings), it blocks unsigned apps and has no per-app exception, so
+  RoboRightClick cannot run. Turning it off is a system-wide decision; read Microsoft's
+  description of the setting before you change it.
+
 ## Install
 
 Per user. No administrator rights, and no Explorer settings are changed.
@@ -39,21 +63,130 @@ Per user. No administrator rights, and no Explorer settings are changed.
   Without a flag, a first install starts with Windows and a reinstall keeps your setting.
   `--quiet` skips the result message box; the exit code (0 ok, 1 failed) is the result.
 
-Install copies the exe to `%LOCALAPPDATA%\Programs\RoboRightClick\`, writes the registry
-keys listed in [docs/host-architecture.md](docs/host-architecture.md) (section 4) under
-`HKEY_CURRENT_USER`, and starts the tray.
+Install copies the exe and the three menu icons to `%LOCALAPPDATA%\Programs\RoboRightClick\`,
+writes the registry keys listed in [docs/host-architecture.md](docs/host-architecture.md)
+(section 4) under `HKEY_CURRENT_USER`, writes a default `config.json` if there is none, and
+starts the tray.
+
+Install refuses, with a message and exit code 1, when a folder it would use has a character
+in its path that uninstall cannot handle safely (`" & | < > ^ % !`, for example a user name
+with `&`). It then changes nothing, so it never installs something it could not remove.
+
+## Upgrade
+
+1. Download the new release, check its hash, unblock the zip and extract it, as above.
+2. Let running pastes finish, or cancel them. Install asks the running tray to exit; the tray
+   refuses while jobs run, and the install then stops with a message and changes nothing.
+3. Run the new `RoboRightClick.exe --install`, or double-click it: it offers to install, which
+   here replaces the installed version. The exe, the menu icons and the registry keys are
+   replaced. `config.json`, job logs, history and the crash log stay as they are; only an
+   explicit `--autostart` or `--no-autostart` changes the start-with-Windows setting.
+4. Check the result: Settings, Apps, Installed apps lists RoboRightClick with the new version.
+   Or compare the installed exe with the one you extracted:
+
+       (Get-FileHash "$env:LOCALAPPDATA\Programs\RoboRightClick\RoboRightClick.exe").Hash -eq (Get-FileHash .\RoboRightClick.exe).Hash
+
+Reinstalling over an installed build ran many times on the test VM (docs/testlog.md
+2026-10-02). Once, an install reported success but left the previous exe in place, cause
+unknown; step 4 catches that. To go back to an older version, install it the same way. It reads
+a `config.json` written by the newer version but never saves over it (see Configuration).
 
 ## Where the items appear
 
-The items are in the classic context menu. On Windows 11 that is **Show more options**, or
-Shift+F10 with the item selected. **Robo-Copy** and **Robo-Cut** appear on files and folders.
-**Robo-Paste** appears on a folder, a drive and the empty background of a folder window.
+The items are in the classic context menu. On Windows 11, right-click, then **Show more
+options**. On build 26200, Shift+F10 opens the new menu, whose **Show more options** (access
+key W) opens the classic one (docs/testlog.md 2026-10-02). **Robo-Copy** and **Robo-Cut** appear
+on files and folders. **Robo-Paste** appears on a folder, a drive and the empty background of
+a folder window, but not when several folders are selected. Each item has its own icon since
+commit e13fa37; that Explorer shows it is not yet verified on Windows.
 
 ## Uninstall
 
 Settings, Apps, Installed apps, **RoboRightClick**, Uninstall. Or run
 `RoboRightClick.exe --uninstall [--quiet]`. It removes the registry keys install wrote, the Run entry,
-the config, history and job logs, and the install folder. Nothing else is touched.
+the config, history, job logs and crash logs, the menu icons and the install folder. Nothing
+else is touched.
+
+## Files the app writes
+
+| What | Where | When |
+|---|---|---|
+| Program and menu icons | `%LOCALAPPDATA%\Programs\RoboRightClick\` (`RoboRightClick.exe`, `robo-copy.ico`, `robo-cut.ico`, `robo-paste.ico`) | install |
+| Settings | `%APPDATA%\RoboRightClick\config.json`; `config.json.bad` is a copy of a file that could not be read, kept before it is replaced | install, Settings window, tray menu; in both modes |
+| Job logs | `%LOCALAPPDATA%\RoboRightClick\jobs\<date-time-id>\job.json` and `robocopy.log` | each paste in normal mode; the newest `logRetentionJobs` are kept |
+| History | `%LOCALAPPDATA%\RoboRightClick\history.jsonl` (`history.1.jsonl` after 10,000 lines) | each finished paste in normal mode |
+| Crash log | `%LOCALAPPDATA%\RoboRightClick\crash.log` (`crash.1.log`, the previous one, after 256 KB) | an unexpected error in the tray, in normal mode only; never in ephemeral mode, and never after an ephemeral job in the same session |
+
+The tray menu's **Open logs** opens `%LOCALAPPDATA%\RoboRightClick`. Registry values are all
+under `HKEY_CURRENT_USER` and listed in docs/host-architecture.md section 4.
+
+`crash.log` holds, per error: its type, its message with anything that looks like a path
+replaced by `[path]`, the program's stack trace, the app version, the time (UTC) and the
+Windows build. Please attach it to a bug report, but read it first: the path filter is a
+heuristic, and a bare file name without quotes or folder can get through.
+
+A paste that was still running when the app ended (a crash, a power cut) is reported once at
+the next start, with a tray notice that some destination files may be incomplete. Its
+`job.json` is then marked `interrupted`, so the notice does not repeat.
+
+## Troubleshooting
+
+**A Robo item is missing from the menu.** Look in the classic menu (**Show more options**),
+not the new one. Robo-Paste is only on folders, drives and a folder's empty background, and
+not when several folders are selected. To check that the items are registered, run in
+PowerShell:
+
+    Test-Path 'HKCU:\Software\Classes\AllFilesystemObjects\shell\RoboCopy\command'
+    Test-Path 'HKCU:\Software\Classes\Directory\Background\shell\RoboPaste\command'
+
+`False` means the registration is gone: run `RoboRightClick.exe --install` again.
+
+**The tray icon is not there.** Windows 11 puts new tray icons in the overflow (the `^` next
+to the clock); drag it out to keep it visible. The tray does not have to be running for the
+menu items: the first click on one starts it (observed on the test VM in about 0.3 to 0.4
+seconds, docs/testlog.md 2026-10-02). To start it by hand, run
+`%LOCALAPPDATA%\Programs\RoboRightClick\RoboRightClick.exe`. It starts with Windows unless
+`startWithWindows` is off; after a sign-in on the test VM it appeared 7.4 seconds after
+Explorer started (same entry). `Get-Process RoboRightClick` shows whether it runs.
+
+**A click does nothing.** Every refusal (nothing on the clipboard, too many items, a folder
+that is not on a drive) is reported as a Windows notification. If notifications are off or
+Do not disturb is on, check the notification center. If Explorer reports "Server execution
+failed", the installed exe is missing or cannot start: install again. If the app stopped
+with an error, see `crash.log` above (normal mode only).
+
+## Differences from Explorer
+
+Robo-Copy, Robo-Cut and Robo-Paste follow Explorer by default. Where they do not, the reason
+is in [docs/parity.md](docs/parity.md), which also says which differences were measured on
+Windows and which are design decisions not yet measured. In plain words:
+
+- A copied file keeps its original "created" date; Explorer gives the copy the time of copying.
+  A copied folder keeps its original "modified" date.
+- A junction or folder link inside a copied folder leaves nothing at the destination;
+  Explorer leaves an empty folder with its name.
+- Files that cannot be copied are collected and offered as **Try again / Skip** at the end of
+  the job, instead of a question in the middle of it.
+- Paths longer than 260 characters are copied; Explorer skipped them in the measured run.
+- Robo-Cut does not dim the cut items' icons the way Ctrl+X does. They are still moved.
+- A Robo-Cut pasted with Explorer's own Ctrl+V stays on the clipboard afterwards; pasting it
+  again finds the files already gone. Robo-Paste empties the clipboard after a cut, as
+  Explorer does.
+- Robo-Paste is not offered when several folders are selected; Explorer pastes into the one
+  you right-clicked.
+- The Robo items have icons; Explorer's classic Cut, Copy and Paste have none.
+- A paste whose files overlap those of a paste still running waits for it to finish; Explorer
+  runs both at once. Pastes into unrelated folders run in parallel.
+- Cutting between two drives offers no "keep both" for name conflicts; copies, and cuts
+  within one drive, do.
+- A selected junction or folder link is moved only within one drive; copying it, or moving it
+  to another drive, is refused with a message that points to Explorer's Paste.
+- Files that appear at the destination while a paste runs are skipped, not overwritten, and
+  listed in the job's summary; Explorer would ask about them.
+- "Keep newer" (a configured default only) also keeps a destination file with the same time
+  but a different size.
+- After **Try again** completes a cut, the emptied source folders stay.
+- One click takes at most 250,000 items; select their folder instead.
 
 ## Scripting
 
@@ -89,7 +222,10 @@ Set `logging` to `ephemeral` (tray menu, Settings, or `config.json`). Then the a
 nothing about jobs to disk: no job files, no history, no temp files. Toasts name no paths,
 and clipboard writes are marked to stay out of clipboard history and cloud clipboard. The
 one file it writes is `config.json`, which holds the setting itself. History is kept in memory
-until the app exits. The change applies to jobs started after it.
+until the app exits. The change applies to jobs started after it. No crash log is written in
+ephemeral mode, nor for the rest of a session in which any ephemeral job ran. Job logs and a
+crash log written earlier in normal mode stay until you delete them (turning ephemeral mode on
+offers to delete the job logs; the crash logs are removed only by uninstall, or by you).
 
 Limits. The guarantee covers what this app writes, not what Windows records:
 
