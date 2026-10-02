@@ -54,7 +54,7 @@ There's no helper process and no shared memory. After a successful cut-paste, th
 | Metadata | measured in docs/parity.md | `/COPY:DAT /DCOPY:DA /A+:A /XJD`; remaining deviations are listed in parity.md |
 | Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited), except that a paste whose source or destination overlaps where another running paste writes waits for it (deviation, docs/parity.md) |
 
-Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP`. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
+Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP /XX`. `/XX` keeps destination-only ("extra") files out of the output, where with `/NC` they would look like copied files. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
 
 ## Config (simple)
 

@@ -15,7 +15,7 @@ public class RobocopyArgsTests
 
         Assert.Equal(
             "\"C:\\src\" \"D:\\dst\" \"a b.txt\" \"c.txt\" /MT:32 /R:0 /W:0 /COPY:DAT /DCOPY:DA /A+:A /XJD " +
-            "/NP /NDL /NC /NJH /NJS /BYTES /FP /UNILOG:\\\\.\\pipe\\rrc-test-1 /XC /XN /XO",
+            "/NP /NDL /NC /NJH /NJS /BYTES /FP /XX /UNILOG:\\\\.\\pipe\\rrc-test-1 /XC /XN /XO",
             args);
     }
 
@@ -25,6 +25,22 @@ public class RobocopyArgsTests
         var args = RobocopyArgs.Build(DirStep, Settings.Default, ConflictPolicy.Ask, Pipe);
         Assert.Contains(" /E ", args);
         Assert.DoesNotContain("/MOV", args);
+    }
+
+    [Fact]
+    public void Destination_only_files_are_kept_out_of_the_output_for_every_run()
+    {
+        // With /NC an "extra" file's line looks like a copied file with a destination path;
+        // the ledger would match nothing and mark the whole job's paths unreliable.
+        foreach (var policy in Enum.GetValues<ConflictPolicy>())
+        {
+            foreach (var step in new[] { FileStep, DirStep, DirStep with { Move = true } })
+            {
+                var switches = RobocopyArgs.Build(step, Settings.Default, policy, Pipe).Split(' ');
+                Assert.Contains("/XX", switches);
+                Assert.DoesNotContain("/X", switches);
+            }
+        }
     }
 
     [Fact]

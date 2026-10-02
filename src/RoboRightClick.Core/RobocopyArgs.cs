@@ -8,8 +8,15 @@ namespace RoboRightClick.Core;
 /// </summary>
 public static class RobocopyArgs
 {
-    /// <summary>Flags that make each output line one file event the parser understands.</summary>
-    public const string OutputFlags = "/NP /NDL /NC /NJH /NJS /BYTES /FP";
+    /// <summary>
+    /// Flags that make each output line one file event the parser understands. /XX keeps
+    /// robocopy from listing destination files that have no source ("extra" files): with /NC
+    /// their lines look exactly like copied files but carry a destination path, which the
+    /// ledger cannot match, so one unrelated file already in a destination folder would make
+    /// it give up on the whole job (no cancel cleanup, no per-file retry; testlog 2026-10-02).
+    /// Without /PURGE or /MIR robocopy never deletes extras, so /XX changes only the output.
+    /// </summary>
+    public const string OutputFlags = "/NP /NDL /NC /NJH /NJS /BYTES /FP /XX";
 
     /// <summary>
     /// Robocopy's output channel. Redirected stdout cannot carry non-ASCII
