@@ -428,6 +428,7 @@ internal sealed class ConflictDialog : Gridline.Window
     {
         _choiceView.Visible = false;
         _decideView.Visible = true;
+        Gridline.RescaleFonts(this, DeviceDpi);
         AcceptButton = _continue;
         var wanted = new Size(Gridline.Scale(this, 1180), Gridline.Scale(this, 560));
         var area = Screen.FromControl(this).WorkingArea;
@@ -446,6 +447,7 @@ internal sealed class ConflictDialog : Gridline.Window
         _grid.EndEdit();
         _decideView.Visible = false;
         _choiceView.Visible = true;
+        Gridline.RescaleFonts(this, DeviceDpi);
         AcceptButton = null;
         _skip.Focus();
     }

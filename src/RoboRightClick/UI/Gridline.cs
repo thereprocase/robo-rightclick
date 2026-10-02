@@ -272,7 +272,12 @@ internal static class Gridline
         return control;
     }
 
-    /// <summary>Re-applies every remembered font role under <paramref name="root"/> at <paramref name="dpi"/>.</summary>
+    /// <summary>
+    /// Re-applies every remembered font role under <paramref name="root"/> at <paramref name="dpi"/>.
+    /// Also needed when hidden controls are first shown after a DPI change (a window dragged to
+    /// another monitor): WinForms scales their already scaled font again as their handles are
+    /// created, which doubled the text size of the conflict list's summary at 150%.
+    /// </summary>
     public static void RescaleFonts(Control root, int dpi)
     {
         if (FontRoles.TryGetValue(root, out var role))

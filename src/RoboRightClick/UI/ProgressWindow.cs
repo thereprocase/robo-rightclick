@@ -323,6 +323,8 @@ internal sealed class ProgressWindow : Gridline.Window
         view.Chosen += (_, _) => Close();
         Controls.Add(view);
         view.BringToFront();
+        // Built after the window may have moved to another DPI; set every font for this one.
+        Gridline.RescaleFonts(this, DeviceDpi);
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         MinimumSize = new Size(Gridline.Scale(this, 480), Gridline.Scale(this, 320));
