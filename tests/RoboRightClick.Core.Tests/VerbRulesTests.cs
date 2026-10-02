@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+using System.Text;
 using RoboRightClick.Core;
 
 namespace RoboRightClick.Core.Tests;
@@ -174,6 +176,103 @@ public class VerbRulesTests
         Assert.Equal(
             VerbRefusal.ClipboardTooLarge,
             VerbRules.ClassifyClipboard(true, ClipboardPayload.DecodeDropFiles(new byte[ClipboardPayload.MaxDropFilesBytes + 1]), false));
+    }
+
+    // Narrow (ANSI) DROPFILES
+
+    /// <summary>A narrow DROPFILES block: header with fWide = 0, then <paramref name="list"/> verbatim.</summary>
+    private static byte[] AnsiBlock(byte[] list, uint? pFiles = null)
+    {
+        var block = new byte[ClipboardPayload.DropFilesHeaderSize + list.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(block, pFiles ?? (uint)ClipboardPayload.DropFilesHeaderSize);
+        list.CopyTo(block, ClipboardPayload.DropFilesHeaderSize);
+        return block;
+    }
+
+    private static byte[] Ascii(string s) => Encoding.ASCII.GetBytes(s);
+
+    private static string[] Names(byte[] block, AnsiDropFiles split) =>
+        split.Names.Select(r => Encoding.ASCII.GetString(block.AsSpan(r))).ToArray();
+
+    [Fact]
+    public void AnsiNamesAreSplitAtTheirTerminators()
+    {
+        var block = AnsiBlock(Ascii("C:\\a\0C:\\bb\0\0"));
+        var split = VerbRules.SplitAnsiDropFiles(block);
+        Assert.NotNull(split);
+        Assert.Equal(DropFilesStatus.Ok, split.Status);
+        Assert.Equal([@"C:\a", @"C:\bb"], Names(block, split));
+    }
+
+    [Fact]
+    public void AnsiListMissingOnlyItsFinalEmptyNameEndsAtTheBlockEnd()
+    {
+        var block = AnsiBlock(Ascii("C:\\a\0"));
+        var split = VerbRules.SplitAnsiDropFiles(block);
+        Assert.NotNull(split);
+        Assert.Equal([@"C:\a"], Names(block, split));
+    }
+
+    [Fact]
+    public void AnsiEmptyListHasNoNames()
+    {
+        var split = VerbRules.SplitAnsiDropFiles(AnsiBlock([0, 0]));
+        Assert.NotNull(split);
+        Assert.Empty(split.Names);
+    }
+
+    [Fact]
+    public void AnsiNameWithoutTerminatorRefusesTheBlock()
+    {
+        // DragQueryFile would read past the end of this block.
+        Assert.Null(VerbRules.SplitAnsiDropFiles(AnsiBlock(Ascii("C:\\a\0C:\\b"))));
+        Assert.Null(VerbRules.SplitAnsiDropFiles(AnsiBlock(Ascii("C:\\a"))));
+    }
+
+    [Theory]
+    [InlineData(0u)]
+    [InlineData(19u)]
+    [InlineData(25u)]
+    [InlineData(0xFFFFFFF0u)]
+    public void AnsiOffsetOutsideTheListRefusesTheBlock(uint pFiles) =>
+        // The list is 5 bytes after a 20-byte header: valid offsets are 20..24.
+        Assert.Null(VerbRules.SplitAnsiDropFiles(AnsiBlock(Ascii("C:\0\0\0"), pFiles)));
+
+    [Fact]
+    public void AnsiOffsetIsHonored()
+    {
+        var block = AnsiBlock(Ascii("xxC:\\a\0\0"), pFiles: ClipboardPayload.DropFilesHeaderSize + 2);
+        var split = VerbRules.SplitAnsiDropFiles(block);
+        Assert.NotNull(split);
+        Assert.Equal([@"C:\a"], Names(block, split));
+    }
+
+    [Fact]
+    public void AnsiHeaderTooShortRefusesTheBlock() =>
+        Assert.Null(VerbRules.SplitAnsiDropFiles(new byte[ClipboardPayload.DropFilesHeaderSize - 1]));
+
+    [Fact]
+    public void AnsiOverTheByteLimitIsTooLarge() =>
+        Assert.Equal(
+            DropFilesStatus.TooLarge,
+            VerbRules.SplitAnsiDropFiles(new byte[ClipboardPayload.MaxDropFilesBytes + 1])?.Status);
+
+    [Fact]
+    public void AnsiOverThePathLimitIsTooLargeNotTruncated()
+    {
+        var list = new byte[(ClipboardPayload.MaxDropFilesPaths + 1) * 2 + 1];
+        for (var i = 0; i < ClipboardPayload.MaxDropFilesPaths + 1; i++)
+        {
+            list[i * 2] = (byte)'a';
+        }
+        var split = VerbRules.SplitAnsiDropFiles(AnsiBlock(list));
+        Assert.Equal(DropFilesStatus.TooLarge, split?.Status);
+        Assert.Empty(split!.Names);
+
+        // Exactly at the limit is accepted.
+        var atLimit = VerbRules.SplitAnsiDropFiles(AnsiBlock(list.AsSpan(2).ToArray()));
+        Assert.Equal(DropFilesStatus.Ok, atLimit?.Status);
+        Assert.Equal(ClipboardPayload.MaxDropFilesPaths, atLimit!.Names.Count);
     }
 
     // Retry delays
