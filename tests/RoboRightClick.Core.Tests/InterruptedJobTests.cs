@@ -134,6 +134,9 @@ public class InterruptedJobTests
     [InlineData("""{"states":[{"state":"exploded"}]}""")]
     [InlineData("""{"states":"running"}""")]
     [InlineData("""{"states":[{"state":"running"}],"states":[{"state":"done"}]}""")]
+    // JsonDocument reads the last duplicate (running) and passes it on; JsonObject then
+    // refuses the duplicated key, and the file is left as it is.
+    [InlineData("""{"states":[{"state":"done"}],"states":[{"state":"running"}]}""")]
     public void Anything_that_is_not_an_unfinished_record_is_never_rewritten(string json)
     {
         Assert.Null(JobRecords.MarkInterrupted(json, MarkedAt));

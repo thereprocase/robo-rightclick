@@ -419,7 +419,9 @@ Step execution:
   ended mid-paste. It is counted for the one startup toast and rewritten, through the same
   temp-file-then-replace writer, with a final `"interrupted"` state, so the next start does
   not report it again. Jobs created at or after this process started, and folders of active
-  jobs, are skipped; a record of a newer format version is reported but never rewritten.
+  jobs, are skipped; a record of a newer or unreadable format version is reported but never
+  rewritten, so it is reported at every start, as is one whose rewrite failed. The counting
+  and the skips are host code, untested.
 - Ephemeral: `NullJobSink`, in-memory history only (`JobManager.InMemoryHistoryLimit`),
   path-free toasts, clipboard exclusion formats, no temp files. The one write is config.json.
 - Turning ephemeral on while job logs exist asks whether to delete them; Settings also has
@@ -500,7 +502,8 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
    on Windows.
 7. Sign-out with active jobs: shutdown is vetoed with a reason; if Windows ends the session
    anyway, jobs are canceled with cleanup within 5 s. A job.json left non-terminal is reported
-   once at the next start (normal mode).
+   at the next start and marked so it is not reported again (normal mode; the exceptions are
+   under "Interrupted jobs" in section 8).
 
 ## 12. Verified vs unverified on Windows
 

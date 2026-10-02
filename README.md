@@ -128,9 +128,12 @@ config.json says ephemeral or cannot be read). Please attach it to a bug report,
 first: the path filter is a heuristic, and a bare file name without quotes or folder can get
 through.
 
-A paste that was still running when the app ended (a crash, a power cut) is reported once at
-the next start, with a tray notice that some destination files may be incomplete. Its
-`job.json` is then marked `interrupted`, so the notice does not repeat.
+A paste that was still running when the app ended (a crash, a power cut) is reported at the
+next start, with a tray notice that some destination files may be incomplete. Its `job.json`
+is then marked `interrupted`, so the notice does not repeat. Two cases repeat it at every
+start: a `job.json` written by a newer version of the app (or with a damaged `version`),
+which an older version never rewrites, and one the app failed to rewrite. Deleting that
+job's folder ends the notice.
 
 ## Troubleshooting
 
