@@ -49,7 +49,7 @@ There's no helper process and no shared memory. After a successful cut-paste, th
 | Paste copy into the same folder | `X - Copy`, `X - Copy (2)` | same naming. Folders go through robocopy to the new name; single files use in-process `CopyFileEx` |
 | Paste into own subfolder | error for that item, others continue | same message, same continue behavior |
 | Per-file error | prompt: Try again / Skip | `/R:0 /W:0` (Explorer doesn't retry silently either). Errors are **collected and shown at the end of the job** as "Try again (these N) / Skip". This is the one deliberate deviation, because robocopy can't block mid-run |
-| Cancel | stops; deletes the partially written file | kill robocopy, then delete any destination files that were in flight and didn't exist before the job started |
+| Cancel | stops; deletes the partially written file | suspend robocopy, note which destination files it holds open, kill it, then delete exactly those files if they didn't exist before their step and are still the same files; nothing else is ever deleted |
 | Pause / resume | yes | `NtSuspendProcess` / `NtResumeProcess` on the robocopy process |
 | Metadata | measured in docs/parity.md | `/COPY:DAT /DCOPY:DA /A+:A /XJD`; remaining deviations are listed in parity.md |
 | Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited), except that a paste whose source or destination overlaps where another running paste writes waits for it (deviation, docs/parity.md) |

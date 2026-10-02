@@ -152,3 +152,96 @@ was checked by comparing the installed exe's hash and the tray's start time. Cau
 
 **VM housekeeping:** the test VHD was detached and deleted, the scratch folder, scheduled tasks
 and listener removed, the app uninstalled, the clipboard emptied.
+
+## 2026-10-02 · build 26200 (robocopy 10.0.26100.1) · VM · cut safety and cancel cleanup
+
+Same disposable Windows 11 Enterprise evaluation VM, no network egress, test account signed in
+to the desktop. Scripts ran on the desktop through a one-shot scheduled task. Each build came
+from `./scripts/publish.sh`; the zip's SHA256 was checked on Windows and the installed exe's hash
+compared with the package after `--install --quiet`. Test volumes were virtual disks attached
+with diskpart: 300 MB NTFS, 40 MB NTFS (about 30 MB free), 200 MB FAT32, 200 MB exFAT.
+Builds: **old** = commit b41a554 (zip `8147aa9b…`); **final** = commit b7576e0, exe SHA256
+`90ba48ff534f87bb74dbacaefd860c3db50fe28a81afd92f81019d3d759a33ed` (zip `2277f0b8…`), which also
+contains the branding and per-drive thread commits made in parallel (e13fa37, efe8482; the
+latter not yet wired into the runner). Results marked "(final)" ran on it; **fixed** = the
+intermediate build with 4ecce52 and 07419c0 (zip `17e64fd5…`). Cleanup was observed
+through the app's new debug line (`RoboRightClick cancel cleanup: …`, counts only), read by a
+debug-output listener on the desktop.
+
+**Plain robocopy and PowerShell probes** (no app)
+- Robocopy suspended mid-copy (`/MT:32`, 6 × 512 MB): every in-flight destination file was full
+  length; its modified time equalled its creation time (no 1980 marker), and after the kill it
+  moved to the kill time. `FileProcessIdsUsingFileInformation` on a handle with
+  `FILE_READ_ATTRIBUTES` listed robocopy's PID for each in-flight file and no PID for a file put
+  in the destination before the run, which robocopy skipped (`/XC /XN /XO`). Same answer on
+  FAT32, exFAT and the SMB loopback share `\\localhost\C$`. `FILE_ID_INFO` fails with error 87
+  on FAT32 and exFAT; `GetFileInformationByHandle`'s file index and creation time were the same
+  before and after the kill on exFAT.
+- Robocopy lists every folder at the start: a folder that comes last was created at the
+  destination 34-141 ms after start while the first large file was still copying. With `/MT:1`,
+  a file created in the destination after that listing was overwritten with the source version
+  (robocopy's own race; cleanup does not change it).
+- With `/NC`, robocopy prints a destination file that has no source ("extra") exactly like a
+  copied file, with the destination path. With `/XX` those lines are gone; exit code unchanged.
+- Killed mid-copy, robocopy delivered one more line after the kill, for the first file, which was
+  still open and incomplete at the kill (4 of 4 runs). The app's parser drops a held line after a
+  kill, so it is never counted complete.
+
+**Defects found and fixed**
+- Old build, `Cancel.Tests.ps1` scenario A: all 7 partial copies were left behind. The job's
+  `robocopy.log` held a line for `keep.txt`, an unrelated file already in the destination, with
+  its destination path; the ledger matched nothing, marked the paths unreliable and skipped
+  cleanup. Fixed by `/XX` (07419c0).
+- Old build, scenario B (the merge review's open race): a file put in the destination after the
+  job's presence check, which robocopy skipped, was **deleted** by the cancel. Fixed in 4ecce52:
+  cleanup deletes only files robocopy held open while suspended for the kill.
+- exFAT, the fixed build plus the debug line: debug line `candidates=3 … open=3 … toDelete=3 deleted=0`; the three
+  partial copies stayed. `BY_HANDLE_FILE_INFORMATION` was read with the wrong packing, so the
+  identity included last-write time bits. Fixed in 9d91ccc; the same run then logged `deleted=3`.
+
+**`Cancel.Tests.ps1`** (final; NTFS on C:, cross-volume to the 300 MB disk) — PASS, 26 checks
+- A: 8 × 256 MB copy throttled with `/IORATE:8M`, Cancel pressed in the progress window: no
+  partial file left, the two pre-existing destination files unchanged. Debug line
+  `candidates=7 observed=7 open=7 notOpen=0 … deleted=7 leftInPlace=0`.
+- B: robocopy suspended as it started, a file created at the destination, robocopy resumed,
+  Cancel: the late arrival is still there with its content; no partial file left. Debug line
+  `candidates=9 observed=9 open=8 notOpen=1 … toDelete=8 deleted=8`.
+- C: cross-volume Robo-Cut of 6 files (one of 1 MB), Cancel: 1 moved, 5 still in the source with
+  their hashes, no partial copy at the destination. Debug line `candidates=5 … open=5 notOpen=1
+  … deleted=5`.
+- A and B also passed on FAT32 and on exFAT (3 × 12 MB, `/IORATE:1M`), each with `notOpen=1`
+  for the late arrival.
+- An SMB loopback share as `-Root` could not be canceled in time: the copy finished in 0.2 s
+  (also with `/NOOFFLOAD /J`). Cleanup through the app on SMB is **unverified**.
+
+**`CutSafety.Tests.ps1`** (final; `-SecondVolume` on the 300 MB disk, `-SmallVolume` on the
+40 MB disk) — PASS, 75 checks
+- Skip conflict with same size and time, same volume and cross volume: source and destination
+  unchanged, the other file moved.
+- A: cross-volume cut with one source held open (`FileShare.None`): it stayed, unchanged.
+- C: cross-volume cut into a folder with a deny "create files" entry: that file stayed in the
+  source, unchanged; a file in a subfolder moved.
+- D: cross-volume cut of a 64 MB file onto the 40 MB disk: it stayed in the source, unchanged;
+  no copy of it at the destination; the small file moved. Summary: "1 item could not be moved to
+  scratch", "There is not enough space on the disk", toast "Move finished with errors"
+  (`10-full-destination-cut-summary.png`, the same cut repeated by hand on the fixed build).
+- E: same-volume cut of a folder: the file kept its file ID (fsutil), so it was renamed.
+- Conflict dialog through UI Automation, same and cross volume: Replace (destination holds the
+  pasted version, source gone), Skip (both unchanged), "Let me decide" with both sides ticked
+  (same volume: `conflict (2).txt` holds the pasted version, the original is unchanged; cross
+  volume: the dialog keeps the two boxes exclusive and shows "Continue: 1 file skipped", both
+  files unchanged; `11-conflict-decide-cross-volume-keep-both-not-offered.png`, by hand on the
+  fixed build).
+- Cancel in the conflict dialog (by hand, fixed build): the job ended and nothing moved.
+
+**Script fixes:** `Cancel.Tests.ps1` jobs finished before the progress window opened (2 GB in
+about 2 s), so copies are now throttled with `/IORATE`; `Resolve-Path` returned
+provider-qualified UNC paths (`ProviderPath` now); `Set-Acl` needed a privilege to write the
+owner (icacls now).
+
+**Not run in this session:** cleanup's refusal of links and folders and its read-only clearing;
+cleanup through the app on an SMB share; a cancel where robocopy cannot be suspended.
+
+**VM housekeeping:** app uninstalled (install and data folders, CLSID keys gone), the four
+virtual disks detached and deleted, the scratch folder, scheduled tasks and the listener
+removed. The pre-existing `RrcParityExplorer` task was left alone.

@@ -58,14 +58,14 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `Jobs/JobManager.cs` | All jobs: enqueue, queue policy, claims, control, snapshots, events, retry. |
 | `Jobs/Job.cs` | One job's lifecycle (doc comment is the flow spec); `JobServices`, `JobStart`. |
 | `Jobs/PauseGate.cs` | A job's pause latch shared by its steps. |
-| `Jobs/RobocopyRun.cs` | One robocopy process: pipe, parser, sampler, suspend/resume, kill. |
+| `Jobs/RobocopyRun.cs` | One robocopy process: pipe, parser, sampler, suspend/resume, kill; on cancel suspend, let the job observe, then kill. |
 | `Jobs/RobocopyPipe.cs` | Current-user single-instance pipe, client PID check, UTF-16 line batches. |
 | `Jobs/ProgressSampler.cs` | One app-wide timer loop reading `GetProcessIoCounters`. |
 | `Jobs/InProcessCopier.cs` | Renames (`MoveFileEx`, flags 0) and single-file copies (`CopyFileEx`). |
 | `Jobs/FileSystemFacts.cs` | `IPlanningFacts` + `IScanFacts` from the real disk. |
 | `Jobs/ShellNotify.cs` | `SHChangeNotify` so Explorer views of network shares refresh. |
 | `Jobs/IJobPrompts.cs` | The conflict question a job asks the UI. |
-| `Jobs/ProcessNative.cs` | ntdll/kernel32 imports: suspend, IO counters, pipe PID, copy, job object. |
+| `Jobs/ProcessNative.cs` | ntdll/kernel32 imports: suspend, IO counters, pipe PID, copy, job object; kill-time observation (who holds a file open, file identity) and the identity-checked delete. |
 | `Logging/JobLogStore.cs` | Log folder layout, history, pruning, delete-all, interrupted-job check. |
 | `Logging/FileJobSink.cs` | Normal-mode `IJobSink`: job.json, robocopy.log, history line. |
 | `UI/ProgressWindow.cs` | Per-job progress (Explorer's copy dialog counterpart). |
@@ -88,7 +88,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `PastePlanner.cs` | `PasteOrder` → validated, resolved `PastePlan`; resolved-path guards; folder links. | implemented, tested, sabotage-checked |
 | `RobocopyArgs.cs` | Arguments; extraArgs allow-list; `Quote` refuses quotes; command-line length. | implemented, tested, sabotage-checked |
 | `RobocopyOutput.cs` | Parser; `Complete(processEndedNormally)` drops a held line after a kill. | implemented, tested, sabotage-checked |
-| `CancelCleanup.cs` | Which destination files a cancel deletes. | implemented, tested, sabotage-checked |
+| `CancelCleanup.cs` | Which destination files a cancel deletes: only those robocopy held open at the kill. | implemented, tested, sabotage-checked; verified on Windows (testlog 2026-10-02, cancel) |
 | `JobRuntime.cs` | `JobFootprint`, `JobQueuePolicy` (overlap, wait reasons, scan cap), `PipeNames`. | implemented, tested, sabotage-checked |
 | `Jobs.cs` | State table, lifecycle, progress (`ResetRate`). | implemented, tested, sabotage-checked |
 | `JobLogging.cs` | `IJobSink`, `JobSinks.For` / `ForDerivedJob`, log naming and pruning. | implemented, tested, sabotage-checked |
@@ -336,20 +336,45 @@ Step execution:
   `File.Move` would silently copy and delete across volumes, an app-initiated source deletion
   that invariant 1 forbids.
 - `DuplicateFileStep`, copy-mode `KeepBothStep` → `CopyFileEx(COPY_FILE_FAIL_IF_EXISTS)`.
-- **Cancel** (any state before Finalizing): `CancelRequested` at once; kill robocopy and wait;
-  then `CancelCleanup.Select(ledger.StartedRobocopyFiles, ledger.CompletedSources, presence set,
-  move, sourceStillExists, claimedByOtherJob)` and delete each `Delete` entry if present through
-  `ProcessNative.DeleteFileIfNotReparsePoint`: one handle opened with `FILE_FLAG_OPEN_REPARSE_POINT`
-  (no backup semantics, so a folder does not open), attributes checked on that handle, deleted
-  with `FileDispositionInfo` on the same handle; no check-then-delete window. Skipped entirely
-  when the ledger found robocopy's paths unreliable. Cleanup cannot tell an in-flight partial
-  from a file that appeared at the destination after the step's presence check and that
-  robocopy skipped silently; both are deleted if the run was killed (a narrow race, listed in
-  section 16). Rules (each tested, each test seen failing with the
-  rule removed): reported-complete files stay; files present before their step are never
-  deleted; files another job of this session planned or wrote are never deleted; for a cut, a
-  destination whose source is gone stays. `LeftInPlace` becomes `JobSnapshot.DamagedOnCancel`
-  (attention, toast, "Finish replacing them").
+- **Cancel** (any state before Finalizing): `CancelRequested` at once. The running
+  `RobocopyRun` suspends robocopy (`NtSuspendProcess`; a pause change can no longer resume it)
+  and calls `IRobocopyObserver.OnSuspendedForCancel`, then kills it and waits. While it is
+  suspended, the job (`Job.ObserveAtKill`) takes the step's files not yet reported complete and
+  not present before the step, lists each of their destination folders once, and for every one
+  that exists calls `ProcessNative.ObserveAtKill`: a handle with `FILE_READ_ATTRIBUTES` only (no
+  sharing mode refuses it) and `FILE_FLAG_OPEN_REPARSE_POINT`, the file's identity (volume
+  serial, file ID from `FILE_ID_INFO` or, on FAT32/exFAT, the 64-bit file index, plus the
+  creation time, because FAT reuses an index for the next file in the same directory slot) and
+  the processes that hold it open (`FileProcessIdsUsingFileInformation`). Each file is
+  `OpenByRobocopy`, `NotOpenByRobocopy`, `Absent` or `Unknown`. Then
+  `CancelCleanup.Select(ledger.KilledRunFiles, ledger.CompletedSources, presence set,
+  observations, move, destinationExists, sourceStillExists, claimedByOtherJob)`, skipped entirely
+  when the ledger found robocopy's paths unreliable. Each `Delete` entry goes through
+  `ProcessNative.DeleteFileIfSameFile`: one handle opened with `FILE_FLAG_OPEN_REPARSE_POINT` (no
+  backup semantics, so a folder does not open), identity and attributes checked on that handle,
+  deleted with `FileDispositionInfo` on the same handle; no check-then-delete window, and a file
+  swapped in under the same name after the kill is not the one observed. Rules (each tested,
+  each test seen failing with the rule removed):
+  - candidates are only the unfinished files of runs the cancel killed; a run that ended on its
+    own contributes nothing (what it did not report it skipped or failed on);
+  - a file is deleted only if robocopy held it open while suspended and its identity is known.
+    A late arrival that robocopy skipped (it prints nothing for those) is `NotOpenByRobocopy`
+    and stays. This closes the race the merge review left open (section 16): a file that
+    appeared after the presence check is never deleted, because robocopy never opens a file it
+    skips;
+  - reported-complete files stay; files present before their step are never deleted and are
+    reported as possibly incomplete only under an overwriting policy (`RobocopyArgs.MayOverwriteExisting`:
+    Replace, KeepNewer); files another job of this session planned or wrote are never deleted;
+    for a cut, a destination whose source is gone stays;
+  - without evidence (robocopy could not be suspended, or the file system cannot answer) nothing
+    is deleted; an existing new file is reported as possibly incomplete instead.
+  `LeftInPlace` becomes `JobSnapshot.DamagedOnCancel` (attention, toast, "Finish copying them" /
+  "Finish moving them", which repeats them with Replace). Each cleanup writes one path-free
+  debug line (`RoboRightClick cancel cleanup: candidates=… open=… notOpen=… deleted=…`).
+  Remaining edges: a late arrival under a Replace step is overwritten by robocopy itself, so a
+  cancel deletes the partial overwrite (the loss is the overwrite's, which a normal run makes
+  too); robocopy decides skip or copy when it lists a folder, so a file that appears after that
+  listing is overwritten in any run, canceled or not (robocopy's own race, not cleanup's).
 - **Errors** → `DoneWithErrors`; "Try again (N)" = `JobManager.Retry(parent)` →
   `RetryPlanner.ForFailures(plan, ledger.Retryable, ledger.FailedInProcessSteps)` per ledger
   part; a child job with `ParentId`, logging mode `JobSinks.ForDerivedJob(parent, current)`;
@@ -472,7 +497,7 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Claim | Status |
 |---|---|
 | `/UNILOG` to a named pipe carries exact UTF-16; stdout cannot | verified (testlog 2026-10-02) |
-| Under `/MT:32` file lines arrive at completion; failed file line precedes its ERROR | verified (testlog 2026-10-02) |
+| Under `/MT:32` file lines arrive at completion; failed file line precedes its ERROR | verified (testlog 2026-10-02); after a kill one more line can arrive for a file still being written (4 of 4 probe runs), which the parser drops as a held line (testlog 2026-10-02, cancel entry) |
 | `GetProcessIoCounters` tracks progress; destination size does not | verified (testlog 2026-10-02) |
 | `NtSuspendProcess`/`NtResumeProcess` pause and resume `/MT:32` cleanly | verified (testlog 2026-10-02) |
 | Metadata flags vs Explorer | verified, deviations in docs/parity.md |
@@ -487,7 +512,9 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Explorer allows the tray to take foreground (conflict dialog, progress window) | **unverified** (spike 1) |
 | Remote clients are refused by the output pipe | **unverified** |
 | Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | **unverified** |
-| `DeleteFileIfNotReparsePoint` (handle-based delete, read-only cleared first) deletes partial files and refuses links and folders | **unverified** |
+| Cancel cleanup deletes the partial copies robocopy held open while suspended for the kill (`FileProcessIdsUsingFileInformation`, identity-checked handle delete) and keeps a late arrival robocopy skipped | verified on NTFS, FAT32 and exFAT (testlog 2026-10-02, cancel entry); through the app on an SMB share **unverified** (the PID query answered on an SMB loopback share with plain robocopy); refusing links and folders, and clearing read-only first, **unverified** |
+| A cut never deletes a source whose copy failed: locked source, access-denied destination, full destination, canceled cross-volume cut | verified (testlog 2026-10-02, cancel entry) |
+| With `/NC`, robocopy prints destination-only ("extra") files like copied files; `/XX` removes them | verified (testlog 2026-10-02, cancel entry) |
 | A losing `-Embedding` start takes over from a tray that is shutting down (`WaitForReadyOrAcquire`) | outcome verified (testlog 2026-10-02: 5 runs, the call served by the new tray); which branch ran **unverified** |
 | `ShutdownBlockReasonCreate` on a hidden, never-shown top-level window vetoes sign-out with the reason shown | **unverified** |
 | No WER report after `TerminateProcess` while ephemeral jobs run (machine-wide LocalDumps aside) | **unverified** |
@@ -496,7 +523,7 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | `SetDefaultDllDirectories(SYSTEM32)` does not break WinForms start-up in a single-file app | verified (testlog 2026-10-02); the planted-DLL check **unverified** |
 | Explorer ghosts icons after a Robo-Cut clipboard write | verified false: no ghosting (testlog 2026-10-02, deviation in docs/parity.md) |
 | Robocopy `/MOV` deletes the source of a "same" file it skipped | **unverified**; the design no longer depends on it either way |
-| A killed robocopy leaves its in-flight files at full length (cancel cleanup's premise) | **unverified** |
+| A killed robocopy leaves its in-flight files at full length | verified (testlog 2026-10-02, cancel entry); cleanup no longer depends on it |
 | `CopyFileEx` sets the archive bit like Explorer's copy | **unverified** |
 | Generated COM vtables match the shell's (`[GeneratedComInterface]` on these IDLs) | verified for every method the app calls: `IClassFactory`, `IExecuteCommand`, `IObjectWithSelection`, `IInitializeCommand`, `IShellItemArray.BindToHandler`/`GetCount`, `IDataObject.GetData` (testlog 2026-10-02) |
 | Everything else in the host | **unverified**; cross-compiles only |
@@ -615,7 +642,8 @@ Questions the parallel packages raised, and how the merged code answers them.
 Known gaps carried into the Windows phase:
 
 - Cancel cleanup cannot tell a partial file from a late arrival robocopy skipped silently in
-  the same killed run (section 6).
+  the same killed run (section 6). Resolved after the merge: cleanup deletes only files robocopy
+  held open at the kill (section 6, testlog 2026-10-02 cancel entry).
 - `CF_HDROP` size is not capped on Robo-Copy; Robo-Paste refuses past its limit.
 - An oversized selection makes `Execute` return `E_FAIL` without a toast; no COM call timeout
   guards against a hostile in-process `IShellItemArray` that blocks.
