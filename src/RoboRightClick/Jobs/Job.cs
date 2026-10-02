@@ -1082,8 +1082,26 @@ internal sealed class Job
             File.Exists,
             path => Services.Claims.ClaimedByOtherJob(Id, path));
 
+        // Invariant 1, belt and braces: whatever the selection says, a path this job reads as
+        // a source is never deleted by cleanup.
+        var sources = new HashSet<string>(WinPath.Comparer);
+        foreach (var part in parts)
+        {
+            foreach (var step in part.Plan.Steps)
+            {
+                foreach (var file in step.Files)
+                {
+                    sources.Add(WinPath.NormalizeForMatch(file.SourcePath));
+                }
+            }
+        }
+
         foreach (var path in plan.Delete)
         {
+            if (sources.Contains(WinPath.NormalizeForMatch(path)))
+            {
+                continue;
+            }
             DeleteIfPlainFile(path);
         }
 

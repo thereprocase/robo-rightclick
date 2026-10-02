@@ -157,9 +157,11 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     /// </remarks>
     public IReadOnlyList<JobSnapshot> Snapshots()
     {
-        var jobs = Volatile.Read(ref _jobs);
         lock (_snapshotLock)
         {
+            // Read inside the lock: a caller that read the list earlier and then waited for the
+            // lock would otherwise cache an older list over a newer one.
+            var jobs = Volatile.Read(ref _jobs);
             if (ReferenceEquals(jobs, _cachedJobs) && !VersionsChanged(jobs))
             {
                 return _cachedSnapshots;
@@ -380,6 +382,12 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         {
             // "Pause all" was switched on while this job was being created.
             job.Pause();
+        }
+        else if (!_pauseAll && job.Start.StartPaused)
+        {
+            // "Resume all" ran between reading the flag and publishing this job, so its
+            // pass missed it; without this it would stay paused with nothing to resume it.
+            job.Resume();
         }
         job.DeliverInBackground();
         Ui.Post(_ => RaiseCreated(id), null);
