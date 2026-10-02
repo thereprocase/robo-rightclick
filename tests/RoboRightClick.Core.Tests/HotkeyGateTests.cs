@@ -95,12 +95,29 @@ public class HotkeyLatchTests
     }
 
     [Fact]
-    public void A_double_tap_triggers_twice_because_each_tap_has_its_key_up()
+    public void A_double_tap_triggers_twice_in_the_latch_and_the_repeat_guard_keeps_one()
     {
         var latch = new HotkeyLatch();
         Assert.Equal(Trigger, latch.Next(LatchInput.KeyDown, true, 0));
         Assert.Equal(Swallow, latch.Next(LatchInput.KeyUp, false, 60));
         Assert.Equal(Trigger, latch.Next(LatchInput.KeyDown, true, 120));
+        Assert.True(HotkeyRepeatGuard.Accept(hasPrevious: false, previous: 0, now: 0));
+        Assert.False(HotkeyRepeatGuard.Accept(hasPrevious: true, previous: 0, now: 120));
+    }
+
+    [Fact]
+    public void The_repeat_guard_accepts_from_the_window_on()
+    {
+        Assert.False(HotkeyRepeatGuard.Accept(true, 1000, 1000 + HotkeyRepeatGuard.WindowMs - 1));
+        Assert.True(HotkeyRepeatGuard.Accept(true, 1000, 1000 + HotkeyRepeatGuard.WindowMs));
+        Assert.True(HotkeyRepeatGuard.Accept(true, 1000, 60_000));
+    }
+
+    [Fact]
+    public void The_repeat_guard_survives_the_tick_wrapping()
+    {
+        Assert.False(HotkeyRepeatGuard.Accept(true, uint.MaxValue - 100, 100));
+        Assert.True(HotkeyRepeatGuard.Accept(true, uint.MaxValue - 100, HotkeyRepeatGuard.WindowMs));
     }
 
     [Fact]

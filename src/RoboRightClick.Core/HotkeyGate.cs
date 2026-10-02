@@ -202,6 +202,24 @@ public sealed class HotkeyLatch
     }
 }
 
+/// <summary>
+/// One paste per double tap. The latch triggers once per physical press, so a quick
+/// double tap is two presses; this drops a trigger that comes within <see cref="WindowMs"/>
+/// of the last press that was handed on. The key is still taken, so the second tap does not
+/// reach File Explorer either. A bouncing key switch is caught by the same rule.
+/// </summary>
+public static class HotkeyRepeatGuard
+{
+    /// <summary>Windows' default double-click time.</summary>
+    public const uint WindowMs = 500;
+
+    /// <param name="hasPrevious">A press has been handed on since the hotkey was configured.</param>
+    /// <param name="previous">That press's tick.</param>
+    /// <param name="now">This press's tick.</param>
+    public static bool Accept(bool hasPrevious, uint previous, uint now) =>
+        !hasPrevious || HotkeyDeadline.Elapsed(previous, now) >= WindowMs;
+}
+
 /// <summary>Where the gate says a hotkey press belongs.</summary>
 public enum GateResult
 {

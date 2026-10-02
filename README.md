@@ -118,7 +118,7 @@ this section is verified on Windows yet; the checks that will verify it are list
 - Click in the folder's file list first. With focus in the navigation pane, the search box,
   the address bar or a name being edited, the key goes to that control as usual (in text
   fields Ctrl+Shift+V is paste as plain text).
-- Holding the keys down pastes once.
+- Holding the keys down pastes once, and so does pressing them twice within half a second.
 - Ctrl+Z does not undo a Robo-Paste.
 - Pressed right after a Ctrl+C or Ctrl+X, it waits up to a second for that copy or cut to
   reach the clipboard, and otherwise does nothing and says so, rather than paste what was on

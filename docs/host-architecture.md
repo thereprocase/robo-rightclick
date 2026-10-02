@@ -117,7 +117,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `ConflictSelection.cs`, `JobStateText.cs`, `ProgressWindowPolicy.cs`, `ToastBatch.cs` | Conflict-dialog ticks, state wording, when a progress window opens or turns into the summary, toast coalescing. | implemented, tested |
 | `StartupRules.cs` | Tray start, exit, menu state, startup toast choice, conflict-to-front. | implemented, tested |
 | `HotkeySpec.cs` | `pasteHotkey` grammar, canonical form, reserved combinations with reasons, virtual-key mapping. | implemented, tested, sabotage-checked |
-| `HotkeyGate.cs` | `HotkeyMatcher`, `HotkeyLatch`, `HotkeyGate.Decide` (file-list allow-list), window-class classification, `HotkeyStatus`. | implemented, tested, sabotage-checked |
+| `HotkeyGate.cs` | `HotkeyMatcher`, `HotkeyLatch`, `HotkeyRepeatGuard` (double tap), `HotkeyGate.Decide` (file-list allow-list), window-class classification, `HotkeyStatus`. | implemented, tested, sabotage-checked |
 | `HotkeyTarget.cs` | `HotkeyPress`, `TabMatch.Choose`, `PasteFolderRule`, `HotkeyDeadline`, `ClipboardGuard`. | implemented, tested, sabotage-checked |
 | `WinPath.cs` | Windows path rules as strings, incl. `ExtendedLengthPath` / `StripVerbatimPrefix` for raw Win32 calls. | implemented, tested |
 

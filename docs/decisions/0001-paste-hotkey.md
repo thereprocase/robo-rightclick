@@ -42,7 +42,11 @@ a later change:
    nothing about the hotkey is logged, in either logging mode.
 5. **One press, one paste.** The hook has no repeat flag. Core `HotkeyLatch` takes a held
    combination's repeats without triggering again, and a key-down that fails the gate resets
-   it and passes, so a lost key-up can never keep eating the key.
+   it and passes, so a lost key-up can never keep eating the key. A double tap is two
+   presses to the latch; Core `HotkeyRepeatGuard` drops a press within 500 ms (the default
+   double-click time) of the last one handed on, so release gate 4's "a double tap gives one
+   job" holds. The second tap is still taken. Explorer's own Ctrl+V pasted twice would paste
+   twice; one accidental duplicate copy costs more than one deliberate second press.
 6. **No guessing the target.** The hook captures the focused list's `ShellTabWindowClass`
    ancestor at the press. The locator pastes into the one ShellWindows entry whose
    `IShellBrowser::GetWindow` is that tab, in a window owned by `%SystemRoot%\explorer.exe`,

@@ -60,6 +60,8 @@ internal sealed unsafe class PasteHotkey : IDisposable
     private bool _copyCutNoted;
     private uint _copyCutTime;
     private uint _copyCutSequence;
+    private bool _hasCaptured;
+    private uint _lastCaptureTime;
 
     // The handoff slot: written by the hook thread only after taking _slotBusy, read by the
     // locator only after Pressed fired, released by the locator.
@@ -194,6 +196,7 @@ internal sealed unsafe class PasteHotkey : IDisposable
         }
         _latch.Reset();
         _copyCutNoted = false;
+        _hasCaptured = false;
         if (update.Spec is not { } spec)
         {
             _enabled = false;
@@ -424,12 +427,20 @@ internal sealed unsafe class PasteHotkey : IDisposable
             menuMode);
     }
 
+    /// <summary>
+    /// Hands one press to the locator, unless it is a double tap's second press
+    /// (<see cref="HotkeyRepeatGuard"/>) or a press is still in flight. Either way the key
+    /// stays taken.
+    /// </summary>
     private void Capture(GateDecision gate, nint foreground, uint time)
     {
-        if (Interlocked.CompareExchange(ref _slotBusy, 1, 0) != 0)
+        if (!HotkeyRepeatGuard.Accept(_hasCaptured, _lastCaptureTime, time)
+            || Interlocked.CompareExchange(ref _slotBusy, 1, 0) != 0)
         {
             return;
         }
+        _hasCaptured = true;
+        _lastCaptureTime = time;
         var tab = gate.Result == GateResult.Explorer && gate.TabAncestor >= 0 ? _ancestorHandles[gate.TabAncestor] : 0;
         _slot = new HotkeyPress(
             foreground,
