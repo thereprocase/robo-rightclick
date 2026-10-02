@@ -23,10 +23,27 @@ Robocopy flags: `/COPY:DAT /DCOPY:DA /A+:A /XJD` (plus `/MT:32 /R:0 /W:0` and th
 | File symlink | copied as a regular file holding the target's content | same | yes |
 | Junction / directory symlink | **empty folder**, link not followed | not followed (`/XJD`); no folder created | **partly**: see deviations |
 | Path longer than 260 characters (342 tested) | silently skipped beyond about 200 characters (with no-error-UI flag) | copied | robo is better |
-| Icon ghosting after Robo-Cut | | | pending (needs the host) |
+| Icon ghosting after Robo-Cut | Ctrl+X dims the icon at once | not dimmed, also after F5 | **no**: see deviations |
 
 Not yet measured: cross-volume move (needs a second volume, M4) and conflict prompts (driven
 through the real UI in M4).
+
+## Menu and clipboard
+
+Measured on the same VM in the activation session of 2026-10-02 (docs/testlog.md), with the
+real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
+
+| Situation | Explorer (measured) | Robo (measured) | Match |
+|---|---|---|---|
+| Where the items appear | classic Cut/Copy/Paste under "Show more options"; Shift+F10 opens the new menu, whose "Show more options" (W) opens the classic one | same place, same route | yes |
+| Menu icons | none on the classic Cut, Copy, Paste | none | yes |
+| Preferred DropEffect of a copy | 5 (copy and link) | 1 (copy) | equivalent: both paste as a copy, in both directions |
+| Copy, then Explorer's Ctrl+V into the folder it came from | "name - Copy" | "name - Copy" (Robo-Copy writes the Shell IDList Array beside CF_HDROP) | yes |
+| Cut, then Explorer's Ctrl+V | moves; clipboard emptied | moves; the cut stays on the clipboard | **no**: see deviations |
+| Explorer's Ctrl+C or Ctrl+X, then a paste | Ctrl+V copies, or moves and empties the clipboard | Robo-Paste copies, or moves and empties the clipboard | yes |
+| Cut-paste while the clipboard changed meanwhile | not measured | the newer clipboard is kept | not measured |
+| Paste offered on a selection of two folders | yes; pastes into the right-clicked folder only | Robo-Paste not offered | **no**: see deviations |
+| Paste on a folder background, a folder, a drive | into the open folder, that folder, the drive root | same | yes |
 
 ## Deviations
 
@@ -41,6 +58,19 @@ through the real UI in M4).
   rather than interrupting mid-copy. Robocopy can't pause on an error and wait for input.
 - **Long paths are copied.** Explorer skipped them in the measured run. This deviation is an
   improvement and is kept on purpose.
+- **Robo-Cut does not dim the cut items' icons.** Explorer dimmed the icon for its own Ctrl+X;
+  after a Robo-Cut (Preferred DropEffect 2, CF_HDROP, with or without a Shell IDList Array)
+  the icon stayed normal, also after a refresh (M0 spike 5). The cut is still a cut:
+  Explorer's Ctrl+V and Robo-Paste both move.
+- **A Robo-Cut pasted with Explorer's Ctrl+V stays on the clipboard.** Explorer's own cut is
+  emptied from the clipboard after the paste; a Robo-Cut is not. The likely reason (not
+  measured): the shell reports a finished move back to the data object that offered it
+  ("Paste Succeeded"), and Robo-Cut writes plain clipboard data with no object behind it to
+  receive that report. Pasting the stale cut a second time finds the
+  sources gone. Robo-Paste of a cut does empty the clipboard, as Explorer does.
+- **No Robo-Paste on a selection of several folders.** Explorer offers Paste there and pastes
+  into the folder that was right-clicked. The shell does not tell a DelegateExecute verb which
+  item was clicked, so the item is hidden (`MultiSelectModel=Single`) rather than guessing.
 
 Design deviations (decided, not yet measured against Explorer):
 
