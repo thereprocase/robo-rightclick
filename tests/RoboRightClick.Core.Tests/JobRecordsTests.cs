@@ -193,6 +193,39 @@ public class JobRecordsTests
         Assert.Null(JobRecords.LastState(text));
     }
 
+    // Enum.TryParse would accept each of these; the comma lists OR to a different state
+    // ("running, paused" is 3 | 4 = DoneWithErrors), turning an interrupted job terminal.
+    [Theory]
+    [InlineData("running, paused")]
+    [InlineData("queued,running")]
+    [InlineData(" running")]
+    [InlineData("running ")]
+    [InlineData("Running")]
+    [InlineData("RUNNING")]
+    [InlineData("3")]
+    [InlineData("-1")]
+    public void LastState_accepts_only_the_exact_names_it_writes(string name)
+    {
+        Assert.Null(JobRecords.LastState("{\"states\":[{\"state\":\"" + name + "\"}]}"));
+    }
+
+    [Fact]
+    public void An_unpaired_surrogate_in_a_path_does_not_throw()
+    {
+        // NTFS names are arbitrary UTF-16, so a real source path can hold a lone surrogate.
+        // The formats must still be produced (lossily, as U+FFFD) rather than fail the sink.
+        var job = Job() with { Sources = ["C:\\src\\a\uD800b", "C:\\src\\\uDC00"], Destination = "D:\\x\uD83D" };
+        var summary = new JobSummary(Id, JobState.Done, 1, 1, [new ErrorReported(5, "Copying File", "C:\\\uD800", "denied")]);
+
+        using var record = JsonDocument.Parse(JobRecords.ToJson(Record(summary) with { Job = job }));
+        Assert.Equal("C:\\src\\a\uFFFDb", record.RootElement.GetProperty("job").GetProperty("sources")[0].GetString());
+
+        var line = JobRecords.ToHistoryLine(job, summary, Created);
+        Assert.DoesNotContain('\n', line);
+        using var history = JsonDocument.Parse(line);
+        Assert.Equal("D:\\x\uFFFD", history.RootElement.GetProperty("destination").GetString());
+    }
+
     [Fact]
     public void LastState_survives_pathological_nesting()
     {

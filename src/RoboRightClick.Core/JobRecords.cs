@@ -156,16 +156,28 @@ public static class JobRecords
             {
                 return null;
             }
-            // IsDefined rejects numeric strings such as "99" that Enum.TryParse accepts.
-            return Enum.TryParse<JobState>(name.GetString(), ignoreCase: true, out var state) && Enum.IsDefined(state)
-                ? state
-                : null;
+            return ParseStateName(name.GetString());
         }
         catch (JsonException)
         {
             // A job.json cut off by a crash or power loss is not a job record.
             return null;
         }
+    }
+
+    // Exact match against the names ToJson writes. Enum.TryParse is too lenient for a file
+    // that may be damaged: it accepts numbers, padding and comma lists that it ORs together,
+    // so "running, paused" would read as DoneWithErrors and hide an interrupted job.
+    private static JobState? ParseStateName(string? name)
+    {
+        foreach (var state in Enum.GetValues<JobState>())
+        {
+            if (string.Equals(name, CamelCase(state), StringComparison.Ordinal))
+            {
+                return state;
+            }
+        }
+        return null;
     }
 
     // A summary built without TotalErrors still reports the errors it carries.
