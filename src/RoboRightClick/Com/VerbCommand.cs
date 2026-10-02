@@ -110,14 +110,29 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
 
     public int SetNoShowUI(bool fNoShowUI) => HResult.S_OK;
 
-    public int SetDirectory(string? pszDirectory) => HResult.S_OK;
+    /// <summary>
+    /// For a folder-background click this is the only place the folder arrives: Explorer
+    /// passes no selection then. For a click on items it is their parent folder, and
+    /// <see cref="ShellVerbs.InvocationItems"/> decides which of the two a verb uses.
+    /// Untrusted like the selection; the handler checks it.
+    /// </summary>
+    public int SetDirectory(string? pszDirectory)
+    {
+        Directory = pszDirectory;
+        return HResult.S_OK;
+    }
+
+    /// <summary>The folder Explorer set with SetDirectory, if any.</summary>
+    public string? Directory { get; private set; }
 
     /// <summary>
     /// 1. <see cref="ComCallerSecurity.CallerIsAtLeastMediumIntegrity"/>, else E_ACCESSDENIED.
     /// 2. Reads every path from <see cref="Selection"/> with <see cref="ShellSelection.ReadPaths"/>
     /// (the array is an out-of-process proxy, so it is read here, synchronously, and then
-    /// released). 3. Hands them to <see cref="Handler"/> and returns S_OK. No dialog, no
-    /// file-system work and no waiting happens inside this call.
+    /// released). A background click has no selection. 3. <see cref="ShellVerbs.InvocationItems"/>
+    /// picks the selection or, for a background paste, <see cref="Directory"/>; nothing at
+    /// all is E_FAIL. 4. Hands the items to <see cref="Handler"/> and returns S_OK. No dialog,
+    /// no file-system work and no waiting happens inside this call.
     /// </summary>
     public int Execute()
     {
@@ -130,27 +145,30 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
                 return HResult.E_ACCESSDENIED;
             }
 
-            var array = Selection;
-            if (array is null)
+            var selection = new SelectionPaths([], 0);
+            var readTimer = Stopwatch.StartNew();
+            if (Selection is { } array)
+            {
+                try
+                {
+                    selection = ShellSelection.ReadPaths(array);
+                }
+                finally
+                {
+                    // Read once, then released: the array is a cross-process proxy.
+                    ReleaseSelection();
+                }
+            }
+            readTimer.Stop();
+
+            var items = ShellVerbs.InvocationItems(Verb, selection.Paths, selection.SkippedItems, Directory);
+            if (items.Count == 0 && selection.SkippedItems == 0)
             {
                 return HResult.E_FAIL;
             }
 
-            SelectionPaths selection;
-            var readTimer = Stopwatch.StartNew();
-            try
-            {
-                selection = ShellSelection.ReadPaths(array);
-            }
-            finally
-            {
-                // Read once, then released: the array is a cross-process proxy.
-                ReleaseSelection();
-            }
-            readTimer.Stop();
-
-            TraceExecute(selection, readTimer.Elapsed);
-            Handler.Invoke(Verb, selection.Paths, selection.SkippedItems);
+            TraceExecute(items.Count, selection.SkippedItems, fromDirectory: !ReferenceEquals(items, selection.Paths), readTimer.Elapsed);
+            Handler.Invoke(Verb, items, selection.SkippedItems);
             return HResult.S_OK;
         }
         catch (Exception)
@@ -168,12 +186,12 @@ internal sealed partial class VerbCommand : IExecuteCommand, IObjectWithSelectio
     /// whole selection arrived in one call and how long a COM cold start took. Counts and
     /// times only, never a path, so it is allowed in ephemeral mode.
     /// </summary>
-    private void TraceExecute(SelectionPaths selection, TimeSpan read)
+    private void TraceExecute(int items, int skipped, bool fromDirectory, TimeSpan read)
     {
         var uptime = DateTime.Now - Process.GetCurrentProcess().StartTime;
         Trace.WriteLine(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"RoboRightClick: Execute verb={Verb} items={selection.Paths.Count} skipped={selection.SkippedItems} readMs={read.TotalMilliseconds:F1} uptimeMs={uptime.TotalMilliseconds:F0}"));
+            $"RoboRightClick: Execute verb={Verb} items={items} skipped={skipped} fromDirectory={fromDirectory} readMs={read.TotalMilliseconds:F1} uptimeMs={uptime.TotalMilliseconds:F0}"));
     }
 
     private void ReleaseSelection()

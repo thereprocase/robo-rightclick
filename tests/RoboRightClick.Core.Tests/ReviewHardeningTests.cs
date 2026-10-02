@@ -507,6 +507,55 @@ public class InstallFootprintTests
         Assert.Equal("Single", ShellVerbs.RoboPaste.MultiSelectModel);
         Assert.Equal("Player", ShellVerbs.RoboCopy.MultiSelectModel);
         Assert.Equal("Player", ShellVerbs.RoboCut.MultiSelectModel);
+        Assert.Equal("Single", ShellVerbs.MultiSelectModelFor(ShellVerbs.RoboPaste, "Directory"));
+        Assert.Equal("Single", ShellVerbs.MultiSelectModelFor(ShellVerbs.RoboPaste, "Drive"));
+    }
+
+    // Observed on Windows 11 build 26200 (docs/testlog.md 2026-10-02): with
+    // MultiSelectModel=Single on Directory\Background, Explorer leaves Robo-Paste out of the
+    // background menu; without the value it shows.
+    [Fact]
+    public void The_background_paste_has_no_multi_select_model()
+    {
+        Assert.Contains(ShellVerbs.BackgroundAssociation, ShellVerbs.RoboPaste.Associations);
+        Assert.Null(ShellVerbs.MultiSelectModelFor(ShellVerbs.RoboPaste, ShellVerbs.BackgroundAssociation));
+    }
+
+    // Explorer's background call: SetDirectory(folder), SetSelection(NULL), Execute
+    // (observed 2026-10-02, docs/testlog.md).
+    [Fact]
+    public void A_background_paste_targets_the_directory_explorer_set()
+    {
+        Assert.Equal([@"C:\dst"], ShellVerbs.InvocationItems(ShellVerb.RoboPaste, [], 0, @"C:\dst"));
+    }
+
+    [Fact]
+    public void A_folder_right_click_pastes_into_that_folder_not_its_parent()
+    {
+        // For a click on an item Explorer sets the directory to the item's parent.
+        Assert.Equal([@"C:\dst\sub"], ShellVerbs.InvocationItems(ShellVerb.RoboPaste, [@"C:\dst\sub"], 0, @"C:\dst"));
+    }
+
+    [Fact]
+    public void A_virtual_item_selection_is_not_redirected_to_the_directory()
+    {
+        Assert.Empty(ShellVerbs.InvocationItems(ShellVerb.RoboPaste, [], 1, @"C:\dst"));
+    }
+
+    [Theory]
+    [InlineData(ShellVerb.RoboCopy)]
+    [InlineData(ShellVerb.RoboCut)]
+    public void Copy_and_cut_never_take_the_directory_as_their_items(ShellVerb verb)
+    {
+        Assert.Empty(ShellVerbs.InvocationItems(verb, [], 0, @"C:\dst"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void No_selection_and_no_directory_leaves_nothing(string? directory)
+    {
+        Assert.Empty(ShellVerbs.InvocationItems(ShellVerb.RoboPaste, [], 0, directory));
     }
 
     [Fact]

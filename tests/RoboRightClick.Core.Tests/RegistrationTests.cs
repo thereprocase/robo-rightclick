@@ -64,7 +64,14 @@ public class RegistrationTests
             {
                 var verbKey = Registration.VerbKey(association, verb);
                 Assert.Contains(new RegistryValue(verbKey + @"\command", "DelegateExecute", Registration.FormatGuid(verb.Clsid)), values);
-                Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", verb.MultiSelectModel), values);
+                if (association == ShellVerbs.BackgroundAssociation)
+                {
+                    Assert.DoesNotContain(values, v => v.Key == verbKey && v.Name == "MultiSelectModel");
+                }
+                else
+                {
+                    Assert.Contains(new RegistryValue(verbKey, "MultiSelectModel", verb.MultiSelectModel), values);
+                }
                 Assert.Contains(new RegistryValue(verbKey, "MUIVerb", verb.Label), values);
             }
             Assert.Contains(new RegistryValue(Registration.ClsidKey(verb.Clsid) + @"\LocalServer32", "", "\"" + Exe + "\""), values);

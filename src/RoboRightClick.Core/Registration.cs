@@ -86,7 +86,10 @@ public static class Registration
             {
                 var verbKey = VerbKey(association, verb);
                 values.Add(new(verbKey, "MUIVerb", verb.Label));
-                values.Add(new(verbKey, "MultiSelectModel", verb.MultiSelectModel));
+                if (ShellVerbs.MultiSelectModelFor(verb, association) is { } model)
+                {
+                    values.Add(new(verbKey, "MultiSelectModel", model));
+                }
                 // DelegateExecute lives on the verb's "command" subkey, as in
                 // Microsoft's ExecuteCommandVerb sample (RegisterExtension.cpp).
                 values.Add(new(verbKey + @"\command", "DelegateExecute", FormatGuid(verb.Clsid)));

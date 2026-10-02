@@ -525,7 +525,10 @@ function Get-ExpectedRegistry([string]$ExePath, [string]$Version) {
         foreach ($assoc in $v.Associations) {
             $verbKey = "Software\Classes\$assoc\shell\$($v.Key)"
             Add-Row $verbKey 'MUIVerb' 'String' $v.Label
-            Add-Row $verbKey 'MultiSelectModel' 'String' $v.Multi
+            # A background click selects nothing; Explorer hides a background verb marked Single.
+            if ($assoc -ne 'Directory\Background') {
+                Add-Row $verbKey 'MultiSelectModel' 'String' $v.Multi
+            }
             Add-Row "$verbKey\command" 'DelegateExecute' 'String' $v.Clsid
         }
     }

@@ -46,9 +46,36 @@ public static class ShellVerbs
     // right-click on a folder or drive, pasting into it, as Explorer's own Paste does.
     public static readonly ShellVerbInfo RoboPaste = new(
         ShellVerb.RoboPaste, new Guid("9d1bae79-13c3-427f-a7e6-34150d5c49ab"),
-        "RoboPaste", "Robo-Paste", [@"Directory\Background", "Directory", "Drive"], "Single");
+        "RoboPaste", "Robo-Paste", [BackgroundAssociation, "Directory", "Drive"], "Single");
 
     public static readonly IReadOnlyList<ShellVerbInfo> All = [RoboCopy, RoboCut, RoboPaste];
+
+    /// <summary>Right-click on the empty space of a folder: a click with no selected item.</summary>
+    public const string BackgroundAssociation = @"Directory\Background";
+
+    /// <summary>
+    /// The MultiSelectModel value written for <paramref name="verb"/> under
+    /// <paramref name="association"/>, or null for none. A background click selects nothing,
+    /// and Explorer hides a background verb marked "Single" (it counts zero items), so the
+    /// background key gets no value; the item keys keep the verb's model.
+    /// </summary>
+    public static string? MultiSelectModelFor(ShellVerbInfo verb, string association) =>
+        association == BackgroundAssociation ? null : verb.MultiSelectModel;
+
+    /// <summary>
+    /// The items one invocation acts on. Explorer invokes a folder-background verb with no
+    /// selection and the folder in IExecuteCommand::SetDirectory; for a click on items it
+    /// passes the items as the selection and their parent folder as the directory. The
+    /// directory therefore stands in only for Robo-Paste, and only when nothing at all was
+    /// selected: preferring it whenever present would paste a right-clicked folder's
+    /// clipboard into that folder's parent, and a selection of virtual items (counted in
+    /// <paramref name="skippedItems"/>) must be refused, not redirected to the parent.
+    /// </summary>
+    public static IReadOnlyList<string> InvocationItems(
+        ShellVerb verb, IReadOnlyList<string> selected, int skippedItems, string? directory) =>
+        verb == ShellVerb.RoboPaste && selected.Count == 0 && skippedItems == 0 && !string.IsNullOrEmpty(directory)
+            ? [directory]
+            : selected;
 
     public static ShellVerbInfo Get(ShellVerb verb) => All.Single(v => v.Verb == verb);
 
