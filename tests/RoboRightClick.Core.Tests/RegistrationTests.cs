@@ -102,9 +102,15 @@ public class RegistrationTests
     }
 
     /// <summary>
-    /// The classic-menu letters Explorer itself uses, per kind of right-click, as named in the
-    /// design review. Not measured yet: the release gate measures them on Windows and replaces
-    /// this table with what it finds (docs/decisions/0001-paste-hotkey.md).
+    /// Provisional. The classic-menu letters Explorer itself uses, per kind of right-click, as
+    /// named in the design review. Not measured yet: the release gate measures them on Windows
+    /// and replaces this table with what it finds (docs/decisions/0001-paste-hotkey.md). Until
+    /// then this test only proves the letters avoid the table. Entries Explorer adds for one
+    /// kind of item are left out, and some likely share a letter: "Troubleshoot
+    /// compatibility" on programs and shortcuts and "Open AutoPlay" on removable drives
+    /// probably use Y, so Robo-Copy's Y may move between two items there (README describes
+    /// that behavior); BitLocker entries on drives may use B. Y stays because every other
+    /// letter of "Robo-Copy" is taken on the common menu or by Robo-Paste on folders.
     /// </summary>
     private static readonly Dictionary<string, string> ExplorerLettersByMenu = new()
     {

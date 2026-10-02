@@ -427,7 +427,11 @@ internal sealed partial class ExplorerFolderLocator : IDisposable
     /// <summary>
     /// Every COM reference taken for one press, released together on this thread: raw
     /// pointers with Marshal.Release, proxies with FinalRelease (created as unique instances,
-    /// so the release happens now and not on the finalizer thread).
+    /// so the release happens now and not on the finalizer thread). A wrapped pointer is
+    /// released by both, and that is balanced, not a double release: the proxy takes a
+    /// reference of its own when it is created (StrategyBasedComWrappers' default strategy
+    /// AddRefs the pointer), which FinalRelease gives back, while the reference the call
+    /// returned to us stays ours to release. ComClient and ShellSelection do the same.
     /// </summary>
     private sealed class ComScope : IDisposable
     {
