@@ -51,16 +51,16 @@ internal sealed class JobsWindow : Gridline.Window
     // width here), so at the default size every column is visible without scrolling sideways.
     private static readonly (string Caption, int Width)[] Columns =
     [
-        ("State", 100),
-        ("Job", 200),
-        ("To", 180),
-        ("Progress", 110),
-        ("Done", 150),
-        ("Files", 90),
-        ("Speed", 90),
-        ("ETA", 64),
-        ("Errors", 64),
-        ("Status", 220),
+        ("State", 96),
+        ("Job", 180),
+        ("To", 150),
+        ("Progress", 96),
+        ("Done", 136),
+        ("Files", 96),
+        ("Speed", 80),
+        ("ETA", 76),
+        ("Errors", 56),
+        ("Status", 200),
     ];
 
     private readonly System.Windows.Forms.Timer _poll;
@@ -444,6 +444,9 @@ internal sealed class JobsWindow : Gridline.Window
         {
             action(job);
             RefreshRows(force: true);
+            // The pressed button may now be disabled (Pause after a pause), and Windows then
+            // moved the focus to Cancel, where Enter would cancel the job. Back to the list.
+            _list.Focus();
         }
     }
 
