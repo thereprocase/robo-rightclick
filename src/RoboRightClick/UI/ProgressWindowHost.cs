@@ -35,7 +35,8 @@ internal sealed class ProgressWindowHost : IDisposable
 
     /// <summary>
     /// A job was created: when showProgressWindow is on, open its window after the delay
-    /// from Core's ProgressWindowPolicy unless the job already finished by then.
+    /// from Core's ProgressWindowPolicy, unless the job ended cleanly by then. A job that
+    /// already ended with errors gets its window too, opening straight into the summary.
     /// </summary>
     public void JobCreated(Guid jobId)
     {

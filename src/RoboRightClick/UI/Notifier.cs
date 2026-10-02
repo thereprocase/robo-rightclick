@@ -25,7 +25,7 @@ internal enum ToastTarget
 /// NotifyIcon shows one balloon at a time and a new one replaces the current one. Job
 /// finishes within <see cref="ToastBatch.Window"/> are coalesced into one toast
 /// ("3 pastes finished, 1 with errors"), and a warning or error toast is never replaced by
-/// an info toast while it is showing (<see cref="ToastBatch.ShouldReplace"/>). Immediate
+/// an info toast while it is showing (<see cref="ToastBatch.ShouldReplace(ToastKind, TimeSpan, ToastKind)"/>). Immediate
 /// toasts (<see cref="Show"/>) always show: they answer a click the user just made, and
 /// staying silent would look like the click did nothing. A click raises
 /// <see cref="Clicked"/> with the target of the last toast shown, rather than one
@@ -39,6 +39,7 @@ internal sealed class Notifier : IDisposable
     private readonly List<JobSnapshot> _pending = [];
     private readonly System.Windows.Forms.Timer _batchTimer;
     private ToastKind? _showing;
+    private long _showingSince;
     private ToastTarget _lastTarget = ToastTarget.None;
 
     public Notifier(NotifyIcon icon)
@@ -93,7 +94,9 @@ internal sealed class Notifier : IDisposable
         {
             return;
         }
-        if (_showing is { } showing && !ToastBatch.ShouldReplace(showing, toast.Kind))
+        // Bounded by ToastBatch.AssumedOnScreen: Windows does not always report a balloon closed.
+        var shownFor = TimeSpan.FromMilliseconds(Environment.TickCount64 - _showingSince);
+        if (_showing is { } showing && !ToastBatch.ShouldReplace(showing, shownFor, toast.Kind))
         {
             return;
         }
@@ -104,6 +107,7 @@ internal sealed class Notifier : IDisposable
     {
         var fitted = ToastBatch.Fit(toast);
         _showing = fitted.Kind;
+        _showingSince = Environment.TickCount64;
         _lastTarget = target;
         Icon.ShowBalloonTip(BalloonTimeoutMs, fitted.Title, fitted.Body, IconFor(fitted.Kind));
     }

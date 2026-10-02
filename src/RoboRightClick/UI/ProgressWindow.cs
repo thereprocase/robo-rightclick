@@ -20,7 +20,9 @@ namespace RoboRightClick.UI;
 /// </summary>
 /// <remarks>
 /// Closing the window never cancels the job: the paste carries on and stays in the tray
-/// and the Jobs window. Only Cancel cancels. The window appears without taking keyboard
+/// and the Jobs window. Only Cancel cancels. That includes an open conflict question: WinForms
+/// closes owned forms with their owner, and a closed question answers null, which cancels the
+/// job, so the window lets go of the question before it closes. The window appears without taking keyboard
 /// focus, because it opens a second after the paste and the user may be typing elsewhere;
 /// a conflict question activates its own dialog. A pause clicked before the job reaches
 /// Running is remembered here until the job reports Running or Paused, because the snapshot
@@ -29,6 +31,8 @@ namespace RoboRightClick.UI;
 internal sealed class ProgressWindow : Gridline.Window
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(250);
+
+    private const int WmClose = 0x0010;
 
     private readonly System.Windows.Forms.Timer _poll;
     private readonly Gridline.Pane _pane;
@@ -146,6 +150,21 @@ internal sealed class ProgressWindow : Gridline.Window
             e.Handled = true;
             Close();
         }
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        // Form.Close, the title bar's X and Alt+F4 all arrive as WM_CLOSE, and WinForms raises
+        // FormClosing and FormClosed on owned forms before this form's own handlers run, so
+        // the question has to be released here, ahead of base processing.
+        if (m.Msg == WmClose)
+        {
+            foreach (var question in OwnedForms.OfType<ConflictDialog>())
+            {
+                question.Owner = null;
+            }
+        }
+        base.WndProc(ref m);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

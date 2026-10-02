@@ -535,6 +535,12 @@ internal sealed class JobsWindow : Gridline.Window
 
     private void OnMenuOpening(object? sender, CancelEventArgs e)
     {
+        // The items are rebuilt for the selected job on every open; dispose the last set
+        // rather than only clearing it, so each right-click does not leave components behind.
+        foreach (var item in _menu.Items.Cast<ToolStripItem>().ToList())
+        {
+            item.Dispose();
+        }
         _menu.Items.Clear();
         if (Selected() is not { } job)
         {
