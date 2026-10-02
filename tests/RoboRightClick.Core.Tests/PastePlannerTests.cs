@@ -38,6 +38,33 @@ public class PastePlannerTests
         Assert.False(step.Move);
     }
 
+    [Theory]
+    [InlineData("-E")]
+    [InlineData("-MOV")]
+    [InlineData("-notes.txt")]
+    public void A_file_robocopy_would_read_as_a_switch_is_refused_and_the_rest_still_runs(string name)
+    {
+        var plan = PastePlanner.Plan(
+            Request(TransferVerb.Copy, @"D:\dst", (@"C:\src\" + name, false), (@"C:\src\ok.txt", false)),
+            new FakeFacts());
+
+        var step = Assert.IsType<RobocopyStep>(Assert.Single(plan.Steps));
+        Assert.Equal(["ok.txt"], step.FileNames);
+        var issue = Assert.Single(plan.Rejected);
+        Assert.Equal(@"C:\src\" + name, issue.Path);
+        Assert.Equal(PastePlanner.SwitchLikeNameReason, issue.Reason);
+    }
+
+    [Fact]
+    public void A_folder_named_like_a_switch_is_not_a_file_filter_and_still_copies()
+    {
+        var plan = PastePlanner.Plan(Request(TransferVerb.Copy, @"D:\dst", (@"C:\src\-E", true)), new FakeFacts());
+
+        var step = Assert.IsType<RobocopyStep>(Assert.Single(plan.Steps));
+        Assert.Empty(step.FileNames);
+        Assert.Empty(plan.Rejected);
+    }
+
     [Fact]
     public void Copy_folder_targets_same_named_folder_recursively()
     {

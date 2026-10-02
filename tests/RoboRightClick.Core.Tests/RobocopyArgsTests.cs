@@ -19,6 +19,27 @@ public class RobocopyArgsTests
             args);
     }
 
+    [Theory]
+    [InlineData("-E")]
+    [InlineData("-MOV")]
+    [InlineData("/MIR")]
+    public void A_file_name_robocopy_would_read_as_a_switch_is_never_put_on_the_command_line(string name)
+    {
+        var step = FileStep with { FileNames = ["ok.txt", name] };
+
+        Assert.Throws<ArgumentException>(() => RobocopyArgs.Build(step, Settings.Default, ConflictPolicy.Ask, Pipe));
+    }
+
+    [Theory]
+    [InlineData("a-b.txt", false)]
+    [InlineData("x-", false)]
+    [InlineData(" -E", false)]
+    [InlineData("-E", true)]
+    [InlineData("/E", true)]
+    [InlineData("", false)]
+    public void Only_a_leading_dash_or_slash_makes_a_name_switch_like(string name, bool expected) =>
+        Assert.Equal(expected, RobocopyArgs.IsSwitchLikeName(name));
+
     [Fact]
     public void Folder_copy_is_recursive()
     {

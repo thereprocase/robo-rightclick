@@ -156,6 +156,10 @@ public static class RobocopyArgs
         sb.Append(Quote(step.SourceDirectory)).Append(' ').Append(Quote(step.DestinationDirectory));
         foreach (var name in step.FileNames)
         {
+            if (IsSwitchLikeName(name))
+            {
+                throw new ArgumentException("A file name that robocopy would read as a switch cannot be passed as a file filter.", nameof(step));
+            }
             sb.Append(' ').Append(Quote(name));
         }
 
@@ -190,6 +194,17 @@ public static class RobocopyArgs
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Robocopy reads an argument that starts with '-' as a switch exactly like one that starts
+    /// with '/', quoted or not (verified on Windows build 26200: a file called "-E" given as a
+    /// file filter turned on /E). Names are passed as file filters, so a file called "-MOV" or
+    /// "-S" in a selection would change what the run does. A name cannot be escaped, and no
+    /// other spelling of the filter is known to match only that file, so such names never reach
+    /// robocopy: the planner refuses them and <see cref="Build"/> throws as the last gate.
+    /// '/' cannot start a name (<see cref="PathPolicy"/> refuses it) and is checked anyway.
+    /// </summary>
+    public static bool IsSwitchLikeName(string name) => name.Length > 0 && name[0] is '-' or '/';
 
     /// <summary>
     /// Quotes one argument. A trailing backslash would escape the closing

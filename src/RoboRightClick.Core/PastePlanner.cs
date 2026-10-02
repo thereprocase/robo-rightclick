@@ -85,6 +85,8 @@ public static class PastePlanner
     public const string RootReason = "Copying an entire drive is not supported.";
     public const string MissingReason = "This item could not be found. It may have been moved or deleted.";
     public const string DestinationReason = "The destination folder could not be found.";
+    public const string SwitchLikeNameReason =
+        "Robocopy would read this file name as one of its switches. Use Explorer's Paste for this item.";
     public const string LinkReason =
         "Folder links (junctions and symbolic links) can only be Robo-moved within the same drive. Use Explorer's Paste for these.";
 
@@ -236,6 +238,12 @@ public static class PastePlanner
             if (source.IsDirectory)
             {
                 steps.Add(new RobocopyStep(path, target, [], Recursive: true, Move: move));
+                continue;
+            }
+
+            if (RobocopyArgs.IsSwitchLikeName(name))
+            {
+                rejected.Add(new(path, SwitchLikeNameReason));
                 continue;
             }
 
