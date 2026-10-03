@@ -45,6 +45,37 @@ public class RobocopyOutputParserTests
         Assert.Equal(new FileReported(5, @"C:\src\y.txt"), Assert.Single(parser.Complete()));
     }
 
+    /// <summary>
+    /// robocopy.exe prints its words from .mui resources. The held file line of a file that
+    /// failed must be dropped on a localized Windows too, or the ledger counts a full-length
+    /// partial file as copied. The sample lines follow the English shape with the words
+    /// translated (LIKELY; no localized capture yet).
+    /// </summary>
+    [Theory]
+    [InlineData(@"2026/10/02 12:34:56 FEHLER 112 (0x00000070) Datei wird kopiert \\nas\share\big.iso", 112, "Datei wird kopiert", "Auf dem Datenträger ist nicht genügend Speicherplatz vorhanden.")]
+    [InlineData(@"2026/10/02 12:34:56 ERREUR 5 (0x00000005) Copie du fichier \\nas\share\big.iso", 5, "Copie du fichier", "Accès refusé.")]
+    [InlineData(@"2026/10/02 12:34:56 ERROR 53 (0x00000035) Copying File \\nas\share\big.iso", 53, "Copying File", "The network path was not found.")]
+    public void A_localized_error_line_still_cancels_the_held_file_line(string errorLine, int code, string operation, string message)
+    {
+        var parser = new RobocopyOutputParser();
+        Assert.Empty(parser.Feed("\t\t1073741824\t\\\\nas\\share\\big.iso"));
+
+        Assert.Empty(parser.Feed(errorLine));
+        var events = parser.Feed(message);
+
+        var error = Assert.IsType<ErrorReported>(Assert.Single(events));
+        Assert.Equal(new ErrorReported(code, operation, @"\\nas\share\big.iso", message), error);
+        Assert.Empty(parser.Complete());
+    }
+
+    [Fact]
+    public void A_line_without_the_error_shape_is_not_an_error()
+    {
+        var parser = new RobocopyOutputParser();
+        Assert.IsType<OtherOutput>(Assert.Single(parser.Feed("FEHLER: WIEDERHOLUNGSLIMIT ÜBERSCHRITTEN.")));
+        Assert.IsType<OtherOutput>(Assert.Single(parser.Feed(@"2026/10/02 12:34:56 FEHLER Datei wird kopiert C:\src\a.txt")));
+    }
+
     [Fact]
     public void An_error_code_too_large_for_an_int_is_reported_as_unknown_instead_of_throwing()
     {

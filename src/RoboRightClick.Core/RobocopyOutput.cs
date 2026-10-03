@@ -32,7 +32,14 @@ public sealed partial class RobocopyOutputParser
     [GeneratedRegex(@"^\s*(\d+)\t(.+)$")]
     private static partial Regex FileLine();
 
-    [GeneratedRegex(@"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ERROR (\d+) \(0x[0-9A-Fa-f]+\) (.+?) ([A-Za-z]:\\.*|\\\\.*)$")]
+    /// <summary>
+    /// An ERROR line, matched on its shape rather than its words: timestamp, one word, decimal
+    /// code, hex code in parentheses, operation, path. robocopy.exe takes its text from .mui
+    /// resources, so a German or French Windows prints "FEHLER" or "ERREUR" there (LIKELY; no
+    /// localized capture in docs/testlog.md yet), and the operation is translated too. An
+    /// unrecognized ERROR line would flush the failed file's held line as copied.
+    /// </summary>
+    [GeneratedRegex(@"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} \S+ (\d+) \(0x[0-9A-Fa-f]+\) (.+?) ([A-Za-z]:\\.*|\\\\.*)$")]
     private static partial Regex ErrorLine();
 
     /// <summary>Returns the events completed by this line (zero or more).</summary>
