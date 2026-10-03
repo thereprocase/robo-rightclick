@@ -1314,3 +1314,22 @@ three folders and the process checked absent by name, and no key named `Robo*` l
 HKCU\Software\Classes. Both virtual disks detached and deleted; the scratch folder, downloads,
 desktop file and every scheduled task of this session removed; display scale back to 100%.
 The pre-existing `RrcParityExplorer` task was left alone.
+
+## 2026-10-03 · release package for 1.0.0-beta.2
+
+Published from tag `v1.0.0-beta.2` (commit 469243a). It was built in fresh clones at the tag:
+two publishes by `scripts/check-reproducible.sh` and a third from a separate clone, all
+identical. A build in the long-lived working tree gave a different exe (it reuses build state),
+so it was not used. That is the reason release builds come from clean clones.
+
+- `RoboRightClick.exe` / `RoboRightClick-1.0.0-beta.2-setup.exe`: SHA256
+  `0076f0bffe0cdaa8487ea84cc95d8f1fc057a80daed02f14a0a6dccc6d9a6bd1`. Byte-identical to the
+  exe every runtime result in the third gate entry ran against (commit 186c79c). The commits
+  between 186c79c and 469243a change documentation only, and the exe hash confirms it.
+- `RoboRightClick-1.0.0-beta.2-win-x64.zip`: SHA256
+  `2b63a30766000f30fc3e6f1db3e2d3250eb3f5316ba82c96bc3bd7c5a6f598fa` (the exe, README.md with the
+  corrected unsigned-exe notes, LICENSE, Fonts/LICENSE-IBM-Plex-OFL.txt).
+
+Verified on the Windows 11 build 26200 VM only. Not tested: physical machines, network shares,
+USB and spinning disks, the online SmartScreen prompt, scaling other than 100/150/175%, a
+second monitor. No throughput numbers were measured.
