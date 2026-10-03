@@ -100,6 +100,12 @@ public static class ToastText
         {
             return null;
         }
+        if (job.State == JobState.Done && job.MayBeIncomplete > 0)
+        {
+            // Not a clean finish: a "Try again" child kept files the earlier paste may have
+            // left half written, so this one notifies whatever notifyOnComplete says.
+            return ForKeptIncomplete(job);
+        }
         if (job.State == JobState.Done && !notifyOnComplete)
         {
             return null;
@@ -171,6 +177,21 @@ public static class ToastText
         return new Toast(
             job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled",
             $"{files} being written when you canceled and may be incomplete. Open Jobs to finish them.",
+            ToastKind.Warning);
+    }
+
+    private static Toast ForKeptIncomplete(JobSnapshot job)
+    {
+        var title = job.Verb == TransferVerb.Move ? "Move finished" : "Copy finished";
+        if (job.Logging == LoggingMode.Ephemeral)
+        {
+            return new Toast("Job finished", EphemeralBody, ToastKind.Warning);
+        }
+        var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
+        var files = job.MayBeIncomplete == 1 ? "1 file" : $"{job.MayBeIncomplete:N0} files";
+        return new Toast(
+            title,
+            $"{files} at {into} may still be incomplete: the earlier paste may have left {(job.MayBeIncomplete == 1 ? "it" : "them")} half written, and {(job.MayBeIncomplete == 1 ? "it was" : "they were")} kept. Open Jobs to see which.",
             ToastKind.Warning);
     }
 

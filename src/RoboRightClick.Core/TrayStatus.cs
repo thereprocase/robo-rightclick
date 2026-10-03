@@ -79,6 +79,8 @@ public sealed record JobSnapshot(
     /// A Failed or Canceled job's files whose robocopy run started and then failed or died
     /// before finishing them (for a cancel: those robocopy reported failing, and earlier steps'
     /// failures; the files the cancel itself interrupted are <see cref="DamagedOnCancel"/>).
+    /// For a "Try again" child, in any end state, also the files the earlier paste left possibly
+    /// incomplete that the user chose to keep (<see cref="FileConflict.SuspectedPartial"/>).
     /// Robocopy allocates each file at full length before writing it, so these can look
     /// complete while holding only part of the data.
     /// </summary>
@@ -114,6 +116,7 @@ public sealed record JobSnapshot(
     {
         JobState.DoneWithErrors or JobState.Failed => true,
         JobState.Canceled => DamagedOnCancel > 0 || MayBeIncomplete > 0 || ErrorCount > 0,
+        JobState.Done => MayBeIncomplete > 0,
         _ => false,
     };
 

@@ -20,7 +20,10 @@ public sealed record LedgerUpdate(PlannedFile? Completed, PlannedFile? Uncomplet
 /// started, or the user's answer for that step already was to overwrite. Anything else (a
 /// folder-level error, a run that died before reaching the file, a file nobody proved robocopy
 /// wrote) must not overwrite unasked: the file there may be someone else's, saved after the
-/// paste. Those run with Skip flags, and the retry's scan asks about any that exist.
+/// paste. Those run with Skip flags, and the retry's scan treats any that exist as conflicts:
+/// settled by the configured conflict policy (the prompt only under Ask), except a file this
+/// paste may have left half written (<see cref="StepLedger.SuspectedPartials"/>), which is
+/// always asked about (<see cref="FileConflict.SuspectedPartial"/>).
 /// </param>
 public sealed record RetryCandidate(int StepIndex, PlannedFile File, bool MayOverwrite);
 
@@ -248,6 +251,22 @@ public sealed class StepLedger
             .SelectMany(s => s.Files.Where((_, i) => s.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached))
             .ToList();
 
+    /// <summary>
+    /// The <see cref="MayBeIncomplete"/> files robocopy may actually have written: their
+    /// destination was free when the step started, or the step's policy overwrites. A file that
+    /// was there before under Skip flags is the user's, untouched by robocopy. A retry child
+    /// asks about each of these rather than letting a configured Skip or KeepNewer keep it
+    /// (<see cref="FileConflict.SuspectedPartial"/>).
+    /// </summary>
+    /// <param name="presentBeforeStep">As for <see cref="RetryCandidates"/>, by normalized path.</param>
+    public IReadOnlyList<PlannedFile> SuspectedPartials(Func<string, bool> presentBeforeStep) =>
+        _steps.Where(s => s.IsRobocopy && s.Ran)
+            .SelectMany(s => s.Files
+                .Where((_, i) => s.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached)
+                .Where(f => RobocopyArgs.MayOverwriteExisting(s.Policy) || !presentBeforeStep(WinPath.NormalizeForMatch(f.DestinationPath)))
+                .ToList())
+            .ToList();
+
     /// <summary>Normalized source paths reported complete, for cancel cleanup.</summary>
     public IReadOnlyCollection<string> CompletedSources
     {
@@ -323,7 +342,8 @@ public sealed class StepLedger
     /// duplicate or keep-both step: robocopy would write it under its source name, with
     /// policy Replace, over the file the user chose to keep. Empty once
     /// <see cref="PathsUnreliable"/>: the host then offers a full re-run of the paste
-    /// (JobManager.Rerun: a new scan that asks about every file now present) instead.
+    /// (JobManager.Rerun: a new scan in which every file now present is a conflict for the
+    /// configured policy, and a suspected partial copy is always asked about) instead.
     /// </summary>
     public IReadOnlyList<(int StepIndex, PlannedFile File)> Retryable
     {

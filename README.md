@@ -267,8 +267,11 @@ Windows and which are design decisions not yet measured. In plain words:
 - Files that cannot be copied are collected and offered as **Try again / Skip** at the end of
   the job, instead of a question in the middle of it. **Try again** is offered once per job. It
   overwrites only a file robocopy itself reported failing at a destination that was free, or
-  where you had chosen Replace; for every other file whose name is taken by then it asks, as a
-  new paste would.
+  where you had chosen Replace. Every other file whose name is taken by then is a conflict, as
+  in a new paste: the "When a file already exists" setting decides it, and it asks only when
+  that setting is Ask. A file the earlier paste may have left half written is the exception:
+  it is always asked about, marked as possibly incomplete, and if you keep it the retry says
+  so instead of reporting a clean finish.
 - Paths longer than 260 characters are copied; Explorer skipped them in the measured run.
 - Robo-Cut does not dim the cut items' icons the way Ctrl+X does. They are still moved.
 - A Robo-Cut pasted with Explorer's own Ctrl+V stays on the clipboard afterwards; pasting it

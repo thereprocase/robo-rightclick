@@ -64,6 +64,10 @@ public static class JobStateText
                 return "Paused";
             case JobState.Finalizing:
                 return "Finishing…";
+            case JobState.Done when job.MayBeIncomplete > 0:
+                return job.MayBeIncomplete == 1
+                    ? "Done; 1 file may be incomplete"
+                    : string.Create(CultureInfo.InvariantCulture, $"Done; {job.MayBeIncomplete:N0} files may be incomplete");
             case JobState.Done:
                 return job.NoOp ? "Nothing to do: every item is already there" : "Done";
             case JobState.DoneWithErrors:
@@ -144,6 +148,7 @@ public static class JobStateText
             JobState.Queued when pauseLatched => StateTone.Attention,
             JobState.AwaitingDecision or JobState.Paused => StateTone.Attention,
             JobState.Running or JobState.Finalizing => StateTone.Live,
+            JobState.Done when job.MayBeIncomplete > 0 => StateTone.Attention,
             JobState.Done => StateTone.Positive,
             JobState.DoneWithErrors or JobState.Failed => StateTone.Danger,
             JobState.Canceled when job.OutcomeNeedsUser => StateTone.Attention,
@@ -195,6 +200,9 @@ public static class JobStateText
             JobState.Failed => $"Nothing was {done} to {into}.",
             JobState.Canceled when job.DamagedOnCancel + job.MayBeIncomplete > 0 => $"The paste into {into} was canceled. Files at the destination may be incomplete.",
             JobState.Canceled => $"The paste into {into} was canceled.",
+            JobState.Done when job.MayBeIncomplete > 0 => job.MayBeIncomplete == 1
+                ? $"Everything else was {done} to {into}. 1 file the earlier paste may have left incomplete was kept as it is."
+                : string.Create(CultureInfo.InvariantCulture, $"Everything else was {done} to {into}. {job.MayBeIncomplete:N0} files the earlier paste may have left incomplete were kept as they are."),
             JobState.Done => job.SkippedAppeared == 1
                 ? $"Everything was {done} to {into} except 1 file whose name appeared there during the paste."
                 : string.Create(CultureInfo.InvariantCulture, $"Everything was {done} to {into} except {job.SkippedAppeared:N0} files whose names appeared there during the paste."),
@@ -214,9 +222,12 @@ public static class JobStateText
     public static string MayBeIncompleteText(JobSnapshot job)
     {
         var files = job.MayBeIncomplete == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.MayBeIncomplete:N0} files were");
-        var why = job.State == JobState.Canceled
-            ? $"{files} not finished: robocopy reported an error on them, or stopped while writing them, before you canceled."
-            : $"{files} being written when the paste stopped.";
+        var why = job.State switch
+        {
+            JobState.Canceled => $"{files} not finished: robocopy reported an error on them, or stopped while writing them, before you canceled.",
+            JobState.Done => $"{files} left possibly incomplete by the earlier paste, and kept when you were asked.",
+            _ => $"{files} being written when the paste stopped.",
+        };
         return why + " They can look complete but hold only part of the data. Try again, or check them before you use them.";
     }
 

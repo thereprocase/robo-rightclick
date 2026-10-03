@@ -92,7 +92,11 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
 - **Dialogs** (conflict, error summary, settings, confirmations) follow the same pane, button and
   field rules. The error summary's sections are titled panes with a short explanation above a
   two-line path list (errors, refused, may be incomplete, skipped), each shown only when it has
-  rows. The primary action is the default button. Messages and questions, including the
+  rows. The primary action is the default button. In the conflict dialog of a "Try again"
+  job, files the earlier paste may have left half written get a caution strip above the three
+  choices and an amber note on their rows, and focus starts on "Let me decide" rather than
+  "Skip". A finished job with such files, or a cancel after files failed, uses the amber
+  attention tone, not green or neutral. Messages and questions, including the
   install, update and repair offer and the install and uninstall results, use `MessageDialog`: one pane,
   an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports
   use `MessageDialog.Notice`. A plain message box appears only as a fallback when a Gridline

@@ -12,6 +12,9 @@ public sealed record ConflictRow(FileConflict Conflict, bool SourceChecked, bool
 /// </summary>
 public static class ConflictSelection
 {
+    /// <summary>Shown first on a row the earlier paste may have left half written (<see cref="FileConflict.SuspectedPartial"/>).</summary>
+    public const string SuspectedPartialNote = "Left possibly incomplete by the earlier paste";
+
     /// <summary>Shown on a row where keep-both cannot be offered (<see cref="FileConflict.KeepBothAllowed"/>).</summary>
     public const string KeepBothUnavailableReason = "Keeping both isn't available when moving between drives";
 
@@ -95,6 +98,12 @@ public static class ConflictSelection
     public static string Note(FileConflict conflict)
     {
         var parts = new List<string>();
+        if (conflict.SuspectedPartial)
+        {
+            // Before the size and date comparison, which a full-length partial copy would make
+            // look reassuring.
+            parts.Add(SuspectedPartialNote);
+        }
         if (conflict.LooksIdentical)
         {
             parts.Add("Same size and date");
@@ -136,6 +145,26 @@ public static class ConflictSelection
             "Replace the files in the destination", $"Overwrites the {files} with the ones being pasted",
             "Skip these files", $"Leaves the {files} in the destination as they are",
             "Let me decide for each file", "Tick the files to keep; tick both to keep both");
+    }
+
+    /// <summary>
+    /// The warning above the conflict dialog's choices when some of its files may have been
+    /// left half written by the earlier paste, or null when none was. The dialog then starts on
+    /// "Let me decide", so Enter neither overwrites nor silently keeps such a file.
+    /// </summary>
+    public static string? SuspectedNotice(IReadOnlyList<FileConflict> conflicts)
+    {
+        var suspected = conflicts.Count(c => c.SuspectedPartial);
+        if (suspected == 0)
+        {
+            return null;
+        }
+        var which = suspected == 1
+            ? (conflicts.Count == 1 ? "This file" : "1 of these files")
+            : string.Create(CultureInfo.InvariantCulture, $"{suspected:N0} of these files");
+        var was = suspected == 1 ? "was" : "were";
+        var it = suspected == 1 ? "It" : "They";
+        return $"{which} {was} left possibly incomplete by the earlier paste. {it} can show the full size and a newer date but hold only part of the data. Replace to finish the copy; skipping keeps the incomplete file.";
     }
 
     /// <summary>The pane title over the per-file list. Never contains a file name: titles are shown in capitals, which would misstate a name.</summary>

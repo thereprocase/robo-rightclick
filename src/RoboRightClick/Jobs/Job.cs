@@ -38,6 +38,12 @@ internal sealed record JobServices(
 /// <param name="Logging">For a derived job, <see cref="JobSinks.ForDerivedJob"/>; otherwise the current mode.</param>
 /// <param name="CutClipboardSequence">For a paste of cut data: the clipboard sequence number read at paste time.</param>
 /// <param name="StartPaused">"Pause all" is on: the gate starts closed.</param>
+/// <param name="Suspected">
+/// For a job derived from another ("Try again", "Finish copying them", a whole re-run): the
+/// destinations the parent may have left half written (<see cref="Job.SuspectedPartials"/>).
+/// A conflict at one of them is asked about whatever the configured policy, and a file the user
+/// then keeps is reported as possibly incomplete.
+/// </param>
 internal sealed record JobStart(
     Guid Id,
     Guid? ParentId,
@@ -48,7 +54,8 @@ internal sealed record JobStart(
     IJobSink Sink,
     uint? CutClipboardSequence,
     bool StartPaused,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    SuspectedPartials? Suspected = null);
 
 /// <summary>
 /// One paste, from Queued to a terminal state. <see cref="RunAsync"/> runs on worker
@@ -62,16 +69,23 @@ internal sealed record JobStart(
 /// then JobScanner.Scan with progress into the snapshot's totals. A retry child runs
 /// <see cref="RetryPlanner.Rescan"/> over its <see cref="JobStart.RetryPlan"/> instead, and its
 /// conflicts go through the same decision.</para>
-/// <para>AwaitingDecision when there are conflicts and the policy is Ask (IJobPrompts);
-/// null = Canceled. Then ExecutionPlanner.Apply. An <see cref="ExecutionPlan.IsNoOp"/> plan
-/// goes Scanning → Finalizing and ends Done with <see cref="JobSnapshot.NoOp"/> (no toast,
-/// no clipboard clear). Everything refused also goes Scanning → Finalizing, and an answer
-/// that leaves no step (every conflict of a cut skipped) goes AwaitingDecision → Finalizing.</para>
+/// <para>A derived job first marks the conflicts at paths its parent may have left half
+/// written (<see cref="RetryPlanner.MarkSuspected"/> with <see cref="JobStart.Suspected"/>).
+/// AwaitingDecision when <see cref="ExecutionPlanner.ConflictsToAsk"/> lists any: every
+/// conflict under policy Ask, only the suspected ones otherwise (IJobPrompts); null =
+/// Canceled. Then ExecutionPlanner.Apply. An <see cref="ExecutionPlan.IsNoOp"/> plan of a
+/// job that is not derived goes Scanning → Finalizing and ends Done with
+/// <see cref="JobSnapshot.NoOp"/> (no toast, no clipboard clear); a derived job is never a
+/// no-op, since "Nothing to do" would read as "the earlier paste's files are fine". A
+/// suspected file the user kept becomes <see cref="JobSnapshot.MayBeIncomplete"/>.
+/// Everything refused also goes Scanning → Finalizing, and an answer that leaves no step
+/// (every conflict of a cut skipped) goes AwaitingDecision → Finalizing.</para>
 /// <para>Running: steps in order. Before each step, re-check which of its destinations
 /// exist (one listing per destination folder) and add them to the presence set that cancel
 /// cleanup reads. RenameStep and move-mode KeepBothStep by InProcessCopier.Rename (a
 /// <see cref="StepOutcome.ReplanAsMove"/> item is scanned again on its own and appended as a
-/// robocopy move with policy Skip); DuplicateFileStep and copy-mode KeepBothStep by
+/// robocopy move, planned with policy Ask and SkipAll so every name already there is kept);
+/// DuplicateFileStep and copy-mode KeepBothStep by
 /// InProcessCopier.CopyFileAsync; RobocopyStep by RobocopyRun with
 /// RobocopyArgs.Build(step, DriveMedia.ThreadsFor(...).ApplyTo(settings), policy,
 /// PipeNames.ForStep(id, index, CSPRNG nonce)): the /MT count is chosen per run from both
@@ -169,6 +183,12 @@ internal sealed class Job
 
     // A ledger part could not match robocopy's paths; kept past the release of the parts.
     private bool _pathsUnreliable;
+
+    // Conflicts the user kept although the parent may have left them half written.
+    private readonly List<string> _keptSuspected = [];
+
+    // Destinations this job may have left half written, for a derived job. Fixed at the end.
+    private SuspectedPartials? _suspected;
 
     // Ended Failed by an exception rather than by its outcome: the ledger is not complete.
     private bool _failedUnexpectedly;
@@ -347,6 +367,24 @@ internal sealed class Job
             lock (_lock)
             {
                 return _mayBeIncompletePaths.ToArray();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Destinations this job may have left half written, once it has ended: files of robocopy
+    /// runs that failed or died on them where robocopy may have written
+    /// (<see cref="StepLedger.SuspectedPartials"/>), files a cancel left in place, and suspected
+    /// files kept from its own parent. Null when there are none. Handed to a derived job
+    /// (<see cref="JobStart.Suspected"/>).
+    /// </summary>
+    public SuspectedPartials? SuspectedPartials
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _suspected;
             }
         }
     }
@@ -660,11 +698,14 @@ internal sealed class Job
                 _progress = new JobProgress(_totalBytes, _totalFiles);
                 _presence = new HashSet<string>(plan.PresentBeforeRun.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
                 AddClaimsLocked(plan);
+                _keptSuspected.AddRange(plan.Kept.Where(c => c.SuspectedPartial).Select(c => c.DestinationPath));
                 if (plan.Steps.Count == 0)
                 {
                     // Nothing to run: everything is in place, kept, or refused. The outcome is
-                    // still computed in Finalizing, so refusals are reported in one place.
-                    _noOp = plan.IsNoOp;
+                    // still computed in Finalizing, so refusals are reported in one place. A
+                    // derived job is never a no-op: it was asked to finish what an earlier paste
+                    // did not, and "every item is already there" would vouch for those files.
+                    _noOp = plan.IsNoOp && Start.ParentId is null;
                     MoveLocked(JobState.Finalizing);
                 }
                 else
@@ -743,9 +784,13 @@ internal sealed class Job
             }).ConfigureAwait(false);
         }
 
+        // What the parent knows about a file reaches the decision about it: a file it may have
+        // left half written is never settled by a configured Skip or KeepNewer.
+        scan = RetryPlanner.MarkSuspected(scan, Start.Suspected);
         var configured = Start.Settings.ConflictDefault;
+        var toAsk = ExecutionPlanner.ConflictsToAsk(scan.Conflicts, configured);
         ConflictChoice? choice = null;
-        if (scan.Conflicts.Count > 0 && configured == ConflictPolicy.Ask)
+        if (toAsk.Count > 0)
         {
             bool ask;
             lock (_lock)
@@ -772,7 +817,7 @@ internal sealed class Job
 
             // The dialog completes on the UI thread; continue on the thread pool, because
             // ExecutionPlanner.Apply below asks the disk about keep-both names.
-            var prompt = Services.Prompts.ResolveConflictsAsync(Snapshot(), scan.Conflicts, token);
+            var prompt = Services.Prompts.ResolveConflictsAsync(Snapshot(), toAsk, token);
             choice = await OnThreadPool(prompt).ConfigureAwait(false);
             if (choice is null || token.IsCancellationRequested)
             {
@@ -1119,6 +1164,8 @@ internal sealed class Job
             {
                 RecordMayBeIncompleteLocked(exclude: null);
             }
+            RecordKeptSuspectedLocked();
+            FixSuspectedLocked(leftByCancel: []);
             MoveLocked(final, SummaryLocked(final));
             ReleaseLocked();
             FixRetryOfferLocked();
@@ -1188,7 +1235,9 @@ internal sealed class Job
             // be full-length partial copies just like the interrupted ones; the cancel must not
             // make them disappear from the report.
             RecordMayBeIncompleteLocked(exclude: handled);
+            RecordKeptSuspectedLocked();
             RecordSkippedAppearedLocked();
+            FixSuspectedLocked(leftByCancel: cleanup?.LeftInPlace ?? []);
             MoveLocked(JobState.Canceled, SummaryLocked(JobState.Canceled));
             ReleaseLocked();
             FixRetryOfferLocked();
@@ -1644,6 +1693,45 @@ internal sealed class Job
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Suspected partial files the user chose to keep (<see cref="FileConflict.SuspectedPartial"/>):
+    /// still possibly incomplete, so they are reported like the ledger's.
+    /// </summary>
+    private void RecordKeptSuspectedLocked()
+    {
+        foreach (var path in _keptSuspected)
+        {
+            _mayBeIncomplete++;
+            if (_mayBeIncompletePaths.Count < JobRecords.MaxRecordedErrors)
+            {
+                _mayBeIncompletePaths.Add(path);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fixes <see cref="SuspectedPartials"/> at the end, before <see cref="ReleaseLocked"/>
+    /// drops the presence set the ledger needs to tell robocopy's possible writes from files
+    /// that were already there under Skip flags.
+    /// </summary>
+    private void FixSuspectedLocked(IReadOnlyList<string> leftByCancel)
+    {
+        var set = new SuspectedPartials();
+        var presence = _presence;
+        foreach (var part in _parts)
+        {
+            foreach (var file in part.Ledger.SuspectedPartials(path => presence is not null && presence.Contains(path)))
+            {
+                set.Add(file.DestinationPath);
+            }
+        }
+        foreach (var path in leftByCancel.Concat(_keptSuspected))
+        {
+            set.Add(path);
+        }
+        _suspected = set.Count > 0 ? set : null;
     }
 
     /// <summary>The ledgers' late arrivals, read once at the end (the parts may be released after).</summary>

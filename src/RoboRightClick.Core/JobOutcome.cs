@@ -161,6 +161,26 @@ public static class FailureText
 }
 
 /// <summary>
+/// Destinations a job may have left half written: files of robocopy runs that failed or died
+/// on them (<see cref="StepLedger.SuspectedPartials"/>) and files a cancel left in place. A
+/// "Try again" or "Finish copying them" child, and a whole re-run, receive the parent's set and
+/// mark every conflict found at one of these paths (<see cref="RetryPlanner.MarkSuspected"/>),
+/// so what the parent knows about a file reaches the decision about it. Kept as
+/// <see cref="PathHash"/> values: a collision can only mark a file suspected that is not, which
+/// asks the user instead of settling it silently. Filled once when the job ends, read-only after.
+/// </summary>
+public sealed class SuspectedPartials
+{
+    private readonly HashSet<ulong> _hashes = [];
+
+    public int Count => _hashes.Count;
+
+    public void Add(string destinationPath) => _hashes.Add(PathHash.Of(WinPath.NormalizeForMatch(destinationPath)));
+
+    public bool Contains(string destinationPath) => _hashes.Contains(PathHash.Of(WinPath.NormalizeForMatch(destinationPath)));
+}
+
+/// <summary>
 /// A retry child's plan after its own scan: the steps that run as they were planned
 /// (<see cref="Fixed"/>) and the rest, scanned again like a new paste (<see cref="Rest"/>),
 /// whose conflicts go through the configured policy or the conflict prompt.
@@ -179,8 +199,10 @@ public static class RetryPlanner
     /// (<see cref="RetryCandidate.MayOverwrite"/>: robocopy reported an error naming it and
     /// this paste may have left a full-length partial there) runs under Replace, so a partial
     /// copy is not mistaken for a finished one. Every other file runs under Ask, whose Skip
-    /// flags never overwrite, and the child's scan (<see cref="Rescan"/>) asks about each one
-    /// whose destination exists by then, as Explorer would.
+    /// flags never overwrite, and the child's scan (<see cref="Rescan"/>) makes each one whose
+    /// destination exists by then a conflict, as a new paste would: the configured policy
+    /// settles it (the prompt asks only under Ask), except a file the parent may have left half
+    /// written (<see cref="MarkSuspected"/>), which is always asked about.
     /// Failed in-process steps (rename, duplicate, keep-both) are repeated as they were.
     /// <see cref="ExecutionPlan.PresentBeforeRun"/> carries over from the original, and
     /// <see cref="ExecutionPlan.LinkFolders"/> and Kept are empty. Returns null when there is
@@ -262,6 +284,22 @@ public static class RetryPlanner
         }
 
         return new ExecutionPlan(steps, original.PresentBeforeRun, [], [], refused);
+    }
+
+    /// <summary>
+    /// <paramref name="scan"/> with every conflict at a path in <paramref name="suspected"/>
+    /// marked <see cref="FileConflict.SuspectedPartial"/>. Unchanged when there is no set.
+    /// </summary>
+    public static ScanResult MarkSuspected(ScanResult scan, SuspectedPartials? suspected)
+    {
+        if (suspected is not { Count: > 0 } || scan.Conflicts.Count == 0)
+        {
+            return scan;
+        }
+        var marked = scan.Conflicts
+            .Select(c => suspected.Contains(c.DestinationPath) ? c with { SuspectedPartial = true } : c)
+            .ToList();
+        return scan with { Conflicts = marked };
     }
 
     /// <summary>

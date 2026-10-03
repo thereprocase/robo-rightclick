@@ -78,8 +78,10 @@ public static class ExecutionPlanner
     /// KeepNewer replaces where <see cref="FileConflict.SourceIsNewer"/> and keeps the rest;
     /// Ask with conflicts takes <paramref name="choice"/> (ReplaceAll, SkipAll, or DecideEach,
     /// where a missing entry is Skip and KeepBoth where <see cref="FileConflict.KeepBothAllowed"/>
-    /// is false is Skip). Ask with no conflicts runs every step with policy Ask, whose flags
-    /// skip anything that appeared after the scan.</para>
+    /// is false is Skip). A <see cref="FileConflict.SuspectedPartial"/> conflict always takes
+    /// <paramref name="choice"/>, whatever is configured (<see cref="ConflictsToAsk"/>): its size
+    /// and date say nothing about whether it is whole. Ask with no conflicts runs every step
+    /// with policy Ask, whose flags skip anything that appeared after the scan.</para>
     /// <para>Uniform cases keep the plan's steps unchanged: every conflict Replace (policy
     /// Replace), or a copy where every conflict is Skip (policy Skip) or decided by KeepNewer
     /// (policy KeepNewer). Robocopy's class filters are safe there because a copy deletes
@@ -113,7 +115,10 @@ public static class ExecutionPlanner
     /// destination after the scan instead of overwriting it unseen.</para>
     /// </remarks>
     /// <param name="destinationTaken">Whether a full destination path is already taken on disk; used only to name keep-both files.</param>
-    /// <exception cref="InvalidOperationException">Policy Ask with conflicts and no <paramref name="choice"/>.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A conflict <see cref="ConflictsToAsk"/> lists (policy Ask, or a suspected partial) and no
+    /// <paramref name="choice"/>.
+    /// </exception>
     public static ExecutionPlan Apply(
         ScanResult scan,
         ConflictPolicy configured,
@@ -161,6 +166,16 @@ public static class ExecutionPlanner
     }
 
     /// <summary>
+    /// The conflicts the user must be asked about: all of them under policy Ask; otherwise
+    /// only those an earlier paste may have left half written
+    /// (<see cref="FileConflict.SuspectedPartial"/>), which no configured policy settles. The
+    /// answer (<see cref="Apply"/>'s choice) applies to exactly these; the rest follow the
+    /// configured policy.
+    /// </summary>
+    public static IReadOnlyList<FileConflict> ConflictsToAsk(IReadOnlyList<FileConflict> conflicts, ConflictPolicy configured) =>
+        configured == ConflictPolicy.Ask ? conflicts : conflicts.Where(c => c.SuspectedPartial).ToList();
+
+    /// <summary>
     /// Splits off the files robocopy would read as a switch (<see cref="RobocopyArgs.IsSwitchLikeName"/>)
     /// if their names were passed as file filters, and records each one as a refusal with
     /// <see cref="PastePlanner.SwitchLikeNameReason"/>. Every planner that turns file names
@@ -192,23 +207,28 @@ public static class ExecutionPlanner
         {
             return [];
         }
+        var asked = choice switch
+        {
+            ConflictChoice.ReplaceAll => _ => FileDecision.Replace,
+            ConflictChoice.SkipAll => _ => FileDecision.Skip,
+            ConflictChoice.DecideEach each => DecideEachRule(each),
+            null => (Func<FileConflict, FileDecision>)(_ => throw new InvalidOperationException("Conflicts need a decision before the job can run.")),
+            _ => throw new ArgumentOutOfRangeException(nameof(choice)),
+        };
         Func<FileConflict, FileDecision> rule = configured switch
         {
             ConflictPolicy.Replace => _ => FileDecision.Replace,
             ConflictPolicy.Skip => _ => FileDecision.Skip,
-            ConflictPolicy.KeepNewer => c => c.SourceIsNewer ? FileDecision.Replace : FileDecision.Skip,
-            ConflictPolicy.Ask => choice switch
-            {
-                ConflictChoice.ReplaceAll => _ => FileDecision.Replace,
-                ConflictChoice.SkipAll => _ => FileDecision.Skip,
-                ConflictChoice.DecideEach each => DecideEachRule(each),
-                null => throw new InvalidOperationException("Conflicts need a decision before the job can run."),
-                _ => throw new ArgumentOutOfRangeException(nameof(choice)),
-            },
+            ConflictPolicy.KeepNewer => KeepNewerRule,
+            ConflictPolicy.Ask => asked,
             _ => throw new ArgumentOutOfRangeException(nameof(configured)),
         };
-        return conflicts.Select(rule).ToArray();
+        // A suspected partial copy is the user's call whatever is configured.
+        return conflicts.Select(c => c.SuspectedPartial ? asked(c) : rule(c)).ToArray();
     }
+
+    private static FileDecision KeepNewerRule(FileConflict conflict) =>
+        conflict.SourceIsNewer ? FileDecision.Replace : FileDecision.Skip;
 
     private static Func<FileConflict, FileDecision> DecideEachRule(ConflictChoice.DecideEach each)
     {
@@ -238,9 +258,12 @@ public static class ExecutionPlanner
         {
             return ConflictPolicy.Ask;
         }
-        // Class filters may only protect kept files in a run that deletes nothing.
+        // Class filters may only protect kept files in a run that deletes nothing. KeepNewer's
+        // flags decide by date themselves, so they may stand in only where every decision is
+        // the one they would make: an answer about a suspected partial copy may differ.
         var copy = !scan.Steps.Any(s => s.Step is RobocopyStep { Move: true });
-        if (copy && configured == ConflictPolicy.KeepNewer)
+        if (copy && configured == ConflictPolicy.KeepNewer
+            && scan.Conflicts.Select((c, i) => decisions[i] == KeepNewerRule(c)).All(same => same))
         {
             return ConflictPolicy.KeepNewer;
         }

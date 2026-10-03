@@ -427,15 +427,33 @@ Step execution:
   cancel deletes the partial overwrite (the loss is the overwrite's, which a normal run makes
   too); robocopy decides skip or copy when it lists a folder, so a file that appears after that
   listing is overwritten in any run, canceled or not (robocopy's own race, not cleanup's).
-- **Errors** → `DoneWithErrors`; "Try again (N)" = `JobManager.Retry(parent)` →
-  `RetryPlanner.ForFailures(plan, ledger.Retryable, ledger.FailedInProcessSteps)` per ledger
-  part; a child job with `ParentId`, logging mode `JobSinks.ForDerivedJob(parent, current)`;
-  its Scanning only refreshes totals and presence and never prompts. Only robocopy steps'
-  files are retried file by file (a keep-both or duplicate retried as robocopy would be written
-  under the source name over the file the user kept); failed in-process steps repeat whole. A
-  `Failed` job's "Try again" is `JobManager.Rerun` (the original order, full re-scan), and so is
-  a `DoneWithErrors` job whose ledger found robocopy's paths unreliable: re-running a recursive
-  `/MOVE` step under Replace is not safe, so the whole paste is scanned and asked about again.
+- **Errors** → `DoneWithErrors`; "Try again (N)" = `JobManager.Retry(parent)`. Per ledger part,
+  `RetryPlanner.ForFailures(plan, candidates, ledger.FailedInProcessSteps)`, where the
+  candidates are `StepLedger.RetryCandidates(presence)`, fixed when the job ends (for a
+  canceled job, merged with the files the cancel left in place). Each candidate carries
+  `MayOverwrite`: true only for a file robocopy reported failing whose destination was free
+  when its step started, or whose step's answer already overwrote (Replace, KeepNewer); those
+  run under Replace. Every other file runs under Ask. The child job (`ParentId`, logging mode
+  `JobSinks.ForDerivedJob(parent, current)`) does a real scan: `RetryPlanner.Rescan` refreshes
+  the Replace steps' source facts and scans the rest like a new paste, so a destination that
+  exists by then is a conflict, then `ExecutionPlanner.Apply` and `RetryPlanner.Combine`. Who
+  decides such a conflict depends on `conflictDefault`: the prompt under Ask, the configured
+  policy otherwise. The exception is a file the parent may have left half written
+  (`Job.SuspectedPartials`: `StepLedger.SuspectedPartials`, files a cancel left in place, and
+  suspected files a child kept; handed over as `JobStart.Suspected` and marked by
+  `RetryPlanner.MarkSuspected`). `ExecutionPlanner.ConflictsToAsk` lists those under every
+  policy, so the child reaches `AwaitingDecision` for them; the dialog marks them and starts on
+  "Let me decide"; a suspected file the user keeps becomes the child's `MayBeIncomplete`, and a
+  derived job is never a no-op. The button and its number come from one rule:
+  `JobSnapshot.RetryCount` = `RetryPlanner.CountOf(RetryPlan())`, fixed at the end, so an error
+  no plan can repeat (a link folder, a folder-level error robocopy's own retry overcame, which
+  `StepLedger.StandingErrors` withdraws) never offers "Try again". Only robocopy steps' files
+  are retried file by file (a keep-both or duplicate retried as robocopy would be written under
+  the source name over the file the user kept); failed in-process steps repeat whole. A
+  `Failed` job with a ledger gets the same per-file plan; one without (it failed before anything
+  ran, or by an exception) falls back to `JobManager.Rerun` (the original order, full re-scan).
+  So does a job whose ledger found robocopy's paths unreliable (`RetriesWholePaste`): re-running
+  a recursive `/MOVE` step under Replace is not safe, so the whole paste is scanned again.
   Refusals are not retryable and are counted separately (`RefusedCount`).
 - **Late arrivals** (files skipped because their name appeared after the scan) are not errors;
   they are counted in `JobSnapshot.SkippedAppeared`, and a `Done` job with any opens the
@@ -747,7 +765,7 @@ Questions the parallel packages raised, and how the merged code answers them.
 | Question | Settled as |
 |---|---|
 | How are robocopy moves that replace failed renames tracked? | A second ledger part (own `ExecutionPlan` + `StepLedger`); no ledger append API (section 6). |
-| Retry when `PathsUnreliable` | `JobManager.Retry` re-runs the whole paste (`Rerun`); no whole-step retry API. |
+| Retry when `PathsUnreliable` | `JobManager.Retry` re-runs the whole paste (`Rerun`); no whole-step retry API. The re-run receives the parent's suspected partial files like any retry child (section 6). |
 | Which in-process steps does "Try again" repeat? | `StepLedger.FailedInProcessSteps`; the job reports re-planned and refused steps to the ledger. |
 | `ConflictScan.Resolve` vs the planner's per-step policy | The planner decides per step; `Resolve` is the job-wide answer only. |
 | `StepOutcome.Failure` text | One path-free sentence from its producer; `FailureText` filters again. |

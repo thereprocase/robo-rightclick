@@ -132,8 +132,10 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     /// either way. When the parent's robocopy paths could not be matched
     /// (<see cref="Job.PathsUnreliable"/>), or a Failed parent kept no per-file record (it failed
     /// before anything ran, or by an exception), this re-runs the whole paste instead
-    /// (<see cref="Rerun"/>): it re-scans and asks about every file now present, rather than
-    /// overwriting files whose state is unknown.
+    /// (<see cref="Rerun"/>): it re-scans, and every file now present is a conflict for the
+    /// configured policy, rather than overwriting files whose state is unknown. Either way the child gets the parent's
+    /// <see cref="Job.SuspectedPartials"/>: a file the parent may have left half written is asked
+    /// about whatever the configured policy, never kept silently.
     /// </summary>
     public Guid? Retry(Guid parentId)
     {
@@ -381,7 +383,7 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         var mode = JobSinks.ForDerivedJob(parent.Start.Logging, settings.Logging);
         // The parent's clipboard sequence carries over: a retry of a cut that ends Done
         // clears the clipboard, and pasting the same cut while the retry runs is refused.
-        return Create(parent.Start.Order, parent.Id, retryPlan, settings, mode, parent.Start.CutClipboardSequence, refuseRepeatedCut: false);
+        return Create(parent.Start.Order, parent.Id, retryPlan, settings, mode, parent.Start.CutClipboardSequence, refuseRepeatedCut: false, parent.SuspectedPartials);
     }
 
     private Guid? Create(
@@ -391,7 +393,8 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         Settings settings,
         LoggingMode mode,
         uint? cutClipboardSequence,
-        bool refuseRepeatedCut)
+        bool refuseRepeatedCut,
+        SuspectedPartials? suspected = null)
     {
         if (_shuttingDown)
         {
@@ -410,7 +413,7 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         // first write, and in ephemeral mode its factory is not even invoked.
         var sink = JobSinks.For(mode, () => LogStore.CreateSink(Job.DescriptionOf(id, order, createdAt)));
         var job = new Job(
-            new JobStart(id, parentId, order, retryPlan, settings, mode, sink, cutClipboardSequence, _pauseAll, createdAt),
+            new JobStart(id, parentId, order, retryPlan, settings, mode, sink, cutClipboardSequence, _pauseAll, createdAt, suspected),
             _services);
         // Subscribed and announced before it is published: once in the list, a scheduling pass
         // on another thread may start it, and its first transition must reach this handler and

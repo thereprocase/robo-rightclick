@@ -11,7 +11,10 @@ namespace RoboRightClick.Jobs;
 internal interface IJobPrompts
 {
     /// <summary>
-    /// Explorer's Replace / Skip / Let me decide. Null means the user closed the dialog or
+    /// Explorer's Replace / Skip / Let me decide, about the conflicts
+    /// <see cref="ExecutionPlanner.ConflictsToAsk"/> lists (all of them under policy Ask; under
+    /// any other policy only <see cref="FileConflict.SuspectedPartial"/> ones, which the dialog
+    /// marks and does not start on Skip for). Null means the user closed the dialog or
     /// pressed Cancel: the job is canceled. Keep-both is offered per file where
     /// <see cref="FileConflict.KeepBothAllowed"/> is true. Also completes with null when
     /// <paramref name="cancellationToken"/> fires or the app is shutting down, so exit never

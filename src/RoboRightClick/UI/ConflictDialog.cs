@@ -22,7 +22,12 @@ namespace RoboRightClick.UI;
 /// the other, so the list can never express a choice the engine would have to reinterpret
 /// (<see cref="ConflictSelection.Decision(bool, bool, bool)"/>). The list is a virtual-mode
 /// grid, so tens of thousands of conflicts cost one array of ticks, not one row object each.
-/// Focus starts on "Skip these files": Enter on the dialog never overwrites anything.
+/// Focus starts on "Skip these files": Enter on the dialog never overwrites anything. When some
+/// files are ones the earlier paste may have left half written
+/// (<see cref="FileConflict.SuspectedPartial"/>, only in a "Try again" or "Finish copying them"
+/// job), an amber strip above the choices says so (<see cref="ConflictSelection.SuspectedNotice"/>),
+/// their rows carry an amber note, and focus starts on "Let me decide" instead: Enter then
+/// neither overwrites nor silently keeps a file that may be incomplete.
 /// </remarks>
 internal sealed class ConflictDialog : Gridline.Window
 {
@@ -50,6 +55,7 @@ internal sealed class ConflictDialog : Gridline.Window
     private readonly Label _summary;
     private readonly Gridline.Button _continue;
     private readonly Gridline.Button _skip;
+    private readonly Gridline.Button _start;
     private bool _syncingSelectAll;
 
     public ConflictDialog(JobSnapshot job, IReadOnlyList<FileConflict> conflicts)
@@ -86,12 +92,18 @@ internal sealed class ConflictDialog : Gridline.Window
         decide.Click += (_, _) => ShowDecideView();
 
         var choicePane = new Gridline.Pane(count == 1 ? "Replace or skip the file" : "Replace or skip files") { Dock = DockStyle.Fill };
-        var choices = Gridline.Stack(
+        var suspectedNotice = ConflictSelection.SuspectedNotice(conflicts);
+        var choiceRows = new List<Control>
+        {
             Gridline.TextLabel(heading, Gridline.Face.SansSemiBold, Gridline.SizeHeading),
             Gridline.TextLabel(context, Gridline.Face.Sans, Gridline.SizeUi, Gridline.TextSecondary),
-            replace,
-            _skip,
-            decide);
+        };
+        if (suspectedNotice is not null)
+        {
+            choiceRows.Add(new Gridline.CautionStrip(suspectedNotice, "SuspectedPartial"));
+        }
+        choiceRows.AddRange([replace, _skip, decide]);
+        var choices = Gridline.Stack([.. choiceRows]);
         // Top, not Fill: a filled table hands its spare height to the last row, which made the
         // third choice taller than the other two.
         choices.Dock = DockStyle.Top;
@@ -155,7 +167,10 @@ internal sealed class ConflictDialog : Gridline.Window
         Controls.Add(_choiceView);
         Controls.Add(footer);
         CancelButton = cancel;
-        ActiveControl = _skip;
+        // Skip keeps a file that may be incomplete; with such a file in the list, the safe
+        // place for Enter is the per-file view, where each one is shown and marked.
+        _start = suspectedNotice is null ? _skip : decide;
+        ActiveControl = _start;
         UpdateSummary();
         EndBuild();
     }
@@ -403,9 +418,11 @@ internal sealed class ConflictDialog : Gridline.Window
         }
         else if (e.ColumnIndex == ColNote)
         {
-            // Amber where keep-both is not offered: that row has a qualification to read.
+            // Amber where keep-both is not offered, or where the earlier paste may have left the
+            // file half written: that row has a qualification to read.
             Gridline.DrawRow(e.Graphics, e.CellBounds, selected);
-            var color = Conflicts[e.RowIndex].KeepBothAllowed ? Gridline.TextSecondary : Gridline.Amber;
+            var conflict = Conflicts[e.RowIndex];
+            var color = conflict.KeepBothAllowed && !conflict.SuspectedPartial ? Gridline.TextSecondary : Gridline.Amber;
             Gridline.DrawCellText(e.Graphics, ConflictSelection.Note(Conflicts[e.RowIndex]),
                 Gridline.FontFor(this, Gridline.Face.Sans, Gridline.SizeDense), e.CellBounds, Gridline.RowText(selected, color));
             e.Handled = true;
@@ -449,7 +466,7 @@ internal sealed class ConflictDialog : Gridline.Window
         _choiceView.Visible = true;
         Gridline.RescaleFonts(this, DeviceDpi);
         AcceptButton = null;
-        _skip.Focus();
+        _start.Focus();
     }
 
     private void Finish(ConflictChoice choice)

@@ -14,6 +14,16 @@ public sealed record FileConflict(string SourcePath, string DestinationPath, Fil
     /// </summary>
     public bool KeepBothAllowed { get; init; } = true;
 
+    /// <summary>
+    /// The file at the destination is one an earlier paste of the same items may have left
+    /// half written (<see cref="SuspectedPartials"/>): a "Try again" or "Finish copying them"
+    /// child found it there. Robocopy allocates full length first, so it can show the same
+    /// size as the source and a newer date. A configured Skip or KeepNewer never settles it:
+    /// the user is asked (<see cref="ExecutionPlanner.ConflictsToAsk"/>), and a file the user
+    /// then keeps is reported as possibly incomplete.
+    /// </summary>
+    public bool SuspectedPartial { get; init; }
+
     public bool SourceIsNewer => Source.LastWriteUtc > Existing.LastWriteUtc;
     public bool LooksIdentical => Source.Size == Existing.Size && Source.LastWriteUtc == Existing.LastWriteUtc;
 }
