@@ -102,10 +102,11 @@ the entry is corrected. A version that cannot be read counts as older.
 
 1. Download the new release, check its hash, unblock the zip and extract it, as above.
 2. Let running pastes finish, or cancel them, and deal with finished ones that need attention
-   (Try again or Skip in the Jobs window). An update asks the running tray to exit; the tray
+   (Try again, Skip or OK in the Jobs window). An update asks the running tray to exit; the tray
    refuses while jobs run or finished jobs still need attention (the Jobs window lives in
    memory, so exiting would drop their lists of files to check), and the update then stops
-   with a message and changes nothing. A running copy is never killed.
+   with a message and changes nothing. **Exit** on the tray icon asks once and then closes it
+   either way. A running copy is never killed.
 3. Double-click the new `RoboRightClick.exe`, or run it with `--install`. The exe is replaced
    through a temporary file, the previous exe is kept as `RoboRightClick.exe.old` until the
    update has finished, and the menu icons and the registry keys are rewritten. If any step
@@ -194,7 +195,9 @@ The code that may touch the keyboard hook is confined to two files, which a test
 Settings, Apps, Installed apps, **RoboRightClick**, Uninstall. Or run
 `RoboRightClick.exe --uninstall [--quiet]`. It removes the registry keys install wrote, the Run entry,
 the config, history, job logs and crash logs, the menu icons and the install folder. Nothing
-else is touched.
+else is touched. A running paste stops it (it never cancels one); finished jobs that still
+need attention do not, since their logs are removed with the rest. If it says RoboRightClick
+did not close, let the paste finish or cancel it, or choose **Exit** on the tray icon.
 
 ## Files the app writes
 

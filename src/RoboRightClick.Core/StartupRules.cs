@@ -91,10 +91,19 @@ public static class StartupRules
     /// Finished jobs with <see cref="JobSnapshot.NeedsAttention"/>: errors, a failure or files
     /// that may be incomplete, not yet dealt with (Try again or Skip).
     /// </param>
-    public static ExitAction ExitDecision(bool hasActiveJobs, int finishedNeedingAttention, bool requestedByOtherProcess) =>
-        !hasActiveJobs && finishedNeedingAttention == 0 ? ExitAction.Exit
-        : requestedByOtherProcess ? ExitAction.RefuseWithToast
-        : ExitAction.ConfirmWithUser;
+    /// <param name="forUninstall">
+    /// The request came from an uninstall. Finished jobs do not hold it up: uninstall deletes
+    /// every job log anyway, so refusing would protect no list of files, and a job closed with X
+    /// hours earlier would block the uninstall with nothing on screen to say why. Running jobs
+    /// still do: an uninstall never cancels a paste.
+    /// </param>
+    public static ExitAction ExitDecision(bool hasActiveJobs, int finishedNeedingAttention, bool requestedByOtherProcess, bool forUninstall = false)
+    {
+        var blocking = requestedByOtherProcess && forUninstall ? 0 : finishedNeedingAttention;
+        return !hasActiveJobs && blocking == 0 ? ExitAction.Exit
+            : requestedByOtherProcess ? ExitAction.RefuseWithToast
+            : ExitAction.ConfirmWithUser;
+    }
 
     /// <summary>Finished jobs that still need the user, for <see cref="ExitDecision"/>.</summary>
     public static int FinishedNeedingAttention(IReadOnlyList<JobSnapshot> jobs) =>

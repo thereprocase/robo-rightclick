@@ -4,6 +4,22 @@ namespace RoboRightClick.Core;
 public static class InstallText
 {
     /// <summary>
+    /// The message when the running tray did not close for an install, update, repair or
+    /// uninstall. The installer cannot see why, so the text names every cause that can apply and
+    /// every way out, and never claims jobs are running when none may be. An uninstall is held
+    /// up only by running pastes (<see cref="StartupRules.ExitDecision"/>), except by a tray from
+    /// before that rule, which the text's last way out (Exit on the tray icon) also covers.
+    /// </summary>
+    public static (string Heading, string Body) TrayDidNotClose(bool forUninstall) => forUninstall
+        ? ($"{AppInfo.Name} did not close",
+            "A paste is probably still running: an uninstall never cancels one. Let it finish, or cancel it in the Jobs window, "
+                + "or choose Exit on the tray icon, which asks before canceling. Then run the uninstall again.")
+        : ($"{AppInfo.Name} did not close",
+            "Pastes are still running, or finished ones still need your attention (closing would drop their lists of files to check). "
+                + "Let running pastes finish or cancel them; for finished ones choose Try again, Skip or OK in the Jobs window; "
+                + "or choose Exit on the tray icon, which asks once and then closes. Then run this again.");
+
+    /// <summary>
     /// What to do next. With the Robo-Paste hotkey on it names the hotkey: an upgrade from a
     /// version without it turns it on (a config.json without "pasteHotkey" means the default),
     /// and a keyboard hook must not arrive unannounced. The tray's first-run hint names it too,

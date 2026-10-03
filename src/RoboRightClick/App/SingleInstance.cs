@@ -8,8 +8,9 @@ namespace RoboRightClick.App;
 /// created with an explicit security descriptor granting only the current user (and
 /// SYSTEM), so another user's process in the session cannot squat or signal them:
 /// a mutex held for the tray's lifetime, an event that asks the running tray to exit
-/// (--install for upgrades, --uninstall), and a manual-reset "ready" event set once the
-/// COM class objects are registered.
+/// (--install for upgrades), a second one for --uninstall (finished jobs that still need
+/// attention do not hold an uninstall up, since it deletes their logs), and a manual-reset
+/// "ready" event set once the COM class objects are registered.
 /// </summary>
 /// <remarks>
 /// A tray started by COM with -Embedding that finds the mutex taken (a Run-key start won
@@ -23,6 +24,7 @@ internal sealed class SingleInstance : IDisposable
 {
     public const string MutexName = @"Local\RoboRightClick.Instance";
     public const string ExitEventName = @"Local\RoboRightClick.ExitRequest";
+    public const string UninstallExitEventName = @"Local\RoboRightClick.UninstallExitRequest";
     public const string ReadyEventName = @"Local\RoboRightClick.Ready";
 
     public static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(10);
@@ -31,16 +33,19 @@ internal sealed class SingleInstance : IDisposable
 
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _exitEvent;
+    private readonly EventWaitHandle _uninstallExitEvent;
     private readonly EventWaitHandle _readyEvent;
     private readonly object _listenerLock = new();
-    private EventHandler? _exitRequested;
+    private EventHandler<bool>? _exitRequested;
     private RegisteredWaitHandle? _exitWait;
+    private RegisteredWaitHandle? _uninstallExitWait;
     private bool _disposed;
 
-    private SingleInstance(Mutex mutex, EventWaitHandle exitEvent, EventWaitHandle readyEvent)
+    private SingleInstance(Mutex mutex, EventWaitHandle exitEvent, EventWaitHandle uninstallExitEvent, EventWaitHandle readyEvent)
     {
         _mutex = mutex;
         _exitEvent = exitEvent;
+        _uninstallExitEvent = uninstallExitEvent;
         _readyEvent = readyEvent;
     }
 
@@ -53,6 +58,7 @@ internal sealed class SingleInstance : IDisposable
     {
         Mutex? mutex = null;
         EventWaitHandle? exitEvent = null;
+        EventWaitHandle? uninstallExitEvent = null;
         EventWaitHandle? readyEvent = null;
         try
         {
@@ -66,6 +72,8 @@ internal sealed class SingleInstance : IDisposable
 
             exitEvent = EventWaitHandleAcl.Create(
                 false, EventResetMode.AutoReset, ExitEventName, out _, EventSecurityForCurrentUser());
+            uninstallExitEvent = EventWaitHandleAcl.Create(
+                false, EventResetMode.AutoReset, UninstallExitEventName, out _, EventSecurityForCurrentUser());
             readyEvent = EventWaitHandleAcl.Create(
                 false, EventResetMode.ManualReset, ReadyEventName, out _, EventSecurityForCurrentUser());
 
@@ -75,9 +83,10 @@ internal sealed class SingleInstance : IDisposable
             // objects are registered.
             readyEvent.Reset();
 
-            var instance = new SingleInstance(mutex, exitEvent, readyEvent);
+            var instance = new SingleInstance(mutex, exitEvent, uninstallExitEvent, readyEvent);
             mutex = null;
             exitEvent = null;
+            uninstallExitEvent = null;
             readyEvent = null;
             return instance;
         }
@@ -96,6 +105,7 @@ internal sealed class SingleInstance : IDisposable
                 mutex.Dispose();
             }
             exitEvent?.Dispose();
+            uninstallExitEvent?.Dispose();
             readyEvent?.Dispose();
         }
     }
@@ -144,7 +154,11 @@ internal sealed class SingleInstance : IDisposable
     /// be released. False if a tray is still running (for example it refused because jobs
     /// are active).
     /// </summary>
-    public static bool RequestExitAndWait(TimeSpan timeout)
+    /// <param name="forUninstall">
+    /// Signal the uninstall event: the tray then exits over finished jobs that still need
+    /// attention. A tray from before that event existed gets the plain exit event instead.
+    /// </param>
+    public static bool RequestExitAndWait(TimeSpan timeout, bool forUninstall = false)
     {
         // No mutex, no tray: nothing to stop. Modify is the right ReleaseMutex needs: with
         // Synchronize alone the wait below would acquire the mutex and the release would
@@ -156,7 +170,8 @@ internal sealed class SingleInstance : IDisposable
 
         using (running)
         {
-            if (EventWaitHandleAcl.TryOpenExisting(ExitEventName, EventWaitHandleRights.Modify, out var exit))
+            if ((forUninstall && EventWaitHandleAcl.TryOpenExisting(UninstallExitEventName, EventWaitHandleRights.Modify, out var exit))
+                || EventWaitHandleAcl.TryOpenExisting(ExitEventName, EventWaitHandleRights.Modify, out exit))
             {
                 using (exit)
                 {
@@ -191,11 +206,11 @@ internal sealed class SingleInstance : IDisposable
     public void ClearReady() => _readyEvent.Reset();
 
     /// <summary>
-    /// Raised on a thread-pool thread when another process signals the exit event; handlers
-    /// marshal to the UI thread. Listening starts with the first subscriber, so a request
-    /// cannot be consumed before anyone is there to handle it.
+    /// Raised on a thread-pool thread when another process signals an exit event, with true
+    /// for the uninstall event; handlers marshal to the UI thread. Listening starts with the
+    /// first subscriber, so a request cannot be consumed before anyone is there to handle it.
     /// </summary>
-    public event EventHandler? ExitRequested
+    public event EventHandler<bool>? ExitRequested
     {
         add
         {
@@ -205,7 +220,9 @@ internal sealed class SingleInstance : IDisposable
                 if (_exitWait is null && !_disposed)
                 {
                     _exitWait = ThreadPool.RegisterWaitForSingleObject(
-                        _exitEvent, (_, _) => OnExitRequested(), null, Timeout.Infinite, executeOnlyOnce: false);
+                        _exitEvent, (_, _) => OnExitRequested(forUninstall: false), null, Timeout.Infinite, executeOnlyOnce: false);
+                    _uninstallExitWait = ThreadPool.RegisterWaitForSingleObject(
+                        _uninstallExitEvent, (_, _) => OnExitRequested(forUninstall: true), null, Timeout.Infinite, executeOnlyOnce: false);
                 }
             }
         }
@@ -229,15 +246,18 @@ internal sealed class SingleInstance : IDisposable
             _disposed = true;
             _exitWait?.Unregister(null);
             _exitWait = null;
+            _uninstallExitWait?.Unregister(null);
+            _uninstallExitWait = null;
         }
 
         _readyEvent.Dispose();
         _exitEvent.Dispose();
+        _uninstallExitEvent.Dispose();
         TryRelease(_mutex);
         _mutex.Dispose();
     }
 
-    private void OnExitRequested() => _exitRequested?.Invoke(this, EventArgs.Empty);
+    private void OnExitRequested(bool forUninstall) => _exitRequested?.Invoke(this, forUninstall);
 
     /// <summary>
     /// ReleaseMutex throws when the calling thread does not own the mutex (or the handle

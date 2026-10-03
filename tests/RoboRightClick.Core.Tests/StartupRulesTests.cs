@@ -23,6 +23,38 @@ public class StartupRulesTests
     }
 
     [Fact]
+    public void An_uninstall_is_held_up_by_running_jobs_but_not_by_finished_ones()
+    {
+        // Uninstall deletes every job log: refusing over a finished job protects nothing.
+        Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, finishedNeedingAttention: 3, requestedByOtherProcess: true, forUninstall: true));
+        Assert.Equal(ExitAction.RefuseWithToast, StartupRules.ExitDecision(hasActiveJobs: true, finishedNeedingAttention: 0, requestedByOtherProcess: true, forUninstall: true));
+        // An update keeps the logs, so it still waits for finished jobs to be reviewed.
+        Assert.Equal(ExitAction.RefuseWithToast, StartupRules.ExitDecision(hasActiveJobs: false, finishedNeedingAttention: 3, requestedByOtherProcess: true, forUninstall: false));
+        // The user's own Exit still asks.
+        Assert.Equal(ExitAction.ConfirmWithUser, StartupRules.ExitDecision(hasActiveJobs: false, finishedNeedingAttention: 3, requestedByOtherProcess: false, forUninstall: true));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void The_refusal_never_claims_jobs_are_running_and_names_every_way_out(bool forUninstall)
+    {
+        var (heading, body) = InstallText.TrayDidNotClose(forUninstall);
+
+        Assert.DoesNotContain("Jobs are still running", heading);
+        Assert.Contains("Exit on the tray icon", body);
+        Assert.Contains("Jobs window", body);
+        if (!forUninstall)
+        {
+            Assert.Contains("Try again, Skip or OK", body);
+        }
+        var toast = ToastText.ForExitRefused(active: 0, finishedNeedingAttention: 2);
+        Assert.Contains("Skip or OK", toast.Body);
+        Assert.Contains("Exit on this icon", toast.Body);
+        Assert.True(toast.Body.Length <= ToastText.MaxBalloonText);
+    }
+
+    [Fact]
     public void The_interrupted_paste_log_stays_in_the_menu_until_opened()
     {
         Assert.True(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, jobs: [], interruptedPending: true).InterruptedLogVisible);
@@ -126,7 +158,7 @@ public class StartupRulesTests
         Assert.Contains("1 job that ended with problems has not been reviewed", runningBody);
 
         var refused = ToastText.ForExitRefused(active: 0, finishedNeedingAttention: 1);
-        Assert.Contains("Try again or Skip", refused.Body);
+        Assert.Contains("Try again, Skip or OK", refused.Body);
         Assert.DoesNotContain(@":\", refused.Title + refused.Body, StringComparison.Ordinal);
     }
 

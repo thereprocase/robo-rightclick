@@ -29,11 +29,6 @@ internal static class Installer
 
     private static readonly TimeSpan ExeInUseRetryInterval = TimeSpan.FromMilliseconds(100);
 
-    private const string BusyMessage =
-        "RoboRightClick is still running: it has jobs in progress, or finished jobs whose problems you have not reviewed "
-        + "(closing would drop their lists of files to check). Finish or cancel them, or choose Try again or Skip "
-        + "for them in the Jobs window, then try again.";
-
     private const string NewerConfigKeptMessage =
         "config.json was written by a newer version of RoboRightClick, or its \"version\" field is damaged, "
         + "so it was left unchanged; "
@@ -91,7 +86,8 @@ internal static class Installer
 
             if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
             {
-                return Fail("Jobs are still running", BusyMessage, quiet);
+                var (heading, body) = InstallText.TrayDidNotClose(forUninstall: false);
+                return Fail(heading, body, quiet);
             }
 
             string? backup = null;
@@ -247,7 +243,8 @@ internal static class Installer
     }
 
     /// <summary>
-    /// 1. Stop the running tray as in install (refuse while jobs run). 2.
+    /// 1. Stop the running tray as in install (refuse while jobs run; finished jobs that need
+    /// attention do not hold an uninstall up, since it deletes their logs). 2.
     /// RegistryWriter.Remove(Registration.UninstallRemovals()). 3. Delete exactly the files
     /// <see cref="UninstallPlan"/> lists (config.json, config.json.bad, history.jsonl, crash.log, each
     /// job folder's job.json and robocopy.log) and then remove those folders with
@@ -274,9 +271,11 @@ internal static class Installer
                 ? UninstallPlan.SelfDeleteArguments(paths.InstalledExe, paths.InstallDirectory, Environment.GetFolderPath(Environment.SpecialFolder.System))
                 : null;
 
-            if (!SingleInstance.RequestExitAndWait(TrayExitTimeout))
+            // Finished jobs do not hold an uninstall up (it deletes their logs); running ones do.
+            if (!SingleInstance.RequestExitAndWait(TrayExitTimeout, forUninstall: true))
             {
-                return Fail("Jobs are still running", BusyMessage, quiet);
+                var (heading, body) = InstallText.TrayDidNotClose(forUninstall: true);
+                return Fail(heading, body, quiet);
             }
 
             // Job folders are listed once the tray has stopped, so none appears afterwards.

@@ -327,7 +327,7 @@ public static class ToastText
             (finishedNeedingAttention == 1
                 ? "1 finished job needs your attention, and closing would drop its list of files to check."
                 : $"{finishedNeedingAttention:N0} finished jobs need your attention, and closing would drop their lists of files to check.")
-                + " Open Jobs, choose Try again or Skip, then try again.",
+                + " In Jobs choose Try again, Skip or OK for each, or choose Exit on this icon, then try again.",
             ToastKind.Warning);
 
     /// <summary>Windows cuts a balloon's text at 255 characters (NOTIFYICONDATA.szInfo).</summary>

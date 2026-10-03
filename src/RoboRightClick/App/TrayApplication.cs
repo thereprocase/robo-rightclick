@@ -40,12 +40,13 @@ namespace RoboRightClick.App;
 /// thread, which unhooks; joined for 1 s) → await JobManager.CancelAllAndWaitAsync → hide icon →
 /// dispose the rest → release the mutex → ExitThread. An exit request from another process
 /// (SingleInstance.ExitRequested, marshaled to the UI thread) is honored only when no jobs
-/// are active; otherwise it toasts and stays.</para>
+/// are active and, unless it comes from an uninstall, no finished job still needs attention;
+/// otherwise it toasts and stays.</para>
 /// <para>Tray: left click and double click open Jobs (a job AwaitingDecision brings its
 /// conflict dialog to the front instead). Menu: Jobs…, Pause all (checked while on),
 /// Resume all, Ephemeral mode (check), the hotkey line ("Robo-Paste hotkey: Ctrl+Shift+V…",
 /// "off…", "off (setting invalid)…" or "not active…"; opens Settings at the field),
-/// Settings…, Open logs (hidden in ephemeral), Exit.
+/// Settings…, Open logs (hidden in ephemeral), "Interrupted paste: show log" (until opened), Exit.
 /// Icon and tooltip follow TrayStatus.Derive on JobManager.StateChanged, settings changes
 /// and a 1 s timer while jobs run; the tooltip is set only when its text changes.
 /// JobManager.Created opens a progress window after ~1 s when showProgressWindow is on.
@@ -321,7 +322,7 @@ internal sealed class TrayApplication : ApplicationContext
         };
         _settings.Changed += (_, _) => OnSettingsChanged();
         _notifier.Clicked += (_, target) => OnToastClicked(target);
-        _instance.ExitRequested += (_, _) => Post(() => RequestExit(requestedByOtherProcess: true));
+        _instance.ExitRequested += (_, forUninstall) => Post(() => RequestExit(requestedByOtherProcess: true, forUninstall));
         _icon.MouseClick += (_, e) => OnTrayClicked(e.Button);
         _icon.MouseDoubleClick += (_, e) => OnTrayClicked(e.Button);
         _refreshTimer.Tick += (_, _) => RefreshTray();
@@ -706,7 +707,8 @@ internal sealed class TrayApplication : ApplicationContext
         }
     }
 
-    private async void RequestExit(bool requestedByOtherProcess)
+    /// <param name="forUninstall">An uninstall asked: finished jobs needing attention do not hold it up (StartupRules.ExitDecision).</param>
+    private async void RequestExit(bool requestedByOtherProcess, bool forUninstall = false)
     {
         if (_cancelForExit is not null)
         {
@@ -717,7 +719,7 @@ internal sealed class TrayApplication : ApplicationContext
         var snapshots = _jobs.Snapshots();
         var active = snapshots.Count(j => !JobStates.IsTerminal(j.State));
         var unreviewed = StartupRules.FinishedNeedingAttention(snapshots);
-        switch (StartupRules.ExitDecision(_jobs.HasActiveJobs, unreviewed, requestedByOtherProcess))
+        switch (StartupRules.ExitDecision(_jobs.HasActiveJobs, unreviewed, requestedByOtherProcess, forUninstall))
         {
             case ExitAction.RefuseWithToast:
                 _notifier.Show(ToastText.ForExitRefused(active, unreviewed), unreviewed > 0 && active == 0 ? ToastTarget.Jobs : ToastTarget.None);
