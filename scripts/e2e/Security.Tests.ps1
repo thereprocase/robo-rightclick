@@ -19,7 +19,9 @@ cannot do through the tray. Needs the installed app and a desktop session. Secti
      delete the canary. Nothing is copied or moved, no robocopy starts, the tray stays up and
      logs no crash. A plain valid path is the control: it must copy.
   6. File names that robocopy would read as switches ("-E", "-MOV") in a selection: refused, the
-     others copy, nothing is moved or recursed.
+     others copy, nothing is moved or recursed. 6b: "-E" inside a folder that a keep-both answer
+     splits into named batches: refused and listed in the summary, the rest of the folder
+     arrives, and the job does not end Failed.
 
 Run alone with a real exe: the COM and pipe sections use the installed copy.
 #>
@@ -526,6 +528,42 @@ if (Test-Section '6') {
     else {
         Write-Step 'SKIPPED: cross-volume cut of switch-like names (needs -SecondVolume)'
     }
+
+    # 6b. A switch-like name inside a folder the planner splits: a keep-both answer cuts the
+    # tree into named batches, so '-E' would have to be named. It is refused, the rest of the
+    # folder still arrives, and the job ends with a refusal (DoneWithErrors), not Failed.
+    Write-Host '[6b] switch-like name in a split folder'
+    $splitSrc = Join-Path $work 'switch-split\src\T'
+    $splitParent = Join-Path $work 'switch-split\dst'
+    $splitDst = Join-Path $splitParent 'T'
+    New-Item -ItemType Directory -Path (Join-Path $splitSrc 'sub'), $splitDst | Out-Null
+    Set-Content -LiteralPath (Join-Path $splitSrc '-E') -Value 'switch-like, inside a split folder'
+    Set-Content -LiteralPath (Join-Path $splitSrc 'free.txt') -Value 'no conflict'
+    Set-Content -LiteralPath (Join-Path $splitSrc 'keep.txt') -Value 'the version being pasted'
+    Set-Content -LiteralPath (Join-Path $splitSrc 'sub\deep.txt') -Value 'deep'
+    Set-Content -LiteralPath (Join-Path $splitDst 'keep.txt') -Value 'the version already there'
+    $keepHash = Get-FileSha256 (Join-Path $splitDst 'keep.txt')
+    $configText = Get-RoboConfigText
+    Set-RoboConfig @{ conflictDefault = 'ask' }
+    try {
+        Assert-That ((Invoke-Robo -Verb copy -Paths $splitSrc) -eq 0) '6b: Robo-Copy accepted the folder'
+        Assert-That ((Invoke-Robo -Verb paste -Paths $splitParent) -eq 0) '6b: Robo-Paste accepted the destination'
+        Invoke-UiaButton (Wait-TrayElement 'Decide')
+        Set-UiaToggle (Wait-TrayElement 'SelectAllSource') $true
+        Set-UiaToggle (Wait-TrayElement 'SelectAllDestination') $true
+        Invoke-UiaButton (Wait-TrayElement 'Continue')
+        foreach ($name in 'free.txt', 'sub\deep.txt', 'keep (2).txt') { Wait-PathExists (Join-Path $splitDst $name) 60 }
+        Wait-RobocopyGone -TimeoutSec 60
+        $refused = Wait-TrayElement 'Refused' 30
+        $tray = Get-TrayProcessId
+        Assert-That ($null -eq (Find-UiaElement $tray 'FailureReason')) '6b: the job did not end Failed'
+        $rows = Get-UiaListItemNames $refused
+        Assert-That (@($rows | Where-Object { $_ -like '*\-E*' }).Count -eq 1) "6b: '-E' is listed as refused ($($rows -join ' | '))"
+        Assert-That (-not (Test-Path -LiteralPath (Join-Path $splitDst '-E'))) "6b: '-E' was not copied"
+        Assert-That ((Get-FileSha256 (Join-Path $splitDst 'keep.txt')) -eq $keepHash) '6b: the file already there is unchanged'
+        Invoke-UiaButton (Wait-TrayElement 'SkipErrors')
+    }
+    finally { Restore-RoboConfig $configText }
 }
 
 Write-Host 'PASS: Security'

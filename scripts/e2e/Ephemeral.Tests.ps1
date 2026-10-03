@@ -287,12 +287,14 @@ try {
     Wait-ProgressCancelAndPress
     Close-ErrorSummary
 
-    # 4. conflict, answered with Skip
+    # 4. conflict, answered with Skip: the whole paste is skipped, which is a Done job, not a
+    # failure. Pressing whatever summary appears would let a Failed job pass too.
     Assert-That ((Invoke-Robo -Verb copy -Paths $conflictFile) -eq 0) 'job 4 (conflict): Robo-Copy accepted'
     Assert-That ((Invoke-Robo -Verb paste -Paths $destConflict) -eq 0) 'job 4 (conflict): Robo-Paste accepted'
     Invoke-UiaButton (Wait-TrayElement 'Skip')
     Write-Step 'job 4 (conflict): answered Skip'
-    Start-Sleep -Seconds 3
+    Assert-NoJobSummary 'job 4 (conflict, all skipped)'
+    Assert-That ((Get-Content -LiteralPath (Join-Path $destConflict "$marker-conflict.txt") -Raw).Trim() -eq 'the version already there') 'job 4 (conflict): the file already there is unchanged'
     Close-ErrorSummary
 
     # 5. failure: the source is held open without sharing, so robocopy cannot read it

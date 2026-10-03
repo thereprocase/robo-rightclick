@@ -312,6 +312,31 @@ function Wait-TrayElement([string]$Name, [int]$TimeoutSec = 30) {
     throw "No tray window showed '$Name' within $TimeoutSec s."
 }
 
+# Fails when a job summary or failure shows up within $Seconds: the error summary's buttons
+# (SkipErrors, TryAgain) or its failure strip (FailureReason). A Done job closes its progress
+# window and shows none of them; a job that ended Failed or with errors shows them. Pressing
+# whatever is open instead (Close-ErrorSummary) would let both outcomes pass.
+function Assert-NoJobSummary([string]$Label, [int]$Seconds = 10) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($p in Get-RoboProcesses) {
+            foreach ($name in 'FailureReason', 'TryAgain', 'SkipErrors') {
+                if (Find-UiaElement $p.Id $name) {
+                    Assert-That $false "$Label : the job ended with a summary ('$name' is shown); a Done job shows none"
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Step "$Label : no summary within $Seconds s (the job ended Done)"
+}
+
+# The item names of a list (the error summary's lists name each row by its path and note).
+function Get-UiaListItemNames($Element) {
+    $itemType = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ControlTypeProperty), ([Windows.Automation.ControlType]::ListItem)
+    return @($Element.FindAll([Windows.Automation.TreeScope]::Descendants, $itemType) | ForEach-Object { $_.Current.Name })
+}
+
 function Set-UiaToggle($Element, [bool]$On) {
     $toggle = $Element.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
     $want = if ($On) { [Windows.Automation.ToggleState]::On } else { [Windows.Automation.ToggleState]::Off }

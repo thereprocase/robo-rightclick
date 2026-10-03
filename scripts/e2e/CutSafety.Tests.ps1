@@ -15,9 +15,16 @@ destination was not replaced.
   F. conflictDefault=ask, the conflict dialog answered through UI Automation: Replace, Skip,
      and "Let me decide" with both sides ticked (keep both on one volume; across volumes keep
      both is not offered and the source stays). Across volumes only with -SecondVolume.
+  G. conflictDefault=ask, a cut whose only file conflicts: answered Skip (and, across volumes,
+     "Let me decide" with both sides ticked, which is a skip there), the plan has no step left
+     to run. The job must end Done, with no summary and no failure, the source file unchanged
+     and the destination untouched. On one volume keep both is also run: the file arrives as
+     "conflict (2).txt". Across volumes only with -SecondVolume.
 
-Each scenario also cuts a file that can move, and waits for it to arrive, so a paste that was
-refused or never started cannot pass as "the source was kept".
+Each scenario but G also cuts a file that can move, and waits for it to arrive, so a paste that
+was refused or never started cannot pass as "the source was kept". G has nothing to move by
+design; the conflict question appearing proves its job ran, and the missing summary proves it
+ended Done rather than Failed.
 
 Without -SecondVolume the same-volume parts run and the script then exits as SKIP (code 3),
 because the cross-volume checks, the ones robocopy /MOV is involved in, did not run.
@@ -250,6 +257,48 @@ function Test-AskCut([string]$DestRoot, [string]$Label, [string]$Choice, [bool]$
     }
 }
 
+# Scenario G: the only file conflicts, so a Skip answer leaves the plan with no step at all.
+function Test-OnlyConflictCut([string]$DestRoot, [string]$Label, [string]$Choice, [bool]$CrossVolume) {
+    $srcDir = Join-Path $work "g-src-$Label"
+    $destParent = Join-Path $DestRoot "g-dest-$Label"
+    $destDir = Join-Path $destParent "g-src-$Label"
+    New-Item -ItemType Directory -Path $srcDir, $destDir | Out-Null
+    $srcFile = Join-Path $srcDir 'conflict.txt'
+    $destFile = Join-Path $destDir 'conflict.txt'
+    Set-Content -LiteralPath $srcFile -Value "the only file, being pasted ($Label)"
+    Set-Content -LiteralPath $destFile -Value "the only file, already there ($Label)"
+    $srcHash = Get-FileSha256 $srcFile
+    $destHash = Get-FileSha256 $destFile
+
+    Assert-That ((Invoke-Robo -Verb cut -Paths $srcDir) -eq 0) "[$Label] Robo-Cut accepted the folder"
+    Assert-That ((Invoke-Robo -Verb paste -Paths $destParent) -eq 0) "[$Label] Robo-Paste accepted the destination"
+    switch ($Choice) {
+        'Skip' { Invoke-UiaButton (Wait-TrayElement 'Skip') }
+        'KeepBoth' {
+            Invoke-UiaButton (Wait-TrayElement 'Decide')
+            Set-UiaToggle (Wait-TrayElement 'SelectAllSource') $true
+            Set-UiaToggle (Wait-TrayElement 'SelectAllDestination') $true
+            Invoke-UiaButton (Wait-TrayElement 'Continue')
+        }
+    }
+    Write-Step "[$Label] answered the conflict dialog: $Choice"
+    Wait-JobQuiet
+    Assert-NoJobSummary "[$Label]"
+
+    $keptBoth = Join-Path $destDir 'conflict (2).txt'
+    Assert-That ((Get-FileSha256 $destFile) -eq $destHash) "[$Label] the file already there is unchanged"
+    if ($Choice -eq 'KeepBoth' -and -not $CrossVolume) {
+        Wait-PathExists $keptBoth 30
+        Assert-That ((Get-FileSha256 $keptBoth) -eq $srcHash) "[$Label] the pasted version arrived as 'conflict (2).txt'"
+        Assert-That (-not (Test-Path -LiteralPath $srcFile)) "[$Label] the kept-both file left the source, as a cut does"
+    }
+    else {
+        Assert-That (-not (Test-Path -LiteralPath $keptBoth)) "[$Label] no second copy was made"
+        Assert-That ((Test-Path -LiteralPath $srcFile) -and (Get-FileSha256 $srcFile) -eq $srcHash) "[$Label] the source file is still there, unchanged"
+    }
+    Close-TrayDialogs
+}
+
 try {
     Set-RoboConfig @{ conflictDefault = 'skip' }
 
@@ -300,6 +349,10 @@ try {
     foreach ($choice in 'Replace', 'Skip', 'KeepBoth') {
         Test-AskCut -DestRoot $work -Label "same-volume-$choice" -Choice $choice -CrossVolume $false
         if ($second) { Test-AskCut -DestRoot $second -Label "cross-volume-$choice" -Choice $choice -CrossVolume $true }
+    }
+    foreach ($choice in 'Skip', 'KeepBoth') {
+        Test-OnlyConflictCut -DestRoot $work -Label "only-conflict-same-volume-$choice" -Choice $choice -CrossVolume $false
+        if ($second) { Test-OnlyConflictCut -DestRoot $second -Label "only-conflict-cross-volume-$choice" -Choice $choice -CrossVolume $true }
     }
 }
 finally {
