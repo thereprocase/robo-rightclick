@@ -24,6 +24,44 @@ public class JobRecordsTests
         summary);
 
     [Fact]
+    public void The_summary_keeps_the_files_to_check_so_they_survive_a_restart()
+    {
+        // A canceled copy that left 3 files possibly incomplete, and one that failed before it.
+        var many = Enumerable.Range(0, 250).Select(i => $@"D:\dest\late{i}.txt").ToList();
+        var summary = new JobSummary(Id, JobState.Canceled, 4, 400, [])
+        {
+            Damaged = new PathList([@"D:\dest\big.iso", @"D:\dest\b.bin", @"D:\dest\c.bin"], 3),
+            MayBeIncomplete = new PathList([@"D:\dest\video.mp4"], 1),
+            SkippedAppeared = new PathList(many, 1_234),
+        };
+
+        using var doc = JsonDocument.Parse(JobRecords.ToJson(Record(summary)));
+        var s = doc.RootElement.GetProperty("summary");
+
+        Assert.Equal(3, s.GetProperty("damaged").GetProperty("count").GetInt32());
+        Assert.Equal(@"D:\dest\big.iso", s.GetProperty("damaged").GetProperty("paths")[0].GetString());
+        Assert.Equal([@"D:\dest\video.mp4"], s.GetProperty("mayBeIncomplete").GetProperty("paths").EnumerateArray().Select(e => e.GetString()));
+        // Bounded like the sources: the first paths and the exact count.
+        Assert.Equal(1_234, s.GetProperty("skippedAppeared").GetProperty("count").GetInt32());
+        Assert.Equal(JobRecords.MaxRecordedPaths, s.GetProperty("skippedAppeared").GetProperty("paths").GetArrayLength());
+    }
+
+    [Fact]
+    public void A_clean_summary_writes_no_empty_lists_and_the_destination_reads_back()
+    {
+        var json = JobRecords.ToJson(Record(new JobSummary(Id, JobState.Done, 1, 1, [])));
+        using var doc = JsonDocument.Parse(json);
+        var s = doc.RootElement.GetProperty("summary");
+
+        Assert.False(s.TryGetProperty("damaged", out _));
+        Assert.False(s.TryGetProperty("mayBeIncomplete", out _));
+        Assert.False(s.TryGetProperty("skippedAppeared", out _));
+        Assert.Equal(@"D:\dest", JobRecords.DestinationOf(json));
+        Assert.Null(JobRecords.DestinationOf("{ \"job\": 3 }"));
+        Assert.Null(JobRecords.DestinationOf("not json"));
+    }
+
+    [Fact]
     public void Json_round_trips_with_camel_case_keys_and_names()
     {
         var summary = new JobSummary(Id, JobState.DoneWithErrors, 12, 3_000_000_000, Errors(2)) { TotalErrors = 2 };

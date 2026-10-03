@@ -27,6 +27,14 @@ public enum InterruptedCheck
     CurrentRun,
 }
 
+/// <summary>What the startup check found: how many jobs a previous run left mid-paste, and the latest one.</summary>
+/// <param name="LatestRecord">The latest such job's job.json (folder names sort by creation time).</param>
+/// <param name="LatestDestination">That job's destination, for the notice (<see cref="ToastText.ForInterrupted"/>).</param>
+public sealed record InterruptedJobs(int Count, string? LatestRecord, string? LatestDestination)
+{
+    public static readonly InterruptedJobs None = new(0, null, null);
+}
+
 /// <summary>Everything job.json holds; accumulated by the host's FileJobSink from IJobSink calls.</summary>
 public sealed record JobRecord(
     JobDescription Job,
@@ -59,6 +67,14 @@ public static class JobRecords
     public const int MaxRecordedSourceChars = 16_384;
 
     /// <summary>
+    /// Paths written per list of the summary's possibly incomplete, damaged and skipped files,
+    /// at most, and <see cref="MaxRecordedSourceChars"/> characters of them; each list also
+    /// has its exact "count". These lists are what survives a restart: the Jobs window that
+    /// shows them in full lives in memory only.
+    /// </summary>
+    public const int MaxRecordedPaths = 100;
+
+    /// <summary>
     /// Commands kept in job.json, the most recent ones: a paste of 100,000 loose files runs a
     /// command per 24,000 characters of names. The total is written as "commandCount", and
     /// robocopy.log has every command line in full.
@@ -81,18 +97,25 @@ public static class JobRecords
     /// The sources a record lists: the first ones up to <see cref="MaxRecordedSources"/> and
     /// <see cref="MaxRecordedSourceChars"/>, never fewer than one when there is one.
     /// </summary>
-    public static IReadOnlyList<string> RecordedSources(IReadOnlyList<string> sources)
+    public static IReadOnlyList<string> RecordedSources(IReadOnlyList<string> sources) =>
+        FirstPaths(sources, MaxRecordedSources);
+
+    /// <summary>The paths a summary list records: the first up to <see cref="MaxRecordedPaths"/> and <see cref="MaxRecordedSourceChars"/>.</summary>
+    public static IReadOnlyList<string> RecordedPaths(IReadOnlyList<string> paths) =>
+        FirstPaths(paths, MaxRecordedPaths);
+
+    private static List<string> FirstPaths(IReadOnlyList<string> paths, int maxCount)
     {
-        var recorded = new List<string>(Math.Min(sources.Count, MaxRecordedSources));
+        var recorded = new List<string>(Math.Min(paths.Count, maxCount));
         var chars = 0;
-        foreach (var source in sources)
+        foreach (var path in paths)
         {
-            if (recorded.Count == MaxRecordedSources || (recorded.Count > 0 && chars + source.Length > MaxRecordedSourceChars))
+            if (recorded.Count == maxCount || (recorded.Count > 0 && chars + path.Length > MaxRecordedSourceChars))
             {
                 break;
             }
-            recorded.Add(source);
-            chars += source.Length;
+            recorded.Add(path);
+            chars += path.Length;
         }
         return recorded;
     }
@@ -116,7 +139,10 @@ public static class JobRecords
     /// camelCase names. Bounded by construction: the first sources (<see cref="RecordedSources"/>)
     /// with "sourceCount", states, the most recent <see cref="MaxRecordedCommands"/> commands
     /// with "commandCount" and their arguments cut (<see cref="RecordedArguments"/>), summary
-    /// and at most <see cref="MaxRecordedErrors"/> errors. Readers ignore the count fields.
+    /// and at most <see cref="MaxRecordedErrors"/> errors. The summary also lists, when there are
+    /// any, "damaged", "mayBeIncomplete" and "skippedAppeared" files, each as "count" and the
+    /// first "paths" (<see cref="RecordedPaths"/>), so a restart does not lose which files to
+    /// check. Readers ignore the count fields.
     /// </summary>
     /// <param name="commandCount">Commands the job ran in all; at least the commands passed.</param>
     public static string ToJson(JobRecord record, int? commandCount = null)
@@ -182,6 +208,9 @@ public static class JobRecords
                     w.WriteEndObject();
                 }
                 w.WriteEndArray();
+                WritePathList(w, "damaged", summary.Damaged);
+                WritePathList(w, "mayBeIncomplete", summary.MayBeIncomplete);
+                WritePathList(w, "skippedAppeared", summary.SkippedAppeared);
                 w.WriteEndObject();
             }
             else
@@ -401,6 +430,40 @@ public static class JobRecords
     {
         var name = value.ToString();
         return char.ToLowerInvariant(name[0]) + name[1..];
+    }
+
+    /// <summary>Written only when there is something in it, so a clean record stays as it was.</summary>
+    private static void WritePathList(Utf8JsonWriter w, string property, PathList list)
+    {
+        var count = Math.Max(list.Count, list.Paths.Count);
+        if (count == 0)
+        {
+            return;
+        }
+        w.WriteStartObject(property);
+        w.WriteNumber("count", count);
+        WriteStrings(w, "paths", RecordedPaths(list.Paths));
+        w.WriteEndObject();
+    }
+
+    /// <summary>"job"."destination" of a job.json, or null when the text is not a job record.</summary>
+    public static string? DestinationOf(string jobJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(jobJson);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("job", out var job)
+                && job.ValueKind == JsonValueKind.Object
+                && job.TryGetProperty("destination", out var destination)
+                && destination.ValueKind == JsonValueKind.String
+                ? destination.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static void WriteStrings(Utf8JsonWriter w, string property, IReadOnlyList<string> values)

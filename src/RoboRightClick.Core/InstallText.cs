@@ -33,13 +33,13 @@ public static class InstallText
             "Install", CanOpen: false),
         InstallDecision.Update { IsDowngrade: false, From: { } from } update => new(
             $"Update {AppInfo.Name} {from} \u2192 {update.To}?",
-            "The running copy is stopped and replaced; your settings and job history are kept. "
-                + "It will not stop while copies are in progress.",
+            "The running copy is stopped and replaced; your settings and job logs are kept. "
+                + "It will not stop while copies are in progress or finished ones still need your attention.",
             "Update", CanOpen: true),
         InstallDecision.Update { IsDowngrade: false } update => new(
             $"Update {AppInfo.Name} to {update.To}?",
             "The installed version could not be read, so it is treated as older and replaced. "
-                + "The running copy is stopped first; your settings and job history are kept.",
+                + "The running copy is stopped first; your settings and job logs are kept.",
             "Update", CanOpen: true),
         InstallDecision.Update update => new(
             $"Replace {AppInfo.Name} {update.From} with the older {update.To}?",
@@ -47,7 +47,7 @@ public static class InstallText
             "Downgrade", CanOpen: true),
         InstallDecision.Repair repair => new(
             $"{AppInfo.Name} {repair.Version} is installed. Repair it?",
-            "Repair puts back the program file, the menu icons and the registry entries. Your settings and job history are kept.",
+            "Repair puts back the program file, the menu icons and the registry entries. Your settings and job logs are kept.",
             "Repair", CanOpen: true),
         InstallDecision.RefuseDowngrade refuse => new(
             $"A newer {AppInfo.Name} is installed.",

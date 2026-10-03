@@ -263,17 +263,47 @@ public static class ToastText
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };
 
+    /// <summary>Characters of a folder name the interrupted notice shows, at most, so the balloon text fits.</summary>
+    public const int MaxNamedFolderChars = 48;
+
     /// <summary>
     /// At startup (normal mode): job logs show pastes that never finished because the app
-    /// ended. A click opens the log folder, not the Jobs window: Jobs lists only this session's
-    /// pastes, and these ran in an earlier one. Each such job's job.json ends in
-    /// <see cref="JobRecords.InterruptedStateName"/> and names its sources and destination.
+    /// ended. Names the folder the latest one was pasting into (a folder name, not a path, as
+    /// the other normal-mode toasts do), so the user knows where to look. A click opens the
+    /// jobs folder with that job's job.json selected, not the Jobs window: Jobs lists only this
+    /// session's pastes, and these ran in an earlier one. Each such job.json's "states" list
+    /// ends in <see cref="JobRecords.InterruptedStateName"/>, and it names the sources and
+    /// destination.
     /// </summary>
-    public static Toast ForInterrupted(int count) => new(
-        count == 1 ? "A paste was interrupted" : $"{count} pastes were interrupted",
-        "RoboRightClick ended while copying, so some files at the destination may be incomplete. "
-            + "Click to open the job logs: a job.json ending in \"interrupted\" names the paste.",
-        ToastKind.Warning);
+    /// <param name="latestDestination">The latest interrupted job's destination, or null when unknown.</param>
+    public static Toast ForInterrupted(int count, string? latestDestination = null)
+    {
+        var title = count == 1 ? "A paste was interrupted" : $"{count} pastes were interrupted";
+        var states = $"\"states\" list ends in \"{JobRecords.InterruptedStateName}\"";
+        if (FolderLabel(latestDestination) is not { } into)
+        {
+            return new Toast(
+                title,
+                "RoboRightClick ended while copying, so some files at the destination may be incomplete. "
+                    + $"Click to open the job logs: each such job.json's {states}.",
+                ToastKind.Warning);
+        }
+        var body = count == 1
+            ? $"RoboRightClick ended while pasting into {into}, so some files there may be incomplete. Click to see its job log; its {states}."
+            : $"RoboRightClick ended during {count} pastes, the latest into {into}, so some files may be incomplete. Click to see its job log; its {states}.";
+        return new Toast(title, body, ToastKind.Warning);
+    }
+
+    /// <summary>A destination's folder name (a drive as "D:"), cut to <see cref="MaxNamedFolderChars"/>; null when there is none.</summary>
+    private static string? FolderLabel(string? destination)
+    {
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            return null;
+        }
+        var name = WinPath.GetFileName(destination) is { Length: > 0 } leaf ? leaf : WinPath.TrimTrailingSeparators(destination);
+        return name.Length <= MaxNamedFolderChars ? name : name[..(MaxNamedFolderChars - 1)] + "…";
+    }
 
     /// <summary>Ephemeral mode was switched while normal-mode jobs run.</summary>
     public static Toast ForModeAppliesToNewJobs(LoggingMode newMode) => new(
@@ -281,11 +311,22 @@ public static class ToastText
         "The change applies to new jobs. Jobs already running keep their mode.",
         ToastKind.Info);
 
-    /// <summary>Another process (install, uninstall) asked the tray to exit while jobs run.</summary>
-    public static Toast ForExitRefused() => new(
-        "RoboRightClick is busy",
-        "It was asked to close, but jobs are still running. Try again when they finish.",
-        ToastKind.Warning);
+    /// <summary>
+    /// Another process (install, uninstall) asked the tray to exit while jobs run, or while
+    /// finished jobs still need the user: closing would drop their lists of files to check.
+    /// </summary>
+    public static Toast ForExitRefused(int active = 1, int finishedNeedingAttention = 0) => active > 0
+        ? new Toast(
+            "RoboRightClick is busy",
+            "It was asked to close, but jobs are still running. Try again when they finish.",
+            ToastKind.Warning)
+        : new Toast(
+            "RoboRightClick has jobs to review",
+            (finishedNeedingAttention == 1
+                ? "1 finished job needs your attention, and closing would drop its list of files to check."
+                : $"{finishedNeedingAttention:N0} finished jobs need your attention, and closing would drop their lists of files to check.")
+                + " Open Jobs, choose Try again or Skip, then try again.",
+            ToastKind.Warning);
 
     /// <summary>Windows cuts a balloon's text at 255 characters (NOTIFYICONDATA.szInfo).</summary>
     public const int MaxBalloonText = 255;

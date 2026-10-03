@@ -98,9 +98,11 @@ the entry is corrected. A version that cannot be read counts as older.
 `--quiet` never shows a window; the exit code (0 ok, 1 failed) is the result.
 
 1. Download the new release, check its hash, unblock the zip and extract it, as above.
-2. Let running pastes finish, or cancel them. An update asks the running tray to exit; the tray
-   refuses while jobs run, and the update then stops with a message and changes nothing. A
-   running copy is never killed.
+2. Let running pastes finish, or cancel them, and deal with finished ones that need attention
+   (Try again or Skip in the Jobs window). An update asks the running tray to exit; the tray
+   refuses while jobs run or finished jobs still need attention (the Jobs window lives in
+   memory, so exiting would drop their lists of files to check), and the update then stops
+   with a message and changes nothing. A running copy is never killed.
 3. Double-click the new `RoboRightClick.exe`, or run it with `--install`. The exe is replaced
    through a temporary file, the previous exe is kept as `RoboRightClick.exe.old` until the
    update has finished, and the menu icons and the registry keys are rewritten. If any step
@@ -213,8 +215,14 @@ first: the path filter is a heuristic, and a bare file name without quotes or fo
 through.
 
 A paste that was still running when the app ended (a crash, a power cut) is reported at the
-next start, with a tray notice that some destination files may be incomplete. Its `job.json`
-is then marked `interrupted`, so the notice does not repeat. Two cases repeat it at every
+next start, with a tray notice that names the folder the latest such paste was going into and
+says some files there may be incomplete. Clicking it opens the jobs folder with that job's
+`job.json` selected. Its `job.json` is then marked `interrupted` (the last entry of its
+`"states"` list), so the notice does not repeat. In normal mode a finished job's `job.json`
+also lists, under `"summary"`, the files a cancel left possibly incomplete (`"damaged"`),
+those a failed, canceled or retried paste may have left incomplete (`"mayBeIncomplete"`) and those
+left alone because their name appeared (`"skippedAppeared"`): the first 100 paths of each
+with the exact count. The Jobs window keeps them only while the app runs. Two cases repeat it at every
 start: a `job.json` written by a newer version of the app (or with a damaged `version`),
 which an older version never rewrites, and one the app failed to rewrite. Deleting that
 job's folder ends the notice.

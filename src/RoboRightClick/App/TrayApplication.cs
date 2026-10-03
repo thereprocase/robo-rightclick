@@ -126,6 +126,9 @@ internal sealed class TrayApplication : ApplicationContext
     // Read by job worker threads (ClearClipboardIfUnchanged), so volatile.
     private volatile bool _shuttingDown;
     private Task? _cancelForExit;
+
+    // The latest interrupted job's job.json, for the startup notice's click (UI thread only).
+    private string? _interruptedRecord;
     private bool _inSessionEnd;
     private bool _finished;
     private bool _tornDown;
@@ -343,14 +346,14 @@ internal sealed class TrayApplication : ApplicationContext
     /// </summary>
     private async void RunStartupChecks(LoggingMode mode, bool settingsToastShown)
     {
-        int interrupted;
+        InterruptedJobs interrupted;
         try
         {
             // Ephemeral mode writes nothing about jobs, so the check, which rewrites the job
             // logs it reports, runs in normal mode only.
             interrupted = mode == LoggingMode.Normal
                 ? await Task.Run(() => _logStore.MarkInterrupted(_startedAt, _jobs.ActiveLogFolders, TimeProvider.System))
-                : 0;
+                : InterruptedJobs.None;
         }
         catch (Exception)
         {
@@ -363,10 +366,11 @@ internal sealed class TrayApplication : ApplicationContext
             return;
         }
 
-        switch (StartupRules.PickStartupToast(interrupted, settingsToastShown, _afterInstall))
+        switch (StartupRules.PickStartupToast(interrupted.Count, settingsToastShown, _afterInstall))
         {
             case StartupToast.Interrupted:
-                _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Logs);
+                _interruptedRecord = interrupted.LatestRecord;
+                _notifier.Show(ToastText.ForInterrupted(interrupted.Count, interrupted.LatestDestination), ToastTarget.Logs);
                 break;
             case StartupToast.TrayHint:
                 _notifier.Show(ToastText.ForTrayHint(_settings.Current.PasteHotkey), ToastTarget.None);
@@ -502,7 +506,7 @@ internal sealed class TrayApplication : ApplicationContext
                 ShowSettings();
                 break;
             case ToastTarget.Logs:
-                OpenLogs();
+                OpenInterruptedLog();
                 break;
         }
     }
@@ -662,20 +666,51 @@ internal sealed class TrayApplication : ApplicationContext
         }
     }
 
+    /// <summary>
+    /// The interrupted-paste notice's click: the jobs folder with the latest interrupted
+    /// job.json selected, since the folders are named by UTC time and can number in the
+    /// hundreds. Opening an existing file creates nothing, so this works even if the mode has
+    /// since turned ephemeral; without the file it falls back to <see cref="OpenLogs"/>.
+    /// </summary>
+    private void OpenInterruptedLog()
+    {
+        var record = _interruptedRecord;
+        if (record is null || !File.Exists(record))
+        {
+            OpenLogs();
+            return;
+        }
+        try
+        {
+            var explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+            // "/select," and the path are one argument to Explorer; a path never contains a quote.
+            using var process = Process.Start(new ProcessStartInfo(explorer, "/select,\"" + record + "\"") { UseShellExecute = false });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception)
+        {
+            OpenLogs();
+        }
+    }
+
     private async void RequestExit(bool requestedByOtherProcess)
     {
         if (_cancelForExit is not null)
         {
             return;
         }
-        switch (StartupRules.ExitDecision(_jobs.HasActiveJobs, requestedByOtherProcess))
+        // Finished jobs that still need the user count too: their lists of files to check
+        // live in memory only (normal-mode job logs keep a capped copy).
+        var snapshots = _jobs.Snapshots();
+        var active = snapshots.Count(j => !JobStates.IsTerminal(j.State));
+        var unreviewed = StartupRules.FinishedNeedingAttention(snapshots);
+        switch (StartupRules.ExitDecision(_jobs.HasActiveJobs, unreviewed, requestedByOtherProcess))
         {
             case ExitAction.RefuseWithToast:
-                _notifier.Show(ToastText.ForExitRefused());
+                _notifier.Show(ToastText.ForExitRefused(active, unreviewed), unreviewed > 0 && active == 0 ? ToastTarget.Jobs : ToastTarget.None);
                 return;
             case ExitAction.ConfirmWithUser:
                 // The dialog pumps messages; a session end may have started exiting meanwhile.
-                if (!ConfirmExit() || _cancelForExit is not null)
+                if (!ConfirmExit(active, unreviewed) || _cancelForExit is not null)
                 {
                     return;
                 }
@@ -685,14 +720,14 @@ internal sealed class TrayApplication : ApplicationContext
         FinishExit();
     }
 
-    /// <summary>Keep running is the default, so Enter or Escape never cancels a paste.</summary>
-    private bool ConfirmExit()
+    /// <summary>Keep running is the default, so Enter or Escape never cancels a paste or drops a list of files to check.</summary>
+    private static bool ConfirmExit(int active, int unreviewed)
     {
-        var active = _jobs.Snapshots().Count(j => !JobStates.IsTerminal(j.State));
+        var (heading, body) = StartupRules.ExitConfirmation(active, unreviewed);
         return Gridline.Confirm(
             owner: null,
-            active == 1 ? "1 job is still running" : $"{active} jobs are still running",
-            "Exiting cancels them, as Cancel does in the Jobs window.",
+            heading,
+            body,
             "Exit",
             "ConfirmExit",
             "Keep running",

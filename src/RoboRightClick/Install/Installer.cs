@@ -30,7 +30,9 @@ internal static class Installer
     private static readonly TimeSpan ExeInUseRetryInterval = TimeSpan.FromMilliseconds(100);
 
     private const string BusyMessage =
-        "RoboRightClick is still running and has jobs in progress. Finish or cancel them, then try again.";
+        "RoboRightClick is still running: it has jobs in progress, or finished jobs whose problems you have not reviewed "
+        + "(closing would drop their lists of files to check). Finish or cancel them, or choose Try again or Skip "
+        + "for them in the Jobs window, then try again.";
 
     private const string NewerConfigKeptMessage =
         "config.json was written by a newer version of RoboRightClick, or its \"version\" field is damaged, "

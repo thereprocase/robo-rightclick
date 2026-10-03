@@ -1819,8 +1819,19 @@ internal sealed class Job
         }
     }
 
+    /// <summary>
+    /// The summary the sink records. Normal mode writes the files to check into job.json, so
+    /// they survive an exit, an update or a sign-out; the Jobs window that lists them in full
+    /// lives in memory only. Call after the lists are recorded.
+    /// </summary>
     private JobSummary SummaryLocked(JobState final) =>
-        new(Id, final, _doneFiles, _doneFileBytes, _errors.ToArray()) { TotalErrors = _totalErrors };
+        new(Id, final, _doneFiles, _doneFileBytes, _errors.ToArray())
+        {
+            TotalErrors = _totalErrors,
+            Damaged = new PathList(_damagedPaths.ToArray(), _damagedOnCancel),
+            MayBeIncomplete = new PathList(_mayBeIncompletePaths.ToArray(), _mayBeIncomplete),
+            SkippedAppeared = new PathList(_skippedAppearedPaths.ToArray(), _skippedAppeared),
+        };
 
     /// <summary>
     /// How many items failed, for the Jobs window's count, the summary and the toast, so a

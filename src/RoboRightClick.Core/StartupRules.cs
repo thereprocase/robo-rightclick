@@ -67,14 +67,41 @@ public static class StartupRules
         command.StartedByCom || runningFromInstallLocation ? StartupAction.RunTray : StartupAction.OfferInstall;
 
     /// <summary>
-    /// With no active jobs, exit at once. With active jobs, the user is asked (exit cancels
-    /// them), and another process's request is refused: an upgrade or uninstall must never
-    /// cancel a paste the user did not choose to cancel.
+    /// With no active jobs and none that still needs attention, exit at once. Otherwise the
+    /// user is asked (exit cancels active jobs, and drops finished ones whose files the user has
+    /// not reviewed: the Jobs window lives in memory only), and another process's request is
+    /// refused: an upgrade or uninstall must never cancel a paste the user did not choose to
+    /// cancel, nor silently discard the list of files a paste may have left incomplete.
     /// </summary>
-    public static ExitAction ExitDecision(bool hasActiveJobs, bool requestedByOtherProcess) =>
-        !hasActiveJobs ? ExitAction.Exit
+    /// <param name="finishedNeedingAttention">
+    /// Finished jobs with <see cref="JobSnapshot.NeedsAttention"/>: errors, a failure or files
+    /// that may be incomplete, not yet dealt with (Try again or Skip).
+    /// </param>
+    public static ExitAction ExitDecision(bool hasActiveJobs, int finishedNeedingAttention, bool requestedByOtherProcess) =>
+        !hasActiveJobs && finishedNeedingAttention == 0 ? ExitAction.Exit
         : requestedByOtherProcess ? ExitAction.RefuseWithToast
         : ExitAction.ConfirmWithUser;
+
+    /// <summary>Finished jobs that still need the user, for <see cref="ExitDecision"/>.</summary>
+    public static int FinishedNeedingAttention(IReadOnlyList<JobSnapshot> jobs) =>
+        jobs.Count(j => JobStates.IsTerminal(j.State) && j.NeedsAttention);
+
+    /// <summary>The question Exit asks while jobs run or still need attention. Keep running is the default.</summary>
+    public static (string Heading, string Body) ExitConfirmation(int active, int finishedNeedingAttention)
+    {
+        string Jobs(int n) => n == 1 ? "1 job" : $"{n:N0} jobs";
+        var unreviewed = finishedNeedingAttention == 0
+            ? string.Empty
+            : $"{Jobs(finishedNeedingAttention)} that ended with problems {(finishedNeedingAttention == 1 ? "has" : "have")} not been reviewed: "
+                + "the Jobs window starts empty after exiting, and only normal-mode job logs keep the files to check.";
+        if (active > 0)
+        {
+            return (
+                $"{Jobs(active)} {(active == 1 ? "is" : "are")} still running",
+                ("Exiting cancels them, as Cancel does in the Jobs window. " + unreviewed).TrimEnd());
+        }
+        return ($"{Jobs(finishedNeedingAttention)} still {(finishedNeedingAttention == 1 ? "needs" : "need")} your attention", unreviewed);
+    }
 
     /// <summary>Turning ephemeral mode on while job logs exist asks whether to delete them too.</summary>
     public static bool ShouldOfferLogDeletion(LoggingMode from, LoggingMode to, int jobFolderCount) =>

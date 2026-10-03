@@ -149,10 +149,11 @@ internal sealed class JobLogStore
 
     /// <summary>
     /// Finds the jobs a previous run left mid-paste (crash, power loss, a session end that
-    /// outran cleanup) and returns how many, for the one startup toast. Each such job.json is
-    /// rewritten through <see cref="FileJobSink.WriteJobRecord"/> with a terminal
-    /// "interrupted" state (<see cref="JobRecords.MarkInterrupted"/>), so the next start does
-    /// not report it again. Normal mode only: the tray never calls this in ephemeral mode.
+    /// outran cleanup) and returns how many, with the latest one's job.json and destination,
+    /// for the one startup toast. Each such job.json is rewritten through
+    /// <see cref="FileJobSink.WriteJobRecord"/> with a terminal "interrupted" state
+    /// (<see cref="JobRecords.MarkInterrupted"/>), so the next start does not report it again.
+    /// Normal mode only: the tray never calls this in ephemeral mode.
     /// </summary>
     /// <param name="processStartedAt">
     /// Taken before the COM class objects were registered: a job created at or after it
@@ -162,9 +163,12 @@ internal sealed class JobLogStore
     /// Asked once the folder names are listed; a second guard for live jobs, in case the clock
     /// moved backwards since <paramref name="processStartedAt"/>.
     /// </param>
-    public int MarkInterrupted(DateTimeOffset processStartedAt, Func<IReadOnlySet<string>> activeFolders, TimeProvider time)
+    public InterruptedJobs MarkInterrupted(DateTimeOffset processStartedAt, Func<IReadOnlySet<string>> activeFolders, TimeProvider time)
     {
         var count = 0;
+        string? latestName = null;
+        string? latestRecord = null;
+        string? latestDestination = null;
         try
         {
             var names = JobFolderNames().Where(JobLogNames.IsJobFolderName).ToList();
@@ -173,9 +177,17 @@ internal sealed class JobLogStore
             {
                 try
                 {
-                    if (MarkIfInterrupted(WinPath.Combine(Paths.JobsDirectory, name), processStartedAt, time))
+                    var folder = WinPath.Combine(Paths.JobsDirectory, name);
+                    if (MarkIfInterrupted(folder, processStartedAt, time, out var destination))
                     {
                         count++;
+                        // Folder names start with the UTC creation time, so they sort by it.
+                        if (latestName is null || string.CompareOrdinal(name, latestName) > 0)
+                        {
+                            latestName = name;
+                            latestRecord = WinPath.Combine(folder, AppPaths.JobRecordFileName);
+                            latestDestination = destination;
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -188,12 +200,13 @@ internal sealed class JobLogStore
         {
             RecordFailure(ex);
         }
-        return count;
+        return new InterruptedJobs(count, latestRecord, latestDestination);
     }
 
     /// <summary>True when the folder's job is one a previous run left mid-paste (counted whether or not the rewrite succeeds).</summary>
-    private bool MarkIfInterrupted(string folder, DateTimeOffset processStartedAt, TimeProvider time)
+    private bool MarkIfInterrupted(string folder, DateTimeOffset processStartedAt, TimeProvider time, out string? destination)
     {
+        destination = null;
         // Under the store's lock, so pruning cannot delete the folder between the read and
         // the replace and leave a stray job.json.tmp behind.
         lock (_gate)
@@ -212,6 +225,7 @@ internal sealed class JobLogStore
             switch (JobRecords.CheckInterrupted(json, processStartedAt))
             {
                 case InterruptedCheck.MarkAndReport:
+                    destination = JobRecords.DestinationOf(json);
                     try
                     {
                         if (JobRecords.MarkInterrupted(json, time.GetUtcNow()) is { } marked)
@@ -228,6 +242,7 @@ internal sealed class JobLogStore
                 case InterruptedCheck.ReportOnly:
                     // A newer version's record is never rewritten, so it is reported on
                     // every start of this (older) version.
+                    destination = JobRecords.DestinationOf(json);
                     return true;
                 default:
                     return false;

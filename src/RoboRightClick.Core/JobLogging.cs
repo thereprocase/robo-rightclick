@@ -18,6 +18,24 @@ public sealed record JobSummary(
     IReadOnlyList<ErrorReported> Errors)
 {
     public int TotalErrors { get; init; }
+
+    /// <summary>
+    /// Destinations that may hold partial data: files a cancel left in place
+    /// (<see cref="JobSnapshot.DamagedOnCancel"/>). The list may be capped; the count is exact.
+    /// </summary>
+    public PathList Damaged { get; init; } = PathList.Empty;
+
+    /// <summary>Destinations a failed, canceled or retried paste may have left incomplete (<see cref="JobSnapshot.MayBeIncomplete"/>).</summary>
+    public PathList MayBeIncomplete { get; init; } = PathList.Empty;
+
+    /// <summary>Destinations left alone because their name appeared during the paste (<see cref="JobSnapshot.SkippedAppeared"/>).</summary>
+    public PathList SkippedAppeared { get; init; } = PathList.Empty;
+}
+
+/// <summary>Some paths and how many there were in all (the list may hold fewer).</summary>
+public sealed record PathList(IReadOnlyList<string> Paths, int Count)
+{
+    public static readonly PathList Empty = new([], 0);
 }
 
 /// <summary>

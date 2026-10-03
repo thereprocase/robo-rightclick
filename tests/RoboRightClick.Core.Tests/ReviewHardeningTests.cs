@@ -537,6 +537,24 @@ public class SnapshotAndToastTests
         Assert.True(toast.Body.Length <= ToastText.MaxBalloonText, toast.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(12)]
+    public void The_interrupted_notice_names_the_latest_destination_folder_and_where_the_state_is(int count)
+    {
+        var toast = ToastText.ForInterrupted(count, @"\\nas\share\Projects\Archive 2026");
+
+        Assert.Contains("Archive 2026", toast.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"\\nas", toast.Body, StringComparison.Ordinal);
+        // job.json writes "states" before "commands": the file does not end in the state.
+        Assert.Contains("\"states\" list ends in \"interrupted\"", toast.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("ending in", toast.Body, StringComparison.Ordinal);
+
+        var longName = ToastText.ForInterrupted(count, @"D:\" + new string('x', 400));
+        Assert.True(longName.Body.Length <= ToastText.MaxBalloonText, longName.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Assert.Contains("D:", ToastText.ForInterrupted(count, @"D:\").Body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Settings_toast_names_the_first_problem()
     {

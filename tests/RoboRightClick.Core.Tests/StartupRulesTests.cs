@@ -58,18 +58,54 @@ public class StartupRulesTests
     }
 
     [Fact]
-    public void Exit_without_active_jobs_is_immediate_for_anyone()
+    public void Exit_with_nothing_running_or_to_review_is_immediate_for_anyone()
     {
-        Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, requestedByOtherProcess: false));
-        Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, requestedByOtherProcess: true));
+        Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, finishedNeedingAttention: 0, requestedByOtherProcess: false));
+        Assert.Equal(ExitAction.Exit, StartupRules.ExitDecision(hasActiveJobs: false, finishedNeedingAttention: 0, requestedByOtherProcess: true));
     }
 
     [Fact]
     public void Exit_with_active_jobs_asks_the_user_and_refuses_other_processes()
     {
         // Another process (an upgrade or uninstall) must never cancel a paste the user started.
-        Assert.Equal(ExitAction.ConfirmWithUser, StartupRules.ExitDecision(hasActiveJobs: true, requestedByOtherProcess: false));
-        Assert.Equal(ExitAction.RefuseWithToast, StartupRules.ExitDecision(hasActiveJobs: true, requestedByOtherProcess: true));
+        Assert.Equal(ExitAction.ConfirmWithUser, StartupRules.ExitDecision(hasActiveJobs: true, finishedNeedingAttention: 0, requestedByOtherProcess: false));
+        Assert.Equal(ExitAction.RefuseWithToast, StartupRules.ExitDecision(hasActiveJobs: true, finishedNeedingAttention: 0, requestedByOtherProcess: true));
+    }
+
+    [Fact]
+    public void Exit_with_finished_jobs_still_needing_attention_asks_the_user_and_refuses_other_processes()
+    {
+        // A canceled copy left 3 files that may be incomplete, not yet reviewed. The Jobs
+        // window is in memory only: exiting without a word would lose which files they were.
+        var jobs = new[]
+        {
+            Job(JobState.Canceled) with { DamagedOnCancel = 3 },
+            Job(JobState.DoneWithErrors) with { Acknowledged = true },
+            Job(JobState.Done),
+        };
+        var unreviewed = StartupRules.FinishedNeedingAttention(jobs);
+
+        Assert.Equal(1, unreviewed);
+        Assert.Equal(ExitAction.ConfirmWithUser, StartupRules.ExitDecision(hasActiveJobs: false, unreviewed, requestedByOtherProcess: false));
+        Assert.Equal(ExitAction.RefuseWithToast, StartupRules.ExitDecision(hasActiveJobs: false, unreviewed, requestedByOtherProcess: true));
+        Assert.Equal(0, StartupRules.FinishedNeedingAttention([Job(JobState.AwaitingDecision)]));
+    }
+
+    [Fact]
+    public void The_exit_question_and_refusal_say_why()
+    {
+        var (heading, body) = StartupRules.ExitConfirmation(active: 0, finishedNeedingAttention: 2);
+        Assert.Equal("2 jobs still need your attention", heading);
+        Assert.Contains("Jobs window starts empty", body);
+
+        var (runningHeading, runningBody) = StartupRules.ExitConfirmation(active: 1, finishedNeedingAttention: 1);
+        Assert.Equal("1 job is still running", runningHeading);
+        Assert.StartsWith("Exiting cancels them", runningBody);
+        Assert.Contains("1 job that ended with problems has not been reviewed", runningBody);
+
+        var refused = ToastText.ForExitRefused(active: 0, finishedNeedingAttention: 1);
+        Assert.Contains("Try again or Skip", refused.Body);
+        Assert.DoesNotContain(@":\", refused.Title + refused.Body, StringComparison.Ordinal);
     }
 
     [Fact]

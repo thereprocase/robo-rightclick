@@ -236,7 +236,12 @@ running as another user is untested.
    array, calls `IVerbHandler.Invoke`, returns `S_OK`.
 4. No exception crosses the COM boundary; every implementation catches and returns an HRESULT.
 5. Exit: revoke first and clear the ready event, close open conflict questions, then cancel
-   jobs, then release the single-instance mutex.
+   jobs, then release the single-instance mutex. `StartupRules.ExitDecision` counts finished
+   jobs that still need attention as well as active ones: the user's Exit asks first
+   (`StartupRules.ExitConfirmation`), and another process's request (install, uninstall) is
+   refused with a toast, because the Jobs window and its lists of files to check live in
+   memory only. Normal-mode job.json keeps a capped copy of those lists (`JobSummary.Damaged`,
+   `MayBeIncomplete`, `SkippedAppeared`); a session end cannot be refused and relies on it.
 
 The pattern (DelegateExecute to an out-of-process local server) is Microsoft's
 `ExecuteCommandVerb` sample (Windows-classic-samples, Win7Samples/winui/shell/appshellintegration),
