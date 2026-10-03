@@ -4,8 +4,9 @@ namespace RoboRightClick.Core;
 
 /// <summary>
 /// One heuristic for "this free text may carry a path or a file name", shared by
-/// <see cref="FailureText"/> (which drops such text) and <see cref="CrashLog"/> (which
-/// replaces the path-looking parts). Signs of a path: a separator, a drive designator,
+/// <see cref="FailureText"/> (which drops such text), <see cref="CrashLog"/> (which
+/// replaces the path-looking parts) and <see cref="ToastText.ForSettingsProblems"/> (which
+/// replaces quoted values that look like paths). Signs of a path: a separator, a drive designator,
 /// quotes around a name (how .NET and Windows quote names), shell metacharacters, control
 /// characters. It is a heuristic: a bare file name with no quotes or separators passes.
 /// Losing detail is always the safe direction.
@@ -81,6 +82,60 @@ internal static class PathHeuristic
             result.Append('…');
         }
         return result.ToString();
+    }
+
+    /// <summary>
+    /// The text with each quoted span that could carry a path replaced by
+    /// <see cref="Placeholder"/>, for messages built from fixed words around quoted values the
+    /// user chose (a settings key, an extraArgs token). Unlike <see cref="Scrub"/> it keeps a
+    /// quoted value that is path-free, so the message still names the setting. A value that
+    /// starts like a robocopy switch keeps the switch name: '/LOG:C:\x.log' becomes
+    /// '/LOG:[path]', which still says what was refused. Text outside quotes is kept as is.
+    /// </summary>
+    public static string RedactQuotedPaths(string text)
+    {
+        var result = new StringBuilder(text.Length);
+        var i = 0;
+        while (i < text.Length)
+        {
+            var c = text[i];
+            if (ClosingQuotesFor(c) is not { } closers || (i > 0 && char.IsLetterOrDigit(text[i - 1])))
+            {
+                result.Append(c);
+                i++;
+                continue;
+            }
+            // A quote that never closes takes the rest of the text, as in Scrub.
+            var end = FindClosing(text, i + 1, closers);
+            var value = end < 0 ? text[(i + 1)..] : text[(i + 1)..end];
+            result.Append(c).Append(RedactedValue(value));
+            if (end < 0)
+            {
+                break;
+            }
+            result.Append(text[end]);
+            i = end + 1;
+        }
+        return result.ToString();
+    }
+
+    /// <summary>One quoted value for <see cref="RedactQuotedPaths"/>.</summary>
+    private static string RedactedValue(string value)
+    {
+        // A switch's leading '/' is not a separator; anything after it is judged like any text.
+        var isSwitch = value.StartsWith('/');
+        var body = isSwitch ? value[1..] : value;
+        if (IsPathFree(body))
+        {
+            return value;
+        }
+        var colon = body.IndexOf(':');
+        // Switch names are letters with an optional '+' (/LOG+, /UNILOG+).
+        if (isSwitch && colon > 0 && body[..colon].All(ch => char.IsAsciiLetter(ch) || ch == '+'))
+        {
+            return "/" + body[..(colon + 1)] + Placeholder;
+        }
+        return Placeholder;
     }
 
     /// <summary>

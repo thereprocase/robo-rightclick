@@ -356,13 +356,17 @@ public static class ToastText
 
     /// <summary>
     /// Path-free in every mode: setting names only. Shows the first problem so the user
-    /// knows what to fix; Settings lists the rest. When this version may not save over the
-    /// file (<paramref name="savesRefused"/>, <see cref="SettingsLoadResult.SavesRefused"/>),
-    /// Settings cannot fix it, so the toast names the steps that can instead.
+    /// knows what to fix; Settings lists the rest. A problem quotes the value it refused, and
+    /// an extraArgs token such as '/LOG:C:\x.log' carries a path, which Windows would keep in
+    /// its notification database (docs/testlog.md 2026-10-03, second gate entry), so quoted
+    /// values that could carry a path are replaced here; Settings still shows them in full.
+    /// When this version may not save over the file (<paramref name="savesRefused"/>,
+    /// <see cref="SettingsLoadResult.SavesRefused"/>), Settings cannot fix it, so the toast
+    /// names the steps that can instead.
     /// </summary>
     public static Toast ForSettingsProblems(IReadOnlyList<string> problems, bool savesRefused = false)
     {
-        var first = problems.Count > 0 ? problems[0] : "a setting was invalid";
+        var first = problems.Count > 0 ? PathHeuristic.RedactQuotedPaths(problems[0]) : "a setting was invalid";
         var more = problems.Count switch
         {
             <= 1 => string.Empty,

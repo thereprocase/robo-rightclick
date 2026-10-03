@@ -563,6 +563,44 @@ public class SnapshotAndToastTests
         Assert.Contains("and 2 more", toast.Body);
     }
 
+    /// <summary>
+    /// The refused extraArgs value is quoted in the problem, and Windows keeps toast text in its
+    /// notification database: the toast must name the setting and the switch, never the path
+    /// (docs/testlog.md 2026-10-03, second gate entry).
+    /// </summary>
+    [Theory]
+    [InlineData(@"/LOG:C:\Users\Ann\TaxReturns\injected.log", "'/LOG:[path]'")]
+    [InlineData(@"/UNILOG+:D:\Ann\injected.log", "'/UNILOG+:[path]'")]
+    [InlineData(@"C:\Users\Ann\injected", "'[path]'")]
+    [InlineData(@"\\server\Ann\injected", "'[path]'")]
+    [InlineData(@"/LOG:\\?\C:\Ann\injected.log", "'/LOG:[path]'")]
+    public void Settings_toast_quotes_no_path_from_an_extraArgs_value(string token, string shown)
+    {
+        var json = new System.Text.Json.Nodes.JsonObject
+        {
+            ["extraArgs"] = new System.Text.Json.Nodes.JsonObject { ["copy"] = token, ["move"] = "" },
+        }.ToJsonString();
+        var problems = SettingsSerializer.Parse(json).Problems;
+        Assert.Contains(problems, p => p.Contains(token, StringComparison.Ordinal));
+
+        var body = ToastText.ForSettingsProblems(problems).Body;
+        Assert.Contains("'extraArgs.copy' ignored: " + shown, body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Ann", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("injected", body, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("'extraArgs.copy' ignored: '/MIR' is not an allowed extra switch")]
+    [InlineData("unknown setting 'retry' ignored")]
+    [InlineData("'pasteHotkey' must be a shortcut such as \"Ctrl+Shift+V\", or \"\" for none")]
+    [InlineData("'threads' must be \"auto\" or an integer from 1 to 128; using \"auto\"")]
+    [InlineData("'extraArgs.move' ignored: '/IORATE:8M' is not an allowed extra switch")]
+    public void Settings_toast_keeps_path_free_quoted_values(string problem)
+    {
+        Assert.Equal(problem, PathHeuristic.RedactQuotedPaths(problem));
+        Assert.Contains(problem, ToastText.ForSettingsProblems([problem]).Body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_job_being_canceled_adds_no_speed_to_the_tooltip()
     {
