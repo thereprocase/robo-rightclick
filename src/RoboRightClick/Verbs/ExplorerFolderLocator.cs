@@ -13,9 +13,14 @@ namespace RoboRightClick.Verbs;
 /// <see cref="PathPolicy"/>, the clipboard checks and the job manager.
 /// </summary>
 /// <remarks>
-/// <para>One long-lived background thread in the multithreaded apartment, one press at a time:
-/// calls into File Explorer are out-of-process and need no message pump here, and nothing can
-/// re-enter. A press that arrives while one is in flight was taken by the hook and is ignored.</para>
+/// <para>One long-lived background thread in a single-threaded apartment of its own, one press
+/// at a time; a press that arrives while one is in flight was taken by the hook and is ignored.
+/// Not the multithreaded apartment: IShellBrowser::GetWindow is IOleWindow::GetWindow, an
+/// [input_sync] method, and called from the MTA into File Explorer it fails with
+/// RPC_E_CANTCALLOUT_ININPUTSYNCCALL (0x8001010D), so no entry could be matched and every
+/// press was refused (docs/testlog.md 2026-10-03). The thread creates no windows and receives
+/// no calls; COM pumps its queue while an outgoing call waits, and WaitHandle.WaitAny pumps it
+/// while the thread waits for a press.</para>
 /// <para>Per press, within <see cref="HotkeyDeadline.BudgetMs"/> of the key's own tick:
 /// <list type="number">
 /// <item>Desktop: SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_DONT_VERIFY), which never
@@ -59,7 +64,7 @@ internal sealed partial class ExplorerFolderLocator : IDisposable
         _ui = ui;
         _handler = handler;
         _thread = new Thread(Run) { IsBackground = true, Name = "Paste hotkey locator" };
-        _thread.SetApartmentState(ApartmentState.MTA);
+        _thread.SetApartmentState(ApartmentState.STA);
     }
 
     public void Start() => _thread.Start();
@@ -86,7 +91,7 @@ internal sealed partial class ExplorerFolderLocator : IDisposable
     {
         try
         {
-            ComNative.CoInitializeEx(0, ComNative.COINIT_MULTITHREADED);
+            ComNative.CoInitializeEx(0, ComNative.COINIT_APARTMENTTHREADED);
             _nativeThreadId = NativeMethods.GetCurrentThreadId();
             _callCancellation = ComNative.CoEnableCallCancellation(0) >= 0;
         }

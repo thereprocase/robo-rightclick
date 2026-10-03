@@ -132,7 +132,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches (64), and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The channel absorbs bursts: a sink that is briefly slow (antivirus scanning robocopy.log) does not hold up the pipe, and a sink or parser that throws never stops the drain. It is bounded on purpose, so memory stays bounded: a sink that stays slower than robocopy's output, or blocks, fills the channel, the reader then waits, and robocopy waits on its next log write until the consumer catches up. |
 | **Progress sampler** | One `PeriodicTimer` loop for the app (333 ms). | Skips runs whose gate is closed. Disposing a run's tracking blocks until its in-flight callback returns. |
 | **Hotkey hook** (`PasteHotkey`) | One dedicated background thread, above-normal priority, with its own message loop: the foreground WinEvent hook and, while File Explorer or the desktop is in front, the `WH_KEYBOARD_LL` hook. Started after `SignalReady`; settings changes post a new immutable spec to it; on exit WM_QUIT, unhook on this thread, joined for 1 s. | The keyboard callback allocates nothing, calls nothing that sends a window message, passes the key on any failure, and only fills a preallocated slot and signals an event. No logging of any kind. Windows removes the process's hooks if it dies. |
-| **Hotkey locator** (`ExplorerFolderLocator`) | One long-lived background MTA thread, one press at a time (a press while one is in flight is taken and ignored). | Calls File Explorer out of process (ShellWindows → `IShellBrowser` → `IFolderView`); a 1.5 s watchdog from the key's tick abandons the press, toasts, `CoCancelCall`s the stuck call and drops a late answer. Never touches UI objects: results go to `IVerbHandler` through a UI-thread post. Abandoned if stuck at exit. |
+| **Hotkey locator** (`ExplorerFolderLocator`) | One long-lived background STA thread (an MTA caller gets `RPC_E_CANTCALLOUT_ININPUTSYNCCALL` from the `[input_sync]` `IShellBrowser::GetWindow`, testlog 2026-10-03), one press at a time (a press while one is in flight is taken and ignored). | Calls File Explorer out of process (ShellWindows → `IShellBrowser` → `IFolderView`); a 1.5 s watchdog from the key's tick abandons the press, toasts, `CoCancelCall`s the stuck call and drops a late answer. Never touches UI objects: results go to `IVerbHandler` through a UI-thread post. Abandoned if stuck at exit. |
 
 Shared state: each `Job` guards lifecycle, ledger, progress and errors with one private lock;
 `Snapshot()` copies under it into an immutable `JobSnapshot`. `JobManager` guards its job list
@@ -166,7 +166,7 @@ Strings from `GetDisplayName` are freed with `Marshal.FreeCoTaskMem`. Unused met
 placeholder signatures because they hold vtable slots. Every proxy received from Explorer is
 released deterministically with `ComObject.FinalRelease()`, never left to the finalizer
 thread: the selection's on the UI thread, the hotkey locator's on the locator thread, which
-is the thread (MTA) that obtained them.
+is the thread (its own STA) that obtained them.
 
 The hotkey locator is a COM client of File Explorer's ShellWindows (slots checked against
 Wine's `exdisp.idl`, `servprov.idl`, `oleidl.idl` and `shobjidl.idl`):

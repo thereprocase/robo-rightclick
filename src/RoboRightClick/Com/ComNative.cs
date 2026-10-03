@@ -32,9 +32,9 @@ internal static partial class ComNative
     [LibraryImport("ole32.dll")]
     public static partial int CoCreateInstance(in Guid rclsid, nint pUnkOuter, uint dwClsContext, in Guid riid, out nint ppv);
 
-    public const uint COINIT_MULTITHREADED = 0x0;
+    public const uint COINIT_APARTMENTTHREADED = 0x2;
 
-    /// <summary>S_OK, or S_FALSE when the thread was already in the MTA.</summary>
+    /// <summary>S_OK, or S_FALSE when the thread was already in that apartment.</summary>
     [LibraryImport("ole32.dll")]
     public static partial int CoInitializeEx(nint pvReserved, uint dwCoInit);
 
