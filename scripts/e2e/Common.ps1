@@ -714,3 +714,116 @@ function Assert-SharedParentsKept {
     if ($gone.Count -gt 0) { throw ('Uninstall deleted shared keys it does not own:' + [Environment]::NewLine + ($gone -join [Environment]::NewLine)) }
     Write-Step 'ok: shared parent keys (CLSID, AppID, Run, Uninstall, each shell key) are still there'
 }
+
+# ---------------------------------------------------------------------------
+# Hostile input helpers (Security.Tests)
+# ---------------------------------------------------------------------------
+
+function Initialize-RawClipboardType {
+    if ('RrcE2E.RawClipboard' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace RrcE2E {
+    public static class RawClipboard {
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool OpenClipboard(IntPtr owner);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool CloseClipboard();
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool EmptyClipboard();
+        [DllImport("user32.dll", SetLastError = true)] private static extern IntPtr SetClipboardData(uint format, IntPtr mem);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint RegisterClipboardFormat(string name);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GlobalAlloc(uint flags, UIntPtr bytes);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr GlobalLock(IntPtr mem);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GlobalUnlock(IntPtr mem);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint QueryDosDevice(string name, StringBuilder target, uint max);
+
+        public static uint FormatId(string name) { return RegisterClipboardFormat(name); }
+
+        // Replaces the clipboard with exactly these formats and bytes, whatever they hold.
+        public static bool Set(uint[] formats, byte[][] data) {
+            if (!OpenClipboard(IntPtr.Zero)) { return false; }
+            try {
+                if (!EmptyClipboard()) { return false; }
+                for (int i = 0; i < formats.Length; i++) {
+                    IntPtr mem = GlobalAlloc(0x0002, (UIntPtr)(uint)Math.Max(1, data[i].Length));
+                    if (mem == IntPtr.Zero) { return false; }
+                    IntPtr p = GlobalLock(mem);
+                    Marshal.Copy(data[i], 0, p, data[i].Length);
+                    GlobalUnlock(mem);
+                    if (SetClipboardData(formats[i], mem) == IntPtr.Zero) { return false; }
+                }
+                return true;
+            }
+            finally { CloseClipboard(); }
+        }
+
+        // "\Device\HarddiskVolume3" for "C:".
+        public static string DeviceOf(string drive) {
+            var sb = new StringBuilder(1024);
+            return QueryDosDevice(drive, sb, 1024) == 0 ? null : sb.ToString().Split('\0')[0];
+        }
+    }
+}
+'@
+}
+
+# DROPFILES (shlobj_core.h): pFiles, POINT, fNC, fWide, then names each ended by NUL and a
+# final NUL. The parameters let a test forge any header it likes.
+function New-DropFilesBlock {
+    param(
+        [string[]]$Paths = @(),
+        [bool]$Wide = $true,
+        [Nullable[uint32]]$PFiles = $null,
+        [switch]$NoTerminator
+    )
+    $text = ($Paths -join [char]0)
+    if (-not $NoTerminator) { $text += ([string][char]0) + ([string][char]0) }
+    $body = if ($Wide) { [Text.Encoding]::Unicode.GetBytes($text) } else { [Text.Encoding]::ASCII.GetBytes($text) }
+    $header = New-Object byte[] 20
+    $start = if ($null -ne $PFiles) { [uint32]$PFiles } else { [uint32]20 }
+    [BitConverter]::GetBytes($start).CopyTo($header, 0)
+    if ($Wide) { [BitConverter]::GetBytes([int]1).CopyTo($header, 16) }
+    $block = New-Object byte[] ($header.Length + $body.Length)
+    $header.CopyTo($block, 0)
+    $body.CopyTo($block, $header.Length)
+    return , $block
+}
+
+# Puts a forged CF_HDROP and a Preferred DropEffect (1 copy, 2 move) on the clipboard.
+function Set-RawClipboardFiles([byte[]]$DropFiles, [uint32]$DropEffect = 1) {
+    Initialize-RawClipboardType
+    $effectFormat = [RrcE2E.RawClipboard]::FormatId('Preferred DropEffect')
+    $formats = [uint32[]]@(15, $effectFormat)
+    $data = [byte[][]]@($DropFiles, [BitConverter]::GetBytes($DropEffect))
+    for ($i = 0; $i -lt 20; $i++) {
+        if ([RrcE2E.RawClipboard]::Set($formats, $data)) { return }
+        Start-Sleep -Milliseconds 100
+    }
+    throw 'Could not write the forged clipboard: another program keeps it open.'
+}
+
+# "\Device\HarddiskVolume3" for a path's drive, for \\?\GLOBALROOT\... test paths.
+function Get-VolumeDevicePath([string]$Path) {
+    Initialize-RawClipboardType
+    $device = [RrcE2E.RawClipboard]::DeviceOf($Path.Substring(0, 2))
+    if (-not $device) { throw "No device name for the drive of $Path." }
+    return $device
+}
+
+# The tray's process id (one tray runs at a time); $null when none.
+function Get-TrayProcessId {
+    $running = @(Get-RoboProcesses | Where-Object { $_.Path -eq $script:E2E.InstalledExe })
+    if ($running.Count -eq 0) { return $null }
+    return $running[0].Id
+}
+
+function Get-ProcessCommandLine([int]$ProcessId) {
+    return (Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId").CommandLine
+}
+
+# Size of the app's crash log, or -1 when there is none; a changed value means a crash was logged.
+function Get-CrashLogSize {
+    $file = Join-Path $script:E2E.DataDir 'crash.log'
+    if (Test-Path -LiteralPath $file) { return (Get-Item -LiteralPath $file).Length }
+    return -1
+}
