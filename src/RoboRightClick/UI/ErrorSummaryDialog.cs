@@ -45,7 +45,8 @@ internal sealed class ErrorSummaryDialog : Gridline.Window
     {
     }
 
-    public ErrorSummaryDialog(JobSnapshot job, IReadOnlyList<ErrorReported> errors, JobManager? jobs)
+    /// <param name="showJob">Selects a job in the Jobs window; with it, a job tried again offers "Show newer job".</param>
+    public ErrorSummaryDialog(JobSnapshot job, IReadOnlyList<ErrorReported> errors, JobManager? jobs, Action<Guid>? showJob = null)
     {
         Job = job;
         Errors = errors;
@@ -60,7 +61,7 @@ internal sealed class ErrorSummaryDialog : Gridline.Window
         ShowInTaskbar = true;
         Padding = new Padding(Gridline.Space3);
 
-        var view = new ErrorSummaryView(job, errors, jobs) { Dock = DockStyle.Fill };
+        var view = new ErrorSummaryView(job, errors, jobs, showJob) { Dock = DockStyle.Fill };
         view.Chosen += (_, choice) =>
         {
             Choice = choice;
@@ -95,7 +96,12 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
     private readonly JobSnapshot _job;
     private readonly JobManager? _jobs;
 
-    public ErrorSummaryView(JobSnapshot job, IReadOnlyList<ErrorReported> errors, JobManager? jobs)
+    /// <param name="showJob">
+    /// Selects a job in the Jobs window. With it, a job whose "Try again" was used
+    /// (<see cref="JobSnapshot.RetriedBy"/>) gets a "Show newer job" button, since the heading
+    /// sends the user to that job.
+    /// </param>
+    public ErrorSummaryView(JobSnapshot job, IReadOnlyList<ErrorReported> errors, JobManager? jobs, Action<Guid>? showJob = null)
     {
         _job = job;
         _jobs = jobs;
@@ -218,18 +224,30 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         var tryAgain = JobStateText.TryAgainLabel(job);
         var skip = new Gridline.Button(tryAgain is null ? "OK" : "Skip", "SkipErrors");
         skip.Click += (_, _) => Choose(ErrorSummaryChoice.Skip);
+        var buttons = new List<Control>();
         if (tryAgain is not null)
         {
             var retry = new Gridline.Button(tryAgain, "TryAgain");
             retry.Click += (_, _) => Choose(ErrorSummaryChoice.TryAgain);
             DefaultButton = retry;
-            AddAuto(Gridline.ButtonRow(retry, skip));
+            buttons.Add(retry);
         }
         else
         {
             DefaultButton = skip;
-            AddAuto(Gridline.ButtonRow(skip));
         }
+        if (job.RetriedBy is { } newer && showJob is not null)
+        {
+            var show = new Gridline.Button("Show newer job", "ShowNewerJob");
+            show.Click += (_, _) =>
+            {
+                showJob(newer);
+                Choose(ErrorSummaryChoice.None);
+            };
+            buttons.Add(show);
+        }
+        buttons.Add(skip);
+        AddAuto(Gridline.ButtonRow([.. buttons]));
     }
 
     public event EventHandler<ErrorSummaryChoice>? Chosen;

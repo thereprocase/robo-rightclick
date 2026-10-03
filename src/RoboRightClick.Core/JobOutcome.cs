@@ -52,6 +52,27 @@ public static class JobOutcome
     }
 }
 
+/// <summary>When "Try again" may be offered again after it was used.</summary>
+public static class RetryRules
+{
+    /// <summary>
+    /// A "Try again" (or "Finish copying them", or whole re-run) child that ended Canceled
+    /// having done nothing: no file completed, none left possibly incomplete, no error. The
+    /// user closed its conflict question, canceled its scan, or the app exited. Its parent's
+    /// "Try again" comes back, with the parent's attention state: otherwise the parent reads
+    /// RETRIED, the child offers nothing, and the parent's failed files could never be repeated
+    /// from the app again. A child that did anything keeps the retry used: repeating the
+    /// parent's files then would run over what the child has written.
+    /// </summary>
+    public static bool GivesBackParentRetry(JobSnapshot child) =>
+        child.ParentId is not null
+        && child.State == JobState.Canceled
+        && child.DoneFiles == 0
+        && child.DamagedOnCancel == 0
+        && child.MayBeIncomplete == 0
+        && child.ErrorCount == 0;
+}
+
 /// <summary>
 /// Plain-language reasons for a Failed job (<see cref="JobSnapshot.FailureReason"/>). Built
 /// only from Windows error codes, robocopy operation names and system messages, never from

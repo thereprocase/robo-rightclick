@@ -95,7 +95,8 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   rows. The primary action is the default button. In the conflict dialog of a "Try again"
   job, files the earlier paste may have left half written get a caution strip above the three
   choices and an amber note on their rows, and focus starts on "Let me decide" rather than
-  "Skip". A finished job with such files, or a cancel after files failed, uses the amber
+  "Skip". The summary of a job whose "Try again" was used adds a plain "Show newer job" button
+  beside OK. A finished job with such files, or a cancel after files failed, uses the amber
   attention tone, not green or neutral. Messages and questions, including the
   install, update and repair offer and the install and uninstall results, use `MessageDialog`: one pane,
   an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports

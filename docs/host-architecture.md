@@ -454,7 +454,12 @@ Step execution:
   ran, or by an exception) falls back to `JobManager.Rerun` (the original order, full re-scan).
   So does a job whose ledger found robocopy's paths unreliable (`RetriesWholePaste`): re-running
   a recursive `/MOVE` step under Replace is not safe, so the whole paste is scanned again.
-  Refusals are not retryable and are counted separately (`RefusedCount`).
+  Refusals are not retryable and are counted separately (`RefusedCount`). "Try again" is
+  offered once per job (`RetriedBy`), but a child that ends Canceled having done nothing (no
+  file done, none possibly incomplete, no error: its question closed, its scan canceled, the
+  app exiting) gives it back (`RetryRules.GivesBackParentRetry`, `Job.ReopenRetry`), and the
+  parent needs attention again. A parent tried again offers "Show newer job" in its summary
+  when opened from the Jobs window.
 - **Late arrivals** (files skipped because their name appeared after the scan) are not errors;
   they are counted in `JobSnapshot.SkippedAppeared`, and a `Done` job with any opens the
   summary so the user sees which ones (`ProgressWindowPolicy.OnTerminal`).

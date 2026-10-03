@@ -574,6 +574,12 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         }
 
         var snapshot = job.Snapshot();
+        if (RetryRules.GivesBackParentRetry(snapshot) && snapshot.ParentId is { } parentId)
+        {
+            // Closed its question or was canceled before doing anything: the parent's files
+            // are as they were, so its "Try again" comes back (PostStateChanged follows).
+            Find(parentId)?.ReopenRetry(job.Id);
+        }
         Ui.Post(_ => RaiseFinished(snapshot), null);
         if (job.Start.Logging == LoggingMode.Normal)
         {

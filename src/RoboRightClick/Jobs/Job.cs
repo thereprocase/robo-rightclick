@@ -177,6 +177,9 @@ internal sealed class Job
     private bool _retryStarted;
     private Guid? _retriedBy;
 
+    // A child that gave the retry back before EndRetry recorded it (it ended that fast).
+    private Guid? _retryGivenBackBy;
+
     // What "Try again" offers, fixed when the job ends (JobSnapshot.RetryCount, RetriesWholePaste).
     private int _retryCount;
     private bool _retriesWholePaste;
@@ -424,9 +427,40 @@ internal sealed class Job
     {
         lock (_lock)
         {
+            if (child is not null && child == _retryGivenBackBy)
+            {
+                // The child already ended having done nothing (ReopenRetry came first).
+                child = null;
+                _acknowledged = false;
+            }
+            _retryGivenBackBy = null;
             _retryStarted = child is not null;
             _retriedBy = child;
             Touch();
+        }
+    }
+
+    /// <summary>
+    /// <paramref name="child"/>, this job's "Try again" child, ended without doing anything
+    /// (<see cref="RetryRules.GivesBackParentRetry"/>): "Try again" is offered again, and the job
+    /// needs attention again, since nothing has dealt with its files.
+    /// </summary>
+    internal void ReopenRetry(Guid child)
+    {
+        lock (_lock)
+        {
+            if (_retriedBy == child)
+            {
+                _retriedBy = null;
+                _retryStarted = false;
+                _acknowledged = false;
+                Touch();
+            }
+            else if (_retriedBy is null && _retryStarted)
+            {
+                // Retry is still between creating the child and EndRetry.
+                _retryGivenBackBy = child;
+            }
         }
     }
 

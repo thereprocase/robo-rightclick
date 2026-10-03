@@ -478,7 +478,7 @@ internal sealed class JobsWindow : Gridline.Window
             open.Activate();
             return;
         }
-        var dialog = new ErrorSummaryDialog(job, Jobs.ErrorsOf(job.Id), Jobs);
+        var dialog = new ErrorSummaryDialog(job, Jobs.ErrorsOf(job.Id), Jobs, showJob: id => ShowJobs(select: id));
         dialog.FormClosed += (_, _) =>
         {
             _summaries.Remove(job.Id);
