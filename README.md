@@ -51,14 +51,18 @@ builds the same bytes.
 
 `RoboRightClick.exe` has no code signature: the project has no signing certificate. The
 SHA256 check above is how you know the file is the published one. Windows is cautious with
-unsigned downloads. None of the following has been observed in this project's test log yet;
-it is how Windows normally treats such a file:
+unsigned downloads. The project's test log (docs/testlog.md, 2026-10-03) records the first two
+points on a test machine without internet access; the rest is how Windows normally treats such
+a file and has not been observed there:
 
-- **Unblock the zip before extracting it.** Windows marks downloaded files, files extracted
-  from a marked zip inherit the mark, and the installed copy of the exe may keep it. After the
-  hash check, run `Unblock-File .\RoboRightClick-<version>-win-x64.zip`, then extract.
-- **SmartScreen.** If a "Windows protected your PC" window appears when you start the exe,
-  choose **More info**, check that the app name is `RoboRightClick.exe`, then **Run anyway**.
+- **Unblock the zip before extracting it.** Windows marks downloaded files. Extract All in
+  File Explorer copied the mark to every extracted file; PowerShell's `Expand-Archive` did not.
+  After the hash check, run `Unblock-File .\RoboRightClick-<version>-win-x64.zip`, then
+  extract.
+- **SmartScreen.** Starting a marked exe showed "SmartScreen can't be reached right now" with
+  **Run** and **Don't Run**; Run started it and removed the mark from that exe. With internet
+  access the window is usually "Windows protected your PC": choose **More info**, check that
+  the app name is `RoboRightClick.exe`, then **Run anyway**.
 - **Smart App Control must be off.** When it is on (Windows Security, App & browser control,
   Smart App Control settings), it blocks unsigned apps and has no per-app exception, so
   RoboRightClick cannot run. Turning it off is a system-wide decision; read Microsoft's
