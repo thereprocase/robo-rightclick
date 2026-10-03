@@ -76,7 +76,9 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   cyan running, amber paused or awaiting decision, green done, red failed. No animation
   beyond value changes, no marquee shimmer.
 - **State labels:** Plex Mono 600 UPPERCASE in the state color (`RUNNING` cyan, `PAUSED` amber,
-  `DONE` green, `FAILED` red, `QUEUED`/`SCANNING`/`CANCELED` ink/secondary).
+  `DONE` green, `FAILED` red, `QUEUED`/`SCANNING`/`CANCELED` ink/secondary). A finished job whose
+  "Try again" has been used shows `RETRIED` in ink/secondary instead of its red or amber label:
+  the newer job carries the outcome, and a red row would invite a second "Try again".
 - **Caution strip** (warnings, ephemeral notice, prototype notes): `#FFF4DC` background,
   4 px `#B87900` left border, Plex Sans 13 px.
 - **Status bar:** `gl-gray`, top border `gl-rule`, Plex Mono 12, cells separated by 1 px
@@ -88,7 +90,9 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   selection with white text, and no image-margin gradient. `Gridline.ContextMenu` also removes
   the drop shadow Windows adds to every menu window (`CS_DROPSHADOW`).
 - **Dialogs** (conflict, error summary, settings, confirmations) follow the same pane, button and
-  field rules. The primary action is the default button. Messages and questions, including the
+  field rules. The error summary's sections are titled panes with a short explanation above a
+  two-line path list (errors, refused, may be incomplete, skipped), each shown only when it has
+  rows. The primary action is the default button. Messages and questions, including the
   install, update and repair offer and the install and uninstall results, use `MessageDialog`: one pane,
   an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports
   use `MessageDialog.Notice`. A plain message box appears only as a fallback when a Gridline
