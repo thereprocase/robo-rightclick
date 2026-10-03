@@ -62,6 +62,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `Jobs/JobManager.cs` | All jobs: enqueue, queue policy, claims, control, snapshots, events, retry. |
 | `Jobs/Job.cs` | One job's lifecycle (doc comment is the flow spec); `JobServices`, `JobStart`. |
 | `Jobs/PauseGate.cs` | A job's pause latch shared by its steps. |
+| `Jobs/DriveMedia.cs` | Classifies each run's source and destination drive (network, SSD, spinning disk, same disk) for `ThreadPolicy.Choose`; per-volume cache; on a job worker thread, any failure means the fallback count. |
 | `Jobs/RobocopyRun.cs` | One robocopy process: pipe, parser, sampler, suspend/resume, kill; on cancel suspend, let the job observe, then kill. |
 | `Jobs/RobocopyPipe.cs` | Current-user single-instance pipe, client PID check, UTF-16 line batches. |
 | `Jobs/ProgressSampler.cs` | One app-wide timer loop reading `GetProcessIoCounters`. |
@@ -349,8 +350,12 @@ silently overwritten, and the ledger reports it.
 
 Step execution:
 
-- `RobocopyStep` → `RobocopyRun` with `RobocopyArgs.Build(step, settings, policy,
-  PipeNames.ForStep(jobId, index, csprngNonce))`. Robocopy from
+- `RobocopyStep` → `RobocopyRun` with `RobocopyArgs.Build(step, threads.ApplyTo(settings),
+  policy, PipeNames.ForStep(jobId, index, csprngNonce))`, where `threads` is
+  `DriveMedia.ThreadsFor(settings, step.SourceDirectory, step.DestinationDirectory)`, run on a
+  dedicated thread per step (volume queries can wait on a sleeping disk or a slow share).
+  `ThreadPolicy.Choose` turns any classification exception into `ThreadPolicy.Fallback`, so
+  detection never fails a run. Robocopy from
   `%SystemRoot%\System32\robocopy.exe` (absolute), working directory System32, no window,
   stdout drained and discarded, placed in a kill-on-close job object. Pipe created **before**
   start with `FirstPipeInstance`; a client whose PID is not robocopy's is disconnected and the
@@ -468,7 +473,8 @@ Step execution:
 - Normal: `jobs\<JobLogNames.FolderName>\job.json` (`JobRecords.ToJson`, rewritten via temp
   file + `File.Replace` on each state change, bounded: states, commands, summary, at most
   1,000 errors), `robocopy.log` (UTF-8 copy of the pipe lines, buffered, capped at 50 MB with a
-  truncation line), `history.jsonl` (rotated past 10,000 lines). After a normal-mode job
+  truncation line; each run's command line is followed by `ThreadChoice.LogLine`, the /MT
+  count and the media it came from, never a path), `history.jsonl` (rotated past 10,000 lines). After a normal-mode job
   finishes, the manager prunes off the UI thread to `logRetentionJobs`, never touching folders
   of running jobs. Log write failures never fail a job.
 - Interrupted jobs (normal mode): at start, `JobLogStore.MarkInterrupted` reads each job.json;

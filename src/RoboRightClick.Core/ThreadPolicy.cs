@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace RoboRightClick.Core;
 
 /// <summary>What kind of storage a path lives on, as far as parallel copying is concerned.</summary>
@@ -57,5 +59,78 @@ public static class ThreadPolicy
             return SameRotationalDisk;
         }
         return Math.Min(For(source), For(destination));
+    }
+
+    /// <summary>
+    /// The /MT count for one robocopy run. <paramref name="classify"/> asks the host about
+    /// both drives and is called only when the count is automatic.
+    /// </summary>
+    /// <remarks>
+    /// Classification can only tune a copy, never stop one: whatever <paramref name="classify"/>
+    /// throws, the run goes ahead with <see cref="Fallback"/>, the count every run used before
+    /// per-drive detection existed.
+    /// </remarks>
+    public static ThreadChoice Choose(Settings settings, Func<DrivePair> classify)
+    {
+        if (!settings.AutoThreads)
+        {
+            return new ThreadChoice(settings.Threads, Drives: null, ClassificationFailed: false);
+        }
+        DrivePair drives;
+        try
+        {
+            drives = classify();
+        }
+        catch (Exception)
+        {
+            return new ThreadChoice(Fallback, Drives: null, ClassificationFailed: true);
+        }
+        return new ThreadChoice(Resolve(settings, drives.Source, drives.Destination, drives.SameDisk), drives, ClassificationFailed: false);
+    }
+
+    /// <summary>A medium as the job log names it.</summary>
+    public static string Describe(DriveMedium medium) => medium switch
+    {
+        DriveMedium.SolidState => "solid-state",
+        DriveMedium.Rotational => "rotational",
+        DriveMedium.Network => "network",
+        _ => "unknown",
+    };
+}
+
+/// <summary>Both ends of one robocopy run, as the host classified them.</summary>
+/// <param name="SameDisk">Both ends are on one physical disk or one volume.</param>
+public readonly record struct DrivePair(DriveMedium Source, DriveMedium Destination, bool SameDisk);
+
+/// <summary>The /MT count picked for one robocopy run, and what it was based on.</summary>
+/// <param name="Drives">The classified drives; null when the count is fixed in settings or classification failed.</param>
+/// <param name="ClassificationFailed">Classification threw, so the run uses <see cref="ThreadPolicy.Fallback"/>.</param>
+public sealed record ThreadChoice(int Threads, DrivePair? Drives, bool ClassificationFailed)
+{
+    /// <summary>
+    /// The settings one run's arguments are built from: the chosen count, fixed, so that
+    /// <see cref="RobocopyArgs.Build"/> writes exactly this /MT value.
+    /// </summary>
+    public Settings ApplyTo(Settings settings) => settings with { AutoThreads = false, Threads = Threads };
+
+    /// <summary>
+    /// One line for the job's robocopy.log, written after the command line. It names media
+    /// only, never a path or a drive letter, so it adds nothing a path-scrubbed log would need
+    /// to remove.
+    /// </summary>
+    public string LogLine
+    {
+        get
+        {
+            var basis = this switch
+            {
+                { Drives: { } d } =>
+                    $"auto: source {ThreadPolicy.Describe(d.Source)}, destination {ThreadPolicy.Describe(d.Destination)}"
+                    + (d.SameDisk ? ", same disk" : ""),
+                { ClassificationFailed: true } => "auto: drives could not be classified, default used",
+                _ => "fixed in settings",
+            };
+            return $"# threads /MT:{Threads.ToString(CultureInfo.InvariantCulture)} ({basis})";
+        }
     }
 }

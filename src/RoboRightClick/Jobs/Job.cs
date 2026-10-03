@@ -66,7 +66,9 @@ internal sealed record JobStart(
 /// <see cref="StepOutcome.ReplanAsMove"/> item is scanned again on its own and appended as a
 /// robocopy move with policy Skip); DuplicateFileStep and copy-mode KeepBothStep by
 /// InProcessCopier.CopyFileAsync; RobocopyStep by RobocopyRun with
-/// RobocopyArgs.Build(step, settings, policy, PipeNames.ForStep(id, index, CSPRNG nonce)).
+/// RobocopyArgs.Build(step, DriveMedia.ThreadsFor(...).ApplyTo(settings), policy,
+/// PipeNames.ForStep(id, index, CSPRNG nonce)): the /MT count is chosen per run from both
+/// ends' drives, and the sink gets a "# threads" line after the command line.
 /// Events go through the ledger; observed bytes = ledger.CompletedBytesOfFinishedSteps +
 /// this run's read counter, from callbacks of the current run only. ShellNotify after each
 /// step. A closed gate before Running moves straight on to Paused; the loop waits on the
@@ -872,9 +874,16 @@ internal sealed class Job
         int run,
         CancellationToken token)
     {
+        // Per-run thread count from both ends' drives. The volume queries can wait on a sleeping
+        // disk or a slow share, so they run on a dedicated thread like the presence check;
+        // ThreadsFor never throws (a failure means ThreadPolicy.Fallback).
+        var threads = await RunBlockingAsync(
+            () => DriveMedia.ThreadsFor(Start.Settings, step.SourceDirectory, step.DestinationDirectory)).ConfigureAwait(false);
         var pipeName = PipeNames.ForStep(Id, pipeIndex, NewPipeNonce());
-        var arguments = RobocopyArgs.Build(step, Start.Settings, policy, pipeName);
+        var arguments = RobocopyArgs.Build(step, threads.ApplyTo(Start.Settings), policy, pipeName);
         BestEffort(sink => sink.CommandStarted(Id, arguments));
+        // Before the run starts, so it cannot interleave with robocopy's own lines.
+        BestEffort(sink => sink.OutputLine(Id, threads.LogLine));
 
         StepOutcome outcome;
         using (var robocopy = new RobocopyRun(arguments, pipeName, _gate, Services.Sampler, new RunObserver(this, part.Ledger, index, run)))

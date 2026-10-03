@@ -311,7 +311,7 @@ Limits. The guarantee covers what this app writes, not what Windows records:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `threads` | `"auto"` | robocopy `/MT` threads. `"auto"` picks per drive: 32 for SSDs and network shares, 8 when a spinning disk is involved, 4 within one spinning disk. A number from 1 to 128 fixes it |
+| `threads` | `"auto"` | robocopy `/MT` threads. `"auto"` picks per drive: 32 for SSDs and network shares, 8 when a spinning disk is involved, 4 within one spinning disk. A number from 1 to 128 fixes it. Each run's count and the drive types it was based on are in the job's `robocopy.log` |
 | `retries` / `retryWaitSeconds` | `0` / `0` | robocopy `/R` and `/W`; Explorer doesn't retry on its own either |
 | `conflictDefault` | `ask` | `ask` (Explorer's Replace/Skip prompt), `replace`, `skip`, `keepNewer` |
 | `maxConcurrentJobs` | `0` | `0` = unlimited, as in Explorer |

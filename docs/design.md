@@ -54,7 +54,7 @@ There's no helper process and no shared memory. After a successful cut-paste, th
 | Metadata | measured in docs/parity.md | `/COPY:DAT /DCOPY:DA /A+:A /XJD`; remaining deviations are listed in parity.md |
 | Concurrent pastes | each runs at once, in parallel | each runs at once (`maxConcurrentJobs: 0` = unlimited), except that a paste whose source or destination overlaps where another running paste writes waits for it (deviation, docs/parity.md) |
 
-Always-on robocopy flags: `/MT:32 /COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP /XX`. `/XX` keeps destination-only ("extra") files out of the output, where with `/NC` they would look like copied files. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
+Always-on robocopy flags: `/MT:<n>` (per run, from `threads`; 32 unless a spinning disk is involved) `/COPY:DAT /DCOPY:DA /A+:A /XJD /NP /NDL /NC /NJH /NJS /BYTES /FP /XX`. `/XX` keeps destination-only ("extra") files out of the output, where with `/NC` they would look like copied files. Output goes through `/UNILOG:\\.\pipe\<per-run name>` into a named pipe the app owns. M0 showed redirected stdout can't carry non-ASCII names, even with `/UNICODE`. The pipe gives exact UTF-16 and writes nothing to disk in any mode. The pipe is created with a current-user-only ACL and a single instance, and the app checks that the connected client's PID is the robocopy it started.
 
 ## Config (simple)
 
@@ -109,7 +109,7 @@ Queued → Scanning → [AwaitingDecision] → Running ⇄ Paused → Finalizing
 All job output goes through one `IJobSink` interface:
 - **Normal mode** composes a `FileJobSink`. It writes `%LOCALAPPDATA%\RoboRightClick\jobs\<yyyyMMdd-HHmmss>-<id>\` containing:
   - `job.json`: verb, sources, destination, effective args, state transitions with timestamps, exit code, failures.
-  - `robocopy.log`: a copy of the pipe output, written by us, not by robocopy.
+  - `robocopy.log`: a copy of the pipe output, written by us, not by robocopy. Each run starts with its command line and a `# threads /MT:<n> (...)` line giving the count and what it was based on: the classified media of both ends (no paths), a fixed setting, or a failed classification.
 
   It also appends to `history.jsonl`. Retention prunes to the last `logRetentionJobs` jobs.
   An unhandled exception in the tray appends to `%LOCALAPPDATA%\RoboRightClick\crash.log`

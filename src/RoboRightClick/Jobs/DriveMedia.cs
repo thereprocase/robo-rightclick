@@ -51,18 +51,20 @@ internal static unsafe partial class DriveMedia
         (a.VolumeRoot is not null && b.VolumeRoot is not null && WinPath.AreSame(a.VolumeRoot, b.VolumeRoot))
         || (a.DiskNumber is { } x && b.DiskNumber is { } y && x == y);
 
-    /// <summary>The /MT count for one robocopy run, from the settings and both drives.</summary>
-    public static int ThreadsFor(Settings settings, string sourceDirectory, string destinationDirectory)
-    {
-        if (!settings.AutoThreads)
+    /// <summary>
+    /// The /MT count for one robocopy run, from the settings and both drives. Never throws:
+    /// <see cref="ThreadPolicy.Choose"/> turns any classification failure into
+    /// <see cref="ThreadPolicy.Fallback"/>. May block on a slow drive, so callers run it on a
+    /// job worker thread.
+    /// </summary>
+    public static ThreadChoice ThreadsFor(Settings settings, string sourceDirectory, string destinationDirectory) =>
+        ThreadPolicy.Choose(settings, () =>
         {
-            return settings.Threads;
-        }
-        var source = Classify(sourceDirectory);
-        // The destination folder may not exist yet; its volume does.
-        var destination = Classify(destinationDirectory);
-        return ThreadPolicy.Resolve(settings, source.Medium, destination.Medium, SameDisk(source, destination));
-    }
+            var source = Classify(sourceDirectory);
+            // The destination folder may not exist yet; its volume does.
+            var destination = Classify(destinationDirectory);
+            return new DrivePair(source.Medium, destination.Medium, SameDisk(source, destination));
+        });
 
     private static Drive Query(string root)
     {
