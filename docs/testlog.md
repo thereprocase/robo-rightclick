@@ -1064,3 +1064,253 @@ value gone, shared parents kept, no process), and every key, the Run value and t
 checked absent by name afterwards; both virtual disks detached and deleted; the scratch folders,
 downloads, desktop file and every scheduled task of this session removed; display scale back to
 100%. The pre-existing `RrcParityExplorer` task was left alone.
+
+## 2026-10-03 · build 26200 (robocopy 10.0.26100.1) · VM · third gate: frozen 1.0.0-beta.2 (186c79c)
+
+Same disposable Windows 11 Enterprise evaluation VM, no network egress, test account signed in,
+screen 1280 x 800; desktop work through one-shot scheduled tasks, injected mouse and keyboard
+input and screendumps. Test volumes: a 3 GB (R:) and a 48 MB (S:) NTFS virtual disk. Evidence:
+`docs/evidence/2026-10-03/g3-*.png` (account paths in the install dialogs painted over). Builds
+(exe SHA256, first 8 hex digits):
+
+- **frozen**: commit 186c79c, zip `aa2a91e165f489766a5bc3dca37d585abe13952fa6e886486b2f395b1ebbc7e1`,
+  checked with `Get-FileHash` on the VM before anything ran; `scripts/check-reproducible.sh` on
+  the Linux builder (two fresh clones, two umasks) produced the same zip hash. Exe `0076f0bf`,
+  version 1.0.0-beta.2. Every result below is for this exe unless it names another.
+- **draft**: the draft release's asset (zip `8147aa9b`, exe `3dd7d70e`, commit b41a554,
+  labelled 1.0.0-beta.1), downloaded with `gh release download`.
+- **older**: the first gate's frozen build (commit b9cd02d, zip `c8b61aba`, exe `d11d3ad8`,
+  1.0.0-beta.1), which has the downgrade check: `-OlderExe` for Update.Tests, the downgrade
+  attempts and the install loop.
+
+### Download simulation (Mark of the Web)
+
+- The frozen zip was copied to Downloads with a `Zone.Identifier` stream (ZoneId=3, github.com
+  referrer and host URL). `Expand-Archive` carried the mark to none of the four files; the
+  shell's zip folder (`Shell.Application` `CopyHere`, the code path of Extract All) put it on all
+  four. Same as the second gate.
+- Empty profile, 100%: double-click of the shell-extracted (marked) exe showed "SmartScreen can't
+  be reached right now", Unknown Publisher, Run / Don't Run (`g3-01-...`; the offline variant,
+  the VM has no egress). One click on Run; the install offer appeared within 10 s
+  (`g3-02-...`). Install: result notice and first-run toast (`g3-03-...`).
+- **Choosing Run removed the mark from the source exe**: its streams were read right after the
+  click, before Install, and only `:$DATA` was left. The installed exe and the three icons were
+  unmarked. This explains the second gate's unmarked install. The first gate's marked install
+  is not explained by it; whether that exe went through the prompt's Run is not recorded.
+- `Zone.Identifier` (ZoneId=3) was then put on the **installed** exe by hand. COM cold start (tray
+  killed, classic menu, Y on a file) started `RoboRightClick.exe -Embedding` with no prompt;
+  sign-out and sign-in started the tray from the Run value about 19 s after Explorer, with no
+  prompt on screen. A marked installed exe starts silently on both paths.
+
+### Installer and updater (step 0)
+
+Uninstalled first; every key, the Run value, the three folders and the process checked absent by
+name.
+- **draft installed** with `--install --quiet`: DisplayVersion 1.0.0-beta.1, no Icon values, the
+  classic menu without icons or access keys (`g3-04-...`). config.json edited: retries 2, retry
+  wait 7, log retention 40, notify off (SHA256 `ca4d7d4a...`).
+- **Double-click of the frozen exe** in `Downloads\RoboRightClick-1.0.0-beta.2-win-x64` (the
+  `Expand-Archive` copy, unmarked, so no SmartScreen): **"Update RoboRightClick 1.0.0-beta.1 →
+  1.0.0-beta.2?"** (`g3-05-...`). Update: "RoboRightClick was updated from 1.0.0-beta.1 to
+  1.0.0-beta.2." (`g3-06-...`). Exe `0076f0bf`, DisplayVersion 1.0.0-beta.2, Icon values on all
+  five verb keys pointing at `robo-copy.ico`, `robo-cut.ico`, `robo-paste.ico` in the install
+  folder, MUIVerb with the access keys, config.json hash unchanged, the old tray gone and a new
+  one running. The Explorer window that stayed open showed the Robo-Copy and Robo-Cut icons and
+  the Y and U access keys right after the update, without a sign-out (`g3-07-...`).
+- **Double-click again**: "RoboRightClick 1.0.0-beta.2 is installed. Repair it?" (`g3-08-...`);
+  Repair: "RoboRightClick 1.0.0-beta.2 was repaired." (`g3-09-...`), new tray PID, exe and
+  config.json unchanged.
+- **Downgrade**: double-click of the older exe: "A newer RoboRightClick is installed", Open and
+  Close only, "Nothing was changed" (`g3-10-...`); exe, DisplayVersion and tray PID unchanged.
+  `older --install --quiet`: exit 1, nothing changed, same tray. `--force`: exit 0, `d11d3ad8`,
+  DisplayVersion 1.0.0-beta.1, config unchanged. Frozen `--install --quiet` updated back.
+- **Update during a long paste** (4 x 128 MB of random data):
+  - `/IORATE:1M` in `extraArgs.copy`: frozen `--install --quiet` while robocopy ran: **exit 1
+    after about 12 s, the same robocopy PID kept running, the tray kept its PID.** The
+    double-click that followed was a harness error: the progress window had opened over the
+    Explorer window's toolbar and the injected double-click landed on its Cancel button. That
+    job ended `canceled` (exit -1) with its partial files removed, the tray unchanged.
+  - Repeated with `/IORATE:512K` (2 MB/s): frozen `--install --quiet`: **exit 1 after about
+    13 s**, robocopy and tray PIDs unchanged. The progress window was moved aside, then a
+    double-click of the frozen exe: the Repair offer, Repair: **"RoboRightClick did not close"**
+    with the reasons and the ways out (`g3-11-...`); robocopy and tray unchanged. The job ended
+    `done`: 4 files, 536,870,912 bytes, all four hashes equal to the sources. The tray kept one
+    PID from before the first paste to after the second.
+
+### Run-All (step 1), frozen exe, `-OlderExe` older, `-SecondVolume R:\scratch`, `-SmallVolume S:\scratch`
+
+Scripts as committed in 186c79c:
+
+```
+Test      Result Seconds
+----      ------ -------
+Install   PASS        17
+Verbs     PASS        34
+CutSafety PASS       139
+Cancel    PASS        62
+Hotkey    PASS       146
+Ephemeral PASS       148
+Security  PASS       853
+Uninstall PASS         1
+Update    PASS        22
+Footprint PASS       770
+```
+
+CutSafety G (a cut whose only file conflicts, answered Skip): no summary, the job ended Done,
+source and destination unchanged, on one volume and across volumes. Ephemeral's "unverified"
+lines: `wpndatabase.db-shm` and `wpndatabase.db-wal` held the test path before the jobs (toasts
+from earlier sessions), so they were searched for the marker only; four web cache files and
+`UsrClass.dat.LOG2` could not be opened to search. Footprint: use 0 app-owned registry
+differences (2 noise); after uninstall 0 app-owned differences remain, the Run value, the three
+folders and the process are gone, Windows' UFH\ARP copy holds 0 matches.
+
+### Fixes since the second gate, on Windows
+
+- **3d160de, the settings-problem toast quotes no path.** After Run-All, Windows' notification
+  database held no `[path]` text and still held two settings-problem toasts with a raw path
+  (`'/LOG:C:\Users\<account>\...\injected.log'`, `'/UNILOG+:...'`), the ones the second gate
+  attributed to earlier runs: this run's Security section 4 toasts did not reach the database at
+  all. Why is unknown; about twenty toasts from the Security run were still queued on screen
+  after Run-All had ended and the app had been uninstalled. Checked directly instead: frozen
+  installed, `extraArgs.copy` set to `/LOG:C:\rrc\inj\injected.log`, then to
+  `/LOG:C:\rrc\inj\second.log`, while the tray ran. The toast read **"config.json:
+  'extraArgs.copy' ignored: '/LOG:[path]' is not an allowed extra switch. Open Settings to
+  fix."** (`g3-12-...`). In the database afterwards: `LOG:[path]` present, `C:\rrc\inj` and
+  `second.log` absent. Verified.
+- **6e3ecf0, a copy whose every file is kept runs no robocopy step.** Notify on, Robo-Copy of one
+  file, Robo-Paste from the background menu into a folder holding an older file of that name,
+  Skip: no toast within 10 s, the destination unchanged, job.json states
+  `queued > scanning > awaitingDecision > finalizing > done`, `commandCount` 0, 0 files.
+  Verified.
+
+### Upgrade in place and the install loop (step 2)
+
+- Uninstalled, draft installed, tray running, config.json edited (retries 3, retry wait 5,
+  conflict skip, retention 25, notify off; SHA256 `b52984da...`). Frozen `--install --quiet`:
+  exit 0, exe `0076f0bf` = package, DisplayVersion 1.0.0-beta.2, Icon values
+  `...\robo-copy.ico`, `...\robo-cut.ico`, `...\robo-paste.ico` (x3), config.json byte for byte
+  unchanged, the folder holds only the exe and the three icons, new tray PID.
+- **20 installs** from one desktop script with the tray running, alternating older `--force` and
+  frozen so a skipped replace shows in the hash: **20 of 20 exit 0, installed hash as expected,
+  DisplayVersion as expected, a new tray PID each time, no `.old` or `.tmp`**, 1.2 to 1.3 s
+  each, config.json unchanged after all 20.
+- **The earlier anomaly** (exit 0, exe not replaced) did not occur. The second gate attributed it
+  (LIKELY) to the wrapper rerunning a still-running scheduled task; that wrapper now refuses a
+  running task name, and this loop ran inside one task without it. One more harness trap seen
+  here: the loop's first version used `Start-Process -Wait`, which waits for the started
+  process's descendants too, so it waited on the tray the installer started and never
+  returned (the install itself had completed). `WaitForExit()` on the process does not.
+
+### threads auto (step 3)
+
+Four 128 MB files, `/IORATE:4M`, Pause and Resume through the progress window's buttons (UI
+Automation), robocopy's written bytes from `Win32_Process.WriteTransferCount`, screenshots from
+the desktop session (`g3-13-...`: paused at /MT 4, running at /MT 8, paused auto C: to virtual
+disk, running auto C: to C:):
+
+| Case | `/MT` on robocopy's command line | job log | written while paused (8 s) | after Resume (4 s) | copy |
+|---|---|---|---|---|---|
+| auto, C: to C: | 32 | `# threads /MT:32 (auto: source unknown, destination unknown, same disk)` | 0 | 76 MB | 4 of 4 hashes match, done |
+| auto, C: to virtual disk | 32 | `# threads /MT:32 (auto: source unknown, destination unknown)` | 0 | 76 MB | 4 of 4, done |
+| auto, virtual disk to C: | 32 | `# threads /MT:32 (auto: source unknown, destination unknown)` | 0 | 76 MB | 4 of 4, done |
+| `"threads": 4`, C: to virtual disk | 4 | `# threads /MT:4 (fixed in settings)` | 0 | 76 MB | 4 of 4, done |
+| `"threads": 8`, C: to virtual disk | 8 | `# threads /MT:8 (fixed in settings)` | 0 | 76 MB | 4 of 4, done |
+
+Each job's states: `running > paused > running > finalizing > done`. `Get-PhysicalDisk`
+MediaType is `Unspecified` for the QEMU SATA disk and both virtual disks, so "unknown" is the
+design's answer; the solid-state and rotational branches were again **not** exercised. The
+format-1 `"threads": 32` kept through the update also read as auto (`# threads /MT:32 (auto:
+...)` on the step 0 pastes).
+
+### Menu icons and scaling (step 4)
+
+Classic menu at 100% on a file (`g3-07-...`), a folder (`g3-30-...`) and a folder background
+(`g3-14-...`); at 150% (`g3-26-...`, `g3-27-...`) and 175% (`g3-28-...`, `g3-29-...`), each scale
+set through `LogPixels` (144, 168) with `Win8DpiScaling` 1 and a sign-out and sign-in. Magnified
+4x (`g3-25-...`) the Robo-Copy and Robo-Cut glyphs have one-pixel edges at all three, no blur.
+Restored to `LogPixels` 96 and `Win8DpiScaling` 0 (the values found) with a sign-out and
+sign-in; the tray came back from the Run value each time.
+
+### Hotkey (step 5b) and access keys
+
+A second program held Ctrl+Shift+V with `RegisterHotKey` and logged every press it received
+with the foreground window's class.
+- Ctrl+C on a file in Explorer, then Ctrl+Shift+V with a file selected in another folder:
+  pasted there ("Copy finished, 1 item (12 bytes) to b", `g3-16-...`); the second program
+  received nothing.
+- Two tabs, the second active: pasted into the active tab only, the first tab's folder unchanged
+  (`g3-17-...`).
+- Desktop (an icon selected): pasted to the desktop ("... to Desktop", `g3-19-...`).
+- Passed through to the second program: search box, address bar in edit mode, rename box (all
+  `CabinetWClass`), the desktop's rename box (`Progman`), Notepad (`Notepad`), Microsoft Store.
+- Notepad started from a scheduled task opened behind File Explorer (Windows' focus rules), so
+  the first press went to the folder in front: it pasted there, the file already existed and
+  the conflict dialog came to the front (`g3-18-...`), as designed for that foreground.
+- Recycle Bin and This PC (a drive selected, so the item list had the focus): "Can't Robo-Paste
+  here" toast, nothing pasted (`g3-20-...`, `g3-21-...`).
+- Settings, opened from the tray's hotkey line: the Hotkey row named the other registration
+  ("Another app also uses Ctrl+Shift+V ...", `g3-22-...`). Unticked and saved: config.json
+  `"pasteHotkey": ""`, and the next press in a folder's item list reached the second program.
+- Access keys in the classic menu: Y (Robo-Copy) on a file (the cold start above), U (Robo-Cut)
+  on a folder, then B (Robo-Paste) on another folder's background: the folder moved there.
+- Typing during a paste (`/IORATE:2M`, 7.6 MB/s): 12 keys into Explorer's search box all showed
+  within 0.5 s of the last (`g3-23-...`).
+- The one-minute run of presses passing through File Explorer seen at both earlier gates did
+  **not** occur: every press in File Explorer in this session pasted or refused as expected.
+  Still open; nothing here shows its cause.
+
+### 50,000 items (step 5c)
+
+50,000 files of 25 bytes, Ctrl+A, Shift+F10, Show more options, Y. A watcher polled for the
+classic menu window (`#32768`) and the clipboard sequence number, and pinged Explorer's window
+with `WM_NULL` every 50 ms (replies over 250 ms logged). Menu closed to clipboard changed:
+**1.91 s** and **1.85 s**; the clipboard then held 50,000 file paths (the watcher's own read of
+the list took 17.8 s, after the change, so it is not in the figure; a first run that counted it
+is discarded). Explorer's window: one stall of 1.61 to 1.64 s while its own menu was built and
+one of **1.45 to 1.47 s** right after Y, no other reply over 250 ms. The tray used 0.3 s of CPU
+for the copy.
+
+### Foreground (step 5d)
+
+Right-click Robo-Paste from a folder background's classic menu (B), 100%, a conflict on one of
+two files: the conflict dialog came to the front with the focus on Skip and the progress window
+opened above the Explorer window (`g3-15-...`); Skip: the other file copied, the conflicting one
+kept. After a hotkey paste with a conflict the dialog also came to the front (`g3-18-...`).
+Nothing to fix.
+
+### Crash log (step 5)
+
+No test hook exists. Same forced failure as the second gate: a mutex created under the name of
+the tray's `Local\RoboRightClick.Ready` event, then the installed exe started.
+- **Normal mode**: "RoboRightClick could not start" (`g3-24-...`), exit 1, and
+  `%LOCALAPPDATA%\RoboRightClick\crash.log` written: one 576-byte entry with time, version
+  1.0.0-beta.2, Windows 10.0.26200.0, thread UI, `WaitHandleCannotBeOpenedException` with the
+  quoted name replaced by `[path]`, and the stack (`SingleInstance.TryAcquire`,
+  `TrayApplication.Run`). No other file in the data folder was created or changed in size; five
+  job folders' timestamps as listed by their parent moved by about 5 ms toward their own write
+  times (LIKELY NTFS updating the parent's cached copy when the folders were opened; no content
+  changed).
+- **Ephemeral mode** (`"logging": "ephemeral"`): the same notice, exit 1, **no crash.log** and no
+  new, removed or changed entry in `%LOCALAPPDATA%\RoboRightClick`.
+An unhandled exception in a running tray, and rotation, are still unverified.
+
+### Found
+
+No app defect. Two harness errors, recorded above (the cancel click, `Start-Process -Wait`).
+Docs: README's "The exe is not signed" section said none of its points had been observed in
+the test log; this entry and the two before it observe them. Corrected on main after this run;
+README.md is in the zip, so the package changes.
+
+### Not verified, or still open
+
+The hotkey pass-through run (not seen this time); why the Security run's settings-problem
+toasts never reached Windows' notification database; the online SmartScreen prompt ("Windows
+protected your PC"); the first gate's marked install; solid-state and rotational thread choices;
+crash.log from an unhandled exception and its rotation; 125%; a second monitor; an elevated
+Explorer; a second keyboard layout.
+
+**VM housekeeping:** app uninstalled with `--uninstall --quiet`; every key, the Run value, the
+three folders and the process checked absent by name, and no key named `Robo*` left under
+HKCU\Software\Classes. Both virtual disks detached and deleted; the scratch folder, downloads,
+desktop file and every scheduled task of this session removed; display scale back to 100%.
+The pre-existing `RrcParityExplorer` task was left alone.
