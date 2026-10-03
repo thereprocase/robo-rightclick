@@ -13,6 +13,7 @@ internal static partial class ShellNotify
     private const int SHCNE_RENAMEITEM = 0x00000001;
     private const int SHCNE_RENAMEFOLDER = 0x00020000;
     private const int SHCNE_UPDATEDIR = 0x00001000;
+    private const int SHCNE_ASSOCCHANGED = 0x08000000;
 
     private const uint SHCNF_PATHW = 0x0005;
     private const uint SHCNF_FLUSHNOWAIT = 0x3000;
@@ -30,6 +31,12 @@ internal static partial class ShellNotify
             SHChangeNotify(SHCNE_UPDATEDIR, Flags, folder, null);
         }
     }
+
+    /// <summary>
+    /// SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT: Explorer caches context-menu and
+    /// file icons, so an update that replaced the menu icons asks it to reload them.
+    /// </summary>
+    public static void AssociationsChanged() => SHChangeNotify(SHCNE_ASSOCCHANGED, 0x3000, null, null);
 
     /// <summary>SHCNE_RENAMEITEM or SHCNE_RENAMEFOLDER after a rename step.</summary>
     public static void Renamed(string from, string to, bool isFolder)

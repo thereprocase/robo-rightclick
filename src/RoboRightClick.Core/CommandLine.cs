@@ -15,7 +15,8 @@ public sealed record CliRunTray(bool StartedByCom, bool AfterInstall = false) : 
 /// choice; see <see cref="Registration.ResolveStartWithWindows"/>).
 /// </param>
 /// <param name="Quiet">--quiet: no message box; the exit code is the only result (scripts, e2e).</param>
-public sealed record CliInstall(bool? StartWithWindows, bool Quiet = false) : CliCommand;
+/// <param name="Force">--force: allow replacing a newer installed version with this older one.</param>
+public sealed record CliInstall(bool? StartWithWindows, bool Quiet = false, bool Force = false) : CliCommand;
 
 /// <param name="Quiet">--quiet: no message box; the exit code is the only result.</param>
 public sealed record CliUninstall(bool Quiet = false) : CliCommand;
@@ -42,7 +43,7 @@ public static class CommandLine
     public const string Usage =
         """
         RoboRightClick                     run the tray app
-        RoboRightClick --install [--autostart | --no-autostart] [--quiet]
+        RoboRightClick --install [--autostart | --no-autostart] [--quiet] [--force]
         RoboRightClick --uninstall [--quiet]
         RoboRightClick copy <path>...      Robo-Copy the items (same path as the right-click)
         RoboRightClick cut <path>...       Robo-Cut the items
@@ -50,7 +51,8 @@ public static class CommandLine
 
         This is a Windows GUI program: cmd and PowerShell do not wait for it. In scripts use
         "start /wait RoboRightClick ..." or "Start-Process -Wait -PassThru" to get the exit code.
-        --quiet skips the install and uninstall message box; the exit code is the result.
+        --install installs, or updates or repairs an installed version; a newer installed version is
+        kept unless --force. --quiet skips the install and uninstall message box; the exit code is the result.
         """;
 
     public static CliCommand Parse(IReadOnlyList<string> args)
@@ -81,11 +83,16 @@ public static class CommandLine
         {
             bool? startWithWindows = null;
             var quiet = false;
+            var force = false;
             foreach (var option in rest)
             {
                 if (Is(option, QuietSwitch) && !quiet)
                 {
                     quiet = true;
+                }
+                else if (Is(option, ForceSwitch) && !force)
+                {
+                    force = true;
                 }
                 else if ((Is(option, "--autostart") || Is(option, "--no-autostart")) && startWithWindows is null)
                 {
@@ -97,7 +104,7 @@ public static class CommandLine
                     return Unexpected(option);
                 }
             }
-            return new CliInstall(startWithWindows, quiet);
+            return new CliInstall(startWithWindows, quiet, force);
         }
         if (Is(first, "--uninstall"))
         {
@@ -138,6 +145,8 @@ public static class CommandLine
     public const string AfterInstallSwitch = "--after-install";
 
     public const string QuietSwitch = "--quiet";
+
+    public const string ForceSwitch = "--force";
 
     private static bool Is(string arg, string expected) => string.Equals(arg, expected, StringComparison.OrdinalIgnoreCase);
 

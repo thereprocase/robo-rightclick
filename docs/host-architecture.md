@@ -81,7 +81,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `UI/ErrorSummaryDialog.cs` | End-of-job errors, refusals, damage: Try again (N) / Skip. |
 | `UI/UiPrompts.cs` | `IJobPrompts` on the UI thread. |
 | `UI/Notifier.cs` | Balloon toasts, coalesced; text only from `ToastText`. |
-| `Install/Installer.cs` | `--install`, first-run offer, `--uninstall`. |
+| `Install/Installer.cs` | `--install` (install, update, repair), the install/update/repair offer, `--uninstall`. |
 | `Install/RegistryWriter.cs` | Executes Core's registry lists against HKCU. |
 | `Cli/CliRunner.cs` | Verb invocation from the command line, usage, console attach. |
 
@@ -500,9 +500,9 @@ Step execution:
 
 | Command | Effect |
 |---|---|
-| *(none)* | Tray. From outside the install folder: offer to install instead. |
+| *(none)* | Tray. From outside the install folder: the install, update or repair offer instead (section 10). |
 | `-Embedding` | Tray started by COM. |
-| `--install [--autostart \| --no-autostart] [--quiet]` | Install (section 10). `--quiet`: no message box, exit code only. Repeated or contradictory options are refused. |
+| `--install [--autostart \| --no-autostart] [--quiet] [--force]` | Install, update or repair (section 10). `--quiet`: no message box, exit code only. `--force`: allow replacing a newer install with this older build. Repeated or contradictory options are refused. |
 | `--uninstall [--quiet]` | Uninstall (section 10). |
 | `--after-install` | Tray started by the installer: shows the first-run hint once. Not meant for users. |
 | `copy <path>...`, `cut <path>...`, `paste <folder>` | `ComClient.Invoke`: `CoCreateInstance(CLSCTX_LOCAL_SERVER)` on the verb's CLSID, `CoAllowSetForegroundWindow`, `SetSelection(SHCreateShellItemArrayFromIDLists(SHParseDisplayName(...)))`, `Execute`. The same path as a right-click, started by the CLI process instead of Explorer. Returns when the verb is accepted. |
@@ -515,10 +515,27 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 
 - `--install`: refuse (message, exit code 1, nothing changed) when uninstall would later
   refuse the locations (`UninstallPlan.InstallRefusal`: the same checks uninstall runs, e.g. a
-  profile path holding `&`, `%` or `!`) → stop a running tray (exit request; refused while jobs run) → copy exe to
-  `%LOCALAPPDATA%\Programs\RoboRightClick\` → write `Registration.InstallValues` → write the
-  default config.json only if absent (or apply an explicit autostart flag to the existing one)
-  → start the installed tray → message.
+  profile path holding `&`, `%` or `!`) → read what is installed (`InstalledFacts`: the exe's
+  product version and the Uninstall key's DisplayVersion) → `InstallDecision.Decide` →
+  `FreshInstall`, `Update(from, to)`, `Repair(same)` or `RefuseDowngrade` (exit code 1, nothing
+  changed, except that a DisplayVersion that disagrees with the exe is corrected; `--force`
+  turns it into an `Update` marked as a downgrade) → stop a running tray (exit request; refused
+  while jobs run, never killed) → copy this exe beside the installed one under a temp name,
+  `File.Replace` it over the installed exe (retried while the image is still mapped), keeping
+  the previous exe as `RoboRightClick.exe.old`, and compare the result with the source (SHA-256)
+  → rewrite the menu icons → write `Registration.InstallValues` → write the default config.json
+  only if absent (or apply an explicit autostart flag to the existing one; an update adds no
+  field, because a field the file lacks reads as its default, and a config.json from a newer
+  format version is never written) → delete the `.old` copy → for an update or repair,
+  `SHChangeNotify(SHCNE_ASSOCCHANGED)` so Explorer reloads cached menu icons → start the
+  installed tray (`--after-install` only for a fresh install) → message. Any failure after the
+  tray was stopped restores the `.old` exe, rewrites the old DisplayVersion, restarts the old tray
+  and reports the error. A `.old` left by an interrupted update is in `UninstallPlan`'s file list.
+  Version rules are in `AppVersion` (SemVer precedence, build metadata ignored); a missing or
+  unreadable version counts as older.
+- Plain start outside the install folder: the same decision picks the offer text
+  (`InstallText.Offer`), shown in a `MessageDialog`: Install / Update / Repair plus Open, or
+  for a newer install only Open and Close. Nothing there replaces a newer install.
 - `--uninstall`: stop the tray → remove `Registration.UninstallRemovals()` → delete exactly the
   known files (`UninstallPlan`: config.json and its `.bad` and `.tmp`, history and its rotated
   file, crash.log and crash.1.log, each job folder's job.json, robocopy.log and a leftover

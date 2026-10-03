@@ -89,6 +89,9 @@ public sealed record UninstallPlan(
             files.Add(WinPath.Combine(paths.InstallDirectory, ShellVerbs.IconFileName(verb)));
         }
 
+        // A copy left by an update that was interrupted before it could delete it.
+        files.Add(paths.InstalledExe + AppPaths.BackupExeSuffix);
+
         if (!runningFromInstallDir)
         {
             // The installed exe and the menu icons are the only files the installer put

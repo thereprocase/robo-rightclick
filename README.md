@@ -58,8 +58,9 @@ it is how Windows normally treats such a file:
 
 Per user. No administrator rights, and no Explorer settings are changed.
 
-- Double-click `RoboRightClick.exe` outside the install folder. It offers to install.
-- Or from a terminal: `RoboRightClick.exe --install [--autostart | --no-autostart] [--quiet]`.
+- Double-click `RoboRightClick.exe` outside the install folder. It offers to install, update or
+  repair, depending on what is installed (see Update).
+- Or from a terminal: `RoboRightClick.exe --install [--autostart | --no-autostart] [--quiet] [--force]`.
   Without a flag, a first install starts with Windows and a reinstall keeps your setting.
   `--quiet` skips the result message box; the exit code (0 ok, 1 failed) is the result.
 
@@ -72,24 +73,50 @@ Install refuses, with a message and exit code 1, when a folder it would use has 
 in its path that uninstall cannot handle safely (`" & | < > ^ % !`, for example a user name
 with `&`). It then changes nothing, so it never installs something it could not remove.
 
-## Upgrade
+## Update
+
+The single `RoboRightClick.exe` is the installer; there is no separate setup program. It compares
+its own version (for example `1.0.0-beta.1`; a beta is older than the same number without a
+label, and `beta.2` is older than `rc.1`) with the installed one. The installed version is read
+from the installed exe; if the Installed apps entry says something else, the exe is trusted and
+the entry is corrected. A version that cannot be read counts as older.
+
+| Installed | Double-click outside the install folder | `--install` |
+|---|---|---|
+| nothing | "Install RoboRightClick 1.0.0-beta.2?" | installs |
+| older | "Update RoboRightClick 1.0.0-beta.1 → 1.0.0-beta.2?" | updates |
+| the same | "RoboRightClick 1.0.0-beta.2 is installed. Repair it?", with Open | repairs |
+| newer | explains, offers Open, changes nothing | exit code 1, changes nothing |
+
+`--quiet` never shows a window; the exit code (0 ok, 1 failed) is the result.
 
 1. Download the new release, check its hash, unblock the zip and extract it, as above.
-2. Let running pastes finish, or cancel them. Install asks the running tray to exit; the tray
-   refuses while jobs run, and the install then stops with a message and changes nothing.
-3. Run the new `RoboRightClick.exe --install`, or double-click it: it offers to install, which
-   here replaces the installed version. The exe, the menu icons and the registry keys are
-   replaced. `config.json`, job logs, history and the crash log stay as they are; only an
-   explicit `--autostart` or `--no-autostart` changes the start-with-Windows setting.
+2. Let running pastes finish, or cancel them. An update asks the running tray to exit; the tray
+   refuses while jobs run, and the update then stops with a message and changes nothing. A
+   running copy is never killed.
+3. Double-click the new `RoboRightClick.exe`, or run it with `--install`. The exe is replaced
+   through a temporary file, the previous exe is kept as `RoboRightClick.exe.old` until the
+   update has finished, and the menu icons and the registry keys are rewritten. If any step
+   fails, the previous exe is put back and its tray restarted, and the failure is reported.
+   `config.json`, job logs, history and the crash log stay as they are: a setting the new
+   version added and the file lacks takes its default, and nothing is written to the file. Only
+   an explicit `--autostart` or `--no-autostart` changes the start-with-Windows setting.
+   Explorer is told to reload its icons; if a menu icon still looks old, sign out and in again.
 4. Check the result: Settings, Apps, Installed apps lists RoboRightClick with the new version.
    Or compare the installed exe with the one you extracted:
 
        (Get-FileHash "$env:LOCALAPPDATA\Programs\RoboRightClick\RoboRightClick.exe").Hash -eq (Get-FileHash .\RoboRightClick.exe).Hash
 
-Reinstalling over an installed build ran many times on the test VM (docs/testlog.md
-2026-10-02). Once, an install reported success but left the previous exe in place, cause
-unknown; step 4 catches that. To go back to an older version, install it the same way. It reads
-a `config.json` written by the newer version but never saves over it (see Configuration).
+The installer also compares the installed exe with the one it copied, and fails (restoring the
+old one) if they differ. Updating over an installed build ran many times on the test VM before
+version-aware install existed (docs/testlog.md 2026-10-02); the version decisions, the
+.old rollback and the icon refresh are cross-compiled and unverified on Windows.
+
+### Downgrade
+
+To go back to an older version, run the older exe with `--install --force`. Without `--force`
+it refuses, with exit code 1, because the installed version is newer. The older version reads a
+`config.json` written by the newer one but never saves over it (see Configuration).
 
 ## Where the items appear
 

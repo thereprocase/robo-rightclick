@@ -36,6 +36,9 @@ public sealed record AppPaths(
     /// </summary>
     public const string TempSuffix = ".tmp";
 
+    /// <summary>Added to the installed exe's name for the copy kept while an update replaces it, so a failed update can restore it.</summary>
+    public const string BackupExeSuffix = ".old";
+
     public static AppPaths From(string localAppData, string roamingAppData)
     {
         var install = WinPath.Combine(WinPath.Combine(localAppData, "Programs"), AppInfo.Name);

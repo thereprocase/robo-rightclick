@@ -83,6 +83,16 @@ internal static class RegistryWriter
         }
     }
 
+    /// <summary>
+    /// What the install's own registry entries say: whether the Uninstall key exists and its
+    /// DisplayVersion (null when absent or not a string).
+    /// </summary>
+    public static (bool KeyExists, string? DisplayVersion) ReadInstalledVersion()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(Registration.UninstallKey);
+        return key is null ? (false, null) : (true, key.GetValue("DisplayVersion") as string);
+    }
+
     /// <summary>The LocalServer32 command of the RoboCopy CLSID, or null when not registered (install-state check).</summary>
     public static string? RegisteredServerCommand()
     {

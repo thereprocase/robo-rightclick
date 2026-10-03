@@ -89,7 +89,7 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   the drop shadow Windows adds to every menu window (`CS_DROPSHADOW`).
 - **Dialogs** (conflict, error summary, settings, confirmations) follow the same pane, button and
   field rules. The primary action is the default button. Messages and questions, including the
-  first-run install offer and the install and uninstall results, use `MessageDialog`: one pane,
+  install, update and repair offer and the install and uninstall results, use `MessageDialog`: one pane,
   an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports
   use `MessageDialog.Notice`. A plain message box appears only as a fallback when a Gridline
   window cannot be built, and for an unhandled exception (`CrashPolicy`), where building
