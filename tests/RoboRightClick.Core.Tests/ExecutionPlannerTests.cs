@@ -456,6 +456,15 @@ public class ExecutionPlannerTests
                 disk.File(loose, minute: random.Next(10));
                 sources.Add(loose);
             }
+            // A second folder with same-named files, selected together (a search-results view):
+            // every one of them names a destination the first folder's files also go to.
+            var others = new List<string>();
+            for (var i = 0; i < random.Next(0, 3); i++)
+            {
+                var other = $@"C:\other\loose{i}.txt";
+                disk.File(other, minute: random.Next(10));
+                others.Add(other);
+            }
             disk.Dir(@"D:\dst");
             switch (random.Next(12))
             {
@@ -469,13 +478,12 @@ public class ExecutionPlannerTests
             }
             GenerateDestination(random, disk, sources, folders);
 
-            var looseNames = sources.Where(s => WinPath.AreSame(WinPath.GetParent(s), @"C:\src")).Select(WinPath.GetFileName).ToArray();
-            var steps = new List<PlanStep> { Tree(@"C:\src\T", @"D:\dst\T", move) };
-            if (looseNames.Length > 0)
-            {
-                steps.Add(Batch(@"C:\src", @"D:\dst", move, looseNames));
-            }
-            var scan = Scan(disk, [.. steps]);
+            var selection = new List<SourceItem> { new(@"C:\src\T", IsDirectory: true) };
+            selection.AddRange(sources.Where(s => WinPath.AreSame(WinPath.GetParent(s), @"C:\src")).Select(s => new SourceItem(s, IsDirectory: false)));
+            selection.AddRange(others.Select(s => new SourceItem(s, IsDirectory: false)));
+            var pastePlan = PastePlanner.Plan(new PasteRequest(selection, @"D:\dst", move ? TransferVerb.Move : TransferVerb.Copy), disk);
+            var steps = pastePlan.Steps;
+            var scan = JobScanner.Scan(pastePlan, disk, disk, null, CancellationToken.None);
             var (configured, choice) = RandomDecision(random, scan);
 
             var plan = ExecutionPlanner.Apply(scan, configured, choice, NothingTaken, fileListBudget: 60);
@@ -486,10 +494,20 @@ public class ExecutionPlannerTests
             protectedSources.UnionWith(plan.Steps.Select(s => s.Step).OfType<KeepBothStep>().Select(k => k.Source));
             protectedSources.UnionWith(scan.Issues.Select(i => i.Path));
             var reached = new Dictionary<string, int>(WinPath.Comparer);
+            var writtenTo = new Dictionary<string, string>(WinPath.Comparer);
             foreach (var step in plan.Steps.Where(s => s.Step is RobocopyStep))
             {
                 var robocopy = (RobocopyStep)step.Step;
                 var reachable = Reachable(disk, robocopy);
+                foreach (var source in reachable.Where(s => !kept.Contains(s)))
+                {
+                    // No two sources of one paste may land on one destination name.
+                    var destination = WinPath.Combine(robocopy.DestinationDirectory, source[(WinPath.TrimTrailingSeparators(robocopy.SourceDirectory).Length + 1)..]);
+                    Assert.False(
+                        writtenTo.TryGetValue(destination, out var earlier) && !WinPath.AreSame(earlier, source),
+                        $"{context}: {source} and {earlier} both go to {destination}");
+                    writtenTo[destination] = source;
+                }
                 var filtersMayKeep = !robocopy.Move && step.Policy is ConflictPolicy.Skip or ConflictPolicy.KeepNewer;
                 foreach (var source in reachable)
                 {
@@ -524,7 +542,7 @@ public class ExecutionPlannerTests
                     || RobocopySteps(plan).Any(s => !s.Recursive && WinPath.AreSame(s.SourceDirectory, folder));
                 Assert.True(covered, $"{context}: folder {folder} is lost");
             }
-            if (RobocopySteps(plan).Count > steps.Count)
+            if (RobocopySteps(plan).Count > steps.Count(s => s is RobocopyStep))
             {
                 splitsSeen++;
             }

@@ -38,6 +38,49 @@ public class PastePlannerTests
         Assert.False(step.Move);
     }
 
+    /// <summary>
+    /// Two selected items with one name (a search-results view): the scan reads the
+    /// destination before anything runs, so it cannot see that the first will be there when
+    /// the second arrives. Under Replace the second would overwrite the first and a cut would
+    /// delete its source; under Ask it would be skipped without a word. The later one is refused.
+    /// </summary>
+    [Theory]
+    [InlineData(TransferVerb.Copy, false)]
+    [InlineData(TransferVerb.Move, false)]
+    [InlineData(TransferVerb.Copy, true)]
+    [InlineData(TransferVerb.Move, true)]
+    public void A_second_selected_item_with_the_same_name_is_refused(TransferVerb verb, bool sameDrive)
+    {
+        var destination = sameDrive ? @"C:\dst" : @"D:\dst";
+        var plan = PastePlanner.Plan(
+            Request(verb, destination, (@"C:\a\README.md", false), (@"C:\b\README.md", false), (@"C:\b\other.md", false)),
+            new FakeFacts());
+
+        var issue = Assert.Single(plan.Rejected);
+        Assert.Equal(@"C:\b\README.md", issue.Path);
+        Assert.Equal(PastePlanner.SameNameReason, issue.Reason);
+        var written = plan.Steps.SelectMany(step => step switch
+        {
+            RobocopyStep r => r.FileNames.Select(n => WinPath.Combine(r.DestinationDirectory, n)),
+            RenameStep r => [r.Destination],
+            _ => [],
+        }).ToList();
+        Assert.Equal(written.Count, written.Distinct(WinPath.Comparer).Count());
+        Assert.Contains(WinPath.Combine(destination, "README.md"), written, WinPath.Comparer);
+        Assert.Contains(WinPath.Combine(destination, "other.md"), written, WinPath.Comparer);
+    }
+
+    [Fact]
+    public void A_folder_and_a_file_with_one_name_are_refused_too_and_one_item_selected_twice_is_not()
+    {
+        var plan = PastePlanner.Plan(
+            Request(TransferVerb.Copy, @"D:\dst", (@"C:\a\Notes", true), (@"C:\b\notes", false), (@"C:\a\Notes", true)),
+            new FakeFacts());
+
+        Assert.Equal([new PlanIssue(@"C:\b\notes", PastePlanner.SameNameReason)], plan.Rejected);
+        Assert.Equal(@"C:\a\Notes", Assert.IsType<RobocopyStep>(Assert.Single(plan.Steps)).SourceDirectory);
+    }
+
     [Theory]
     [InlineData("-E")]
     [InlineData("-MOV")]

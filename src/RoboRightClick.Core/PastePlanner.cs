@@ -87,6 +87,16 @@ public static class PastePlanner
     public const string DestinationReason = "The destination folder could not be found.";
     public const string SwitchLikeNameReason =
         "Robocopy would read this file name as one of its switches. Use Explorer's Paste for this item.";
+    /// <summary>
+    /// Two selected items would land on one destination name (a search-results view or a
+    /// library can select a\README.md and b\README.md together). Explorer asks when the second
+    /// arrives; the conflict scan reads the destination before anything runs and cannot see
+    /// the first, so the second would overwrite it unasked (and a cut would then delete its
+    /// source) or be skipped silently. The later item is refused instead (docs/parity.md).
+    /// </summary>
+    public const string SameNameReason =
+        "Another selected item has the same name and would go to the same place. Paste this one separately.";
+
     public const string LinkReason =
         "Folder links (junctions and symbolic links) can only be Robo-moved within the same drive. Use Explorer's Paste for these.";
 
@@ -154,8 +164,27 @@ public static class PastePlanner
         var noOps = new List<PlanIssue>();
 
         // Names this plan has already claimed in the destination, so two
-        // duplicates created by the same paste can never pick the same name.
+        // duplicates created by the same paste can never pick the same name, and two
+        // selected items can never be written to one name.
         var claimed = new HashSet<string>(WinPath.Comparer);
+        var claimedBy = new Dictionary<string, string>(WinPath.Comparer);
+
+        // False when another item of this paste already goes to <name>: the later one is refused,
+        // or skipped when it is the very same item selected twice.
+        bool Claim(string name, string path)
+        {
+            if (claimedBy.TryGetValue(name, out var first) || claimed.Contains(name))
+            {
+                if (first is null || !WinPath.AreSame(first, path))
+                {
+                    rejected.Add(new(path, SameNameReason));
+                }
+                return false;
+            }
+            claimed.Add(name);
+            claimedBy[name] = path;
+            return true;
+        }
         bool IsTaken(string name) => claimed.Contains(name) || facts.Exists(WinPath.Combine(destination, name));
 
         // Loose files are batched per source folder so one robocopy run
@@ -196,8 +225,10 @@ public static class PastePlanner
                 var linkTarget = WinPath.Combine(destination, name);
                 if (move && !sameFolder && facts.SameVolume(path, destination) && !facts.Exists(linkTarget))
                 {
-                    claimed.Add(name);
-                    steps.Add(new RenameStep(path, linkTarget));
+                    if (Claim(name, path))
+                    {
+                        steps.Add(new RenameStep(path, linkTarget));
+                    }
                 }
                 else if (move && sameFolder)
                 {
@@ -227,7 +258,10 @@ public static class PastePlanner
             }
 
             var target = WinPath.Combine(destination, name);
-            claimed.Add(name);
+            if (!Claim(name, path))
+            {
+                continue;
+            }
 
             if (move && facts.SameVolume(path, destination) && !facts.Exists(target))
             {

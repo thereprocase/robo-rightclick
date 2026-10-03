@@ -82,6 +82,13 @@ real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
   volumes (a mount point, or two shares of one NAS) and falls back to robocopy. A folder whose
   name starts with `-`, a file inside a folder robocopy copies whole, and a cut within one drive
   that renames are not affected. Explorer pastes these files; use it for them.
+- **Two selected items with the same name: the second is refused.** A search-results view, a
+  library or Recent can select `a\README.md` and `b\README.md` together. Explorer copies the
+  first and then asks about the second. Robo-Paste reads the destination once, before
+  anything runs, so it cannot see the first file there in time: under Replace the second
+  would overwrite it unasked, and a cut would then delete the second's source as well, or
+  under Ask it would be skipped without a word. The job lists the second item under Refused
+  with the reason; paste it separately. One item selected twice is pasted once.
 - **No Robo-Paste on a selection of several folders.** Explorer offers Paste there and pastes
   into the folder that was right-clicked. The shell does not tell a DelegateExecute verb which
   item was clicked, so the item is hidden (`MultiSelectModel=Single`) rather than guessing.

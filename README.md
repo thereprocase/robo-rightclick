@@ -269,6 +269,8 @@ Windows and which are design decisions not yet measured. In plain words:
   Explorer does.
 - Robo-Paste is not offered when several folders are selected; Explorer pastes into the one
   you right-clicked.
+- When two selected items have the same name (from a search, for example), the second is
+  refused and listed in the summary; Explorer would ask about it once the first is there.
 - The Robo items have icons; Explorer's classic Cut, Copy and Paste have none.
 - A paste whose files overlap those of a paste still running waits for it to finish; Explorer
   runs both at once. Pastes into unrelated folders run in parallel.
