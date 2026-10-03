@@ -391,8 +391,10 @@ Step execution:
   the processes that hold it open (`FileProcessIdsUsingFileInformation`). Each file is
   `OpenByRobocopy`, `NotOpenByRobocopy`, `Absent` or `Unknown`. Then
   `CancelCleanup.Select(ledger.KilledRunFiles, ledger.CompletedSources, presence set,
-  observations, move, destinationExists, sourceStillExists, claimedByOtherJob)`, skipped entirely
-  when the ledger found robocopy's paths unreliable. Each `Delete` entry goes through
+  observations, move, destinationExists, sourceStillExists, claimedByOtherJob, deleteAllowed)`.
+  When the ledger found robocopy's paths unreliable, `deleteAllowed` is false: nothing is
+  deleted, and every file that would have been is reported in `LeftInPlace` instead. Each
+  `Delete` entry goes through
   `ProcessNative.DeleteFileIfSameFile`: one handle opened with `FILE_FLAG_OPEN_REPARSE_POINT` (no
   backup semantics, so a folder does not open), identity and attributes checked on that handle,
   deleted with `FileDispositionInfo` on the same handle; no check-then-delete window, and a file
@@ -407,13 +409,20 @@ Step execution:
     skips;
   - reported-complete files stay; files present before their step are never deleted and are
     reported as possibly incomplete only under an overwriting policy (`RobocopyArgs.MayOverwriteExisting`:
-    Replace, KeepNewer); files another job of this session planned or wrote are never deleted;
-    for a cut, a destination whose source is gone stays;
+    Replace, KeepNewer); a file another job that has not ended plans (`ClaimSet`; an ended job
+    claims nothing, since its files were in place before this job's presence check) is never
+    deleted but is reported as left in place; for a cut, a destination whose source is gone
+    stays;
   - without evidence (robocopy could not be suspended, or the file system cannot answer) nothing
-    is deleted; an existing new file is reported as possibly incomplete instead.
+    is deleted; an existing new file is reported as possibly incomplete instead. A delete that
+    fails leaves the file reported the same way.
   `LeftInPlace` becomes `JobSnapshot.DamagedOnCancel` (attention, toast, "Finish copying them" /
-  "Finish moving them", which repeats them with Replace). Each cleanup writes one path-free
-  debug line (`RoboRightClick cancel cleanup: candidates=… open=… notOpen=… deleted=…`).
+  "Finish moving them"). The ledger's `MayBeIncomplete` files that cleanup neither deleted nor
+  reported (robocopy's ERROR lines and dead runs before the cancel) become
+  `JobSnapshot.MayBeIncomplete`; a cancel with any of those, or with errors, needs attention,
+  shows the summary and toasts (`JobSnapshot.OutcomeNeedsUser`), and keeps its ledger so
+  "Try again" repeats them. Each cleanup writes one path-free debug line
+  (`RoboRightClick cancel cleanup: candidates=… open=… notOpen=… deleteAllowed=… deleted=…`).
   Remaining edges: a late arrival under a Replace step is overwritten by robocopy itself, so a
   cancel deletes the partial overwrite (the loss is the overwrite's, which a normal run makes
   too); robocopy decides skip or copy when it lists a folder, so a file that appears after that

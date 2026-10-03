@@ -272,10 +272,11 @@ public class CancelClaimTests
     private static readonly FileFacts Facts = new(10, DateTimeOffset.UnixEpoch);
 
     [Fact]
-    public void A_file_another_job_wrote_is_never_deleted_by_this_jobs_cancel()
+    public void A_file_another_active_job_claims_is_never_deleted_but_is_reported()
     {
-        // Jobs A and B both planned D:\dst\f.bin; B (a cut) finished it and its source is
-        // gone. Canceling A must not delete the only copy.
+        // Another paste that has not ended plans D:\dst\f.bin. Canceling this one must not
+        // delete it (it may be the only copy of a moved source), and must still say it may be
+        // incomplete: skipping it silently would leave a full-length partial nobody mentions.
         var held = new FileIdentity(1, 0, 42, 7);
         var plan = CancelCleanup.Select(
             [
@@ -295,6 +296,56 @@ public class CancelClaimTests
             claimedByOtherJob: p => p.EndsWith("f.bin", StringComparison.Ordinal));
 
         Assert.Equal([new CleanupTarget(@"D:\dst\g.bin", held)], plan.Delete);
+        Assert.Equal([@"D:\dst\f.bin"], plan.LeftInPlace);
+    }
+
+    [Theory]
+    [InlineData(KillEvidence.OpenByRobocopy)]
+    [InlineData(KillEvidence.Unknown)]
+    public void A_claimed_file_is_left_in_place_whatever_was_seen_at_the_kill(KillEvidence evidence)
+    {
+        // A cancel of a "Try again" child: its parent planned the very same paths. Whatever the
+        // claim says, the file this cancel may have left half written is reported.
+        var plan = CancelCleanup.Select(
+            [new KilledRunFile(new PlannedFile(@"C:\a\big.iso", @"D:\big.iso", Facts), ConflictPolicy.Ask)],
+            completedSources: [],
+            presentBeforeStep: [],
+            atKill: _ => new KillObservation(evidence, new FileIdentity(1, 0, 42, 7)),
+            move: false,
+            destinationExists: _ => true,
+            sourceStillExists: _ => true,
+            claimedByOtherJob: _ => true);
+
+        Assert.Empty(plan.Delete);
+        Assert.Equal([@"D:\big.iso"], plan.LeftInPlace);
+    }
+
+    [Fact]
+    public void With_deleting_off_a_proven_partial_is_reported_instead_of_deleted()
+    {
+        // The ledger lost track of robocopy's paths (a file created in the source tree after
+        // the scan): the cancel deletes nothing, but still names the file robocopy was writing.
+        var held = new FileIdentity(1, 0, 42, 7);
+        var plan = CancelCleanup.Select(
+            [
+                new KilledRunFile(new PlannedFile(@"C:\a\big.iso", @"D:\dst\big.iso", Facts), ConflictPolicy.Ask),
+                new KilledRunFile(new PlannedFile(@"C:\a\never.iso", @"D:\dst\never.iso", Facts), ConflictPolicy.Ask),
+            ],
+            completedSources: [],
+            presentBeforeStep: [],
+            atKill: new KillObservations
+            {
+                [@"D:\dst\big.iso"] = new KillObservation(KillEvidence.OpenByRobocopy, held),
+                [@"D:\dst\never.iso"] = new KillObservation(KillEvidence.Absent, default),
+            }.Of,
+            move: false,
+            destinationExists: _ => true,
+            sourceStillExists: _ => true,
+            claimedByOtherJob: _ => false,
+            deleteAllowed: false);
+
+        Assert.Empty(plan.Delete);
+        Assert.Equal([@"D:\dst\big.iso"], plan.LeftInPlace);
     }
 
     [Fact]

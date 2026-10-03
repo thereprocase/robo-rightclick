@@ -20,8 +20,8 @@ internal enum ErrorSummaryChoice
 /// (<see cref="JobSnapshot.FailureReason"/>); retryable errors (path, Windows message,
 /// code; the first <see cref="JobRecords.MaxRecordedErrors"/>, then "and N more, see the
 /// log"); refused items with their reason (not retryable); files damaged by a cancel; files
-/// skipped because their name appeared during the copy; a Failed job's files that may be
-/// incomplete. Buttons: "Try again (N)" where N counts only retryable items (absent when N is
+/// skipped because their name appeared during the copy; a Failed or Canceled job's files that
+/// may be incomplete (<see cref="JobStateText.MayBeIncompleteText"/>). Buttons: "Try again (N)" where N counts only retryable items (absent when N is
 /// 0, except for a Failed job, and absent once "Try again" was used, see
 /// <see cref="JobSnapshot.RetriedBy"/>) and "Skip". Shown from the Jobs window, the progress window or
 /// a toast click, never by the job itself, so a failed job never blocks anything.
@@ -154,9 +154,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
 
         if (job.MayBeIncomplete > 0)
         {
-            var files = job.MayBeIncomplete == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.MayBeIncomplete:N0} files were");
             var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.MayBeIncomplete:N0})");
-            var text = $"{files} being written when the paste stopped. They can look complete but hold only part of the data. Try again, or check them before you use them.";
+            var text = JobStateText.MayBeIncompleteText(job);
             var partial = jobs?.MayBeIncompleteOf(job.Id) ?? [];
             if (partial.Count > 0)
             {

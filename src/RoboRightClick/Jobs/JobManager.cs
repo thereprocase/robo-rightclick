@@ -241,7 +241,7 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     /// <summary>Destination files a cancel left partly replaced (<see cref="JobSnapshot.DamagedOnCancel"/> is the exact count).</summary>
     public IReadOnlyList<string> DamagedOf(Guid jobId) => Find(jobId)?.DamagedPaths ?? [];
 
-    /// <summary>A Failed job's destinations that may hold partial data (<see cref="JobSnapshot.MayBeIncomplete"/> is the exact count).</summary>
+    /// <summary>A Failed or Canceled job's destinations that may hold partial data (<see cref="JobSnapshot.MayBeIncomplete"/> is the exact count).</summary>
     public IReadOnlyList<string> MayBeIncompleteOf(Guid jobId) => Find(jobId)?.MayBeIncompletePaths ?? [];
 
     /// <summary>Destinations skipped because their name appeared mid-copy (<see cref="JobSnapshot.SkippedAppeared"/> is the exact count).</summary>
@@ -264,7 +264,11 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         return folders;
     }
 
-    /// <summary>Any other job of this session, running or in history, whose plan claims the normalized destination path.</summary>
+    /// <summary>
+    /// Any other job of this session that has not ended whose plan claims the destination path.
+    /// An ended job answers no (<see cref="Job.Claims"/>): its files were already at the
+    /// destination when a later job's step started, so that job's presence check keeps them.
+    /// </summary>
     public bool ClaimedByOtherJob(Guid askingJob, string destinationPath)
     {
         foreach (var job in Volatile.Read(ref _jobs))

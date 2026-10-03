@@ -74,11 +74,15 @@ public static class JobStateText
             case JobState.Failed:
                 return job.FailureReason is { Length: > 0 } reason ? "Failed: " + reason : "Failed";
             case JobState.Canceled:
-                return job.DamagedOnCancel switch
+                // Damaged (the cancel interrupted them) and may-be-incomplete (robocopy failed
+                // on them first) never name the same file.
+                return (job.DamagedOnCancel + job.MayBeIncomplete, job.ErrorCount) switch
                 {
-                    0 => "Canceled",
-                    1 => "Canceled; 1 file may be incomplete",
-                    var n => string.Create(CultureInfo.InvariantCulture, $"Canceled; {n:N0} files may be incomplete"),
+                    (1, _) => "Canceled; 1 file may be incomplete",
+                    (> 1 and var n, _) => string.Create(CultureInfo.InvariantCulture, $"Canceled; {n:N0} files may be incomplete"),
+                    (_, 1) => "Canceled; 1 item had a problem",
+                    (_, > 1 and var errors) => string.Create(CultureInfo.InvariantCulture, $"Canceled; {errors:N0} items had problems"),
+                    _ => "Canceled",
                 };
             default:
                 return job.State.ToString();
@@ -142,7 +146,7 @@ public static class JobStateText
             JobState.Running or JobState.Finalizing => StateTone.Live,
             JobState.Done => StateTone.Positive,
             JobState.DoneWithErrors or JobState.Failed => StateTone.Danger,
-            JobState.Canceled when job.DamagedOnCancel > 0 => StateTone.Attention,
+            JobState.Canceled when job.OutcomeNeedsUser => StateTone.Attention,
             _ => StateTone.Neutral,
         };
     }
@@ -163,6 +167,7 @@ public static class JobStateText
         {
             JobState.Failed => "Try again",
             JobState.Canceled when job.DamagedOnCancel > 0 => FinishLabel(job),
+            JobState.Canceled when job.MayBeIncomplete > 0 || job.ErrorCount > 0 => "Try again",
             JobState.DoneWithErrors when job.ErrorCount > 0 => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.ErrorCount:N0})"),
             _ => null,
         };
@@ -185,6 +190,7 @@ public static class JobStateText
         {
             JobState.Failed when job.MayBeIncomplete > 0 => $"The paste into {into} stopped. Files at the destination may be incomplete.",
             JobState.Failed => $"Nothing was {done} to {into}.",
+            JobState.Canceled when job.DamagedOnCancel + job.MayBeIncomplete > 0 => $"The paste into {into} was canceled. Files at the destination may be incomplete.",
             JobState.Canceled => $"The paste into {into} was canceled.",
             JobState.Done => job.SkippedAppeared == 1
                 ? $"Everything was {done} to {into} except 1 file whose name appeared there during the paste."
@@ -196,6 +202,19 @@ public static class JobStateText
             },
         };
         return job.RetriedBy is null ? heading : heading + " Tried again: see the newer job in the Jobs window.";
+    }
+
+    /// <summary>
+    /// The explanation above the error summary's "May be incomplete" list
+    /// (<see cref="JobSnapshot.MayBeIncomplete"/>), for the way the job ended.
+    /// </summary>
+    public static string MayBeIncompleteText(JobSnapshot job)
+    {
+        var files = job.MayBeIncomplete == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.MayBeIncomplete:N0} files were");
+        var why = job.State == JobState.Canceled
+            ? $"{files} not finished: robocopy reported an error on them, or stopped while writing them, before you canceled."
+            : $"{files} being written when the paste stopped.";
+        return why + " They can look complete but hold only part of the data. Try again, or check them before you use them.";
     }
 
     /// <summary>The menu name of the verb the user started with: a cut pastes as a move.</summary>

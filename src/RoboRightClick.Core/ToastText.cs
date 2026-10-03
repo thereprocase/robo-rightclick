@@ -81,8 +81,8 @@ public static class ToastText
     /// <summary>
     /// The completion toast, or null for none. notifyOnComplete silences only clean
     /// finishes: errors need the user's "Try again / Skip", so they always notify.
-    /// A cancel was the user's own action and gets no toast, unless it left files the
-    /// user owned partly overwritten. A paste with nothing to do gets none.
+    /// A cancel was the user's own action and gets no toast, unless it left files that may be
+    /// incomplete or came after errors the user has not seen. A paste with nothing to do gets none.
     /// </summary>
     public static Toast? ForFinished(JobSnapshot job, bool notifyOnComplete)
     {
@@ -92,7 +92,9 @@ public static class ToastText
         }
         if (job.State == JobState.Canceled)
         {
-            return job.DamagedOnCancel > 0 ? ForCanceledWithDamage(job) : null;
+            return job.DamagedOnCancel > 0 ? ForCanceledWithDamage(job)
+                : job.OutcomeNeedsUser ? ForCanceledAfterProblems(job)
+                : null;
         }
         if (job.State is not (JobState.Done or JobState.DoneWithErrors or JobState.Failed))
         {
@@ -169,6 +171,24 @@ public static class ToastText
             job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled",
             $"{files} being written when you canceled and may be incomplete. Open Jobs to finish them.",
             ToastKind.Warning);
+    }
+
+    /// <summary>
+    /// A cancel that interrupted no file but came after robocopy had already failed on some:
+    /// those may be full-length partial copies, and the error list is where they are named.
+    /// </summary>
+    private static Toast ForCanceledAfterProblems(JobSnapshot job)
+    {
+        if (job.Logging == LoggingMode.Ephemeral)
+        {
+            return new Toast("Job canceled", EphemeralBody, ToastKind.Warning);
+        }
+        var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
+        var done = job.Verb == TransferVerb.Move ? "moved" : "copied";
+        var body = job.MayBeIncomplete > 0
+            ? $"{(job.MayBeIncomplete == 1 ? "1 file" : $"{job.MayBeIncomplete:N0} files")} at {into} may be incomplete: robocopy stopped on them before you canceled. Open Jobs to see which."
+            : $"{DisplayText.Items(job.ErrorCount)} could not be {done} to {into} before you canceled. Open Jobs for details.";
+        return new Toast(job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled", body, ToastKind.Warning);
     }
 
     /// <summary>Why a click did nothing. Path-free in every mode, and says what to do instead.</summary>

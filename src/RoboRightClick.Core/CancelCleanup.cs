@@ -112,31 +112,19 @@ public sealed class KillObservations
 
 /// <summary>
 /// The destinations one job planned, for <see cref="CancelCleanup"/>'s "claimed by another
-/// job" check. Exact while the job runs; <see cref="Compact"/> keeps only
-/// <see cref="PathHash"/> values once it has ended, about 8 bytes a file instead of the path,
-/// since a finished job stays in history and its files still must not be deleted by a later
-/// cancel. A collision can only make a path look claimed, which keeps the file.
+/// job" check. Only a job that has not ended answers it: a finished job's file was already at
+/// its destination when a later job's step started, so that job's presence check protects it
+/// (<c>presentBeforeStep</c>), and an ended job's claims would only hide a later job's own
+/// partial copy from both the delete and the report. The job clears its set when it ends.
 /// Not thread-safe; the job guards it.
 /// </summary>
 public sealed class ClaimSet
 {
-    private HashSet<string>? _exact = new(WinPath.Comparer);
-    private HashSet<ulong>? _hashes;
+    private readonly HashSet<string> _files = new(WinPath.Comparer);
     private readonly List<string> _roots = [];
 
     /// <summary>A file's destination (normalized here).</summary>
-    public void AddFile(string destinationPath)
-    {
-        var key = WinPath.NormalizeForMatch(destinationPath);
-        if (_exact is { } exact)
-        {
-            exact.Add(key);
-        }
-        else
-        {
-            _hashes!.Add(PathHash.Of(key));
-        }
-    }
+    public void AddFile(string destinationPath) => _files.Add(WinPath.NormalizeForMatch(destinationPath));
 
     /// <summary>An item moved whole by a rename: everything under it is claimed too.</summary>
     public void AddRoot(string destinationPath) => _roots.Add(WinPath.NormalizeForMatch(destinationPath));
@@ -144,27 +132,20 @@ public sealed class ClaimSet
     public bool Contains(string destinationPath)
     {
         var path = WinPath.NormalizeForMatch(destinationPath);
-        var file = _exact is { } exact ? exact.Contains(path) : _hashes!.Contains(PathHash.Of(path));
-        return file || _roots.Any(root => WinPath.AreSame(path, root) || WinPath.IsStrictlyUnder(path, root));
+        return _files.Contains(path) || _roots.Any(root => WinPath.AreSame(path, root) || WinPath.IsStrictlyUnder(path, root));
     }
 
-    /// <summary>Drops the paths and keeps their hashes. Idempotent.</summary>
-    public void Compact()
+    /// <summary>Drops every claim (the job has ended) and the memory that held them.</summary>
+    public void Clear()
     {
-        if (_exact is not { } exact)
-        {
-            return;
-        }
-        _hashes = new HashSet<ulong>(exact.Count);
-        foreach (var path in exact)
-        {
-            _hashes.Add(PathHash.Of(path));
-        }
-        _exact = null;
+        _files.Clear();
+        _files.TrimExcess();
+        _roots.Clear();
+        _roots.TrimExcess();
     }
 
-    /// <summary>True once <see cref="Compact"/> has run.</summary>
-    public bool IsCompact => _exact is null;
+    /// <summary>True when nothing is claimed.</summary>
+    public bool IsEmpty => _files.Count == 0 && _roots.Count == 0;
 }
 
 /// <summary>A planned file of a robocopy run the cancel killed, with that run's conflict policy.</summary>
@@ -177,7 +158,9 @@ public sealed record CleanupTarget(string Path, FileIdentity Identity);
 /// <param name="LeftInPlace">
 /// Files that may hold part of what robocopy was writing: destinations that existed before
 /// their step under a policy that overwrites (robocopy allocates full length first, so they can
-/// look complete), and new files nobody could prove robocopy was writing. Reported, never deleted.
+/// look complete), new files nobody could prove robocopy was writing, and partial copies that
+/// may not be deleted (claimed by another active job, or deleting is off for this cancel).
+/// Reported, never deleted.
 /// </param>
 public sealed record CleanupPlan(IReadOnlyList<CleanupTarget> Delete, IReadOnlyList<string> LeftInPlace);
 
@@ -213,15 +196,23 @@ public static class CancelCleanup
     /// <param name="destinationExists">Live check by the host after robocopy has exited; asked only where the evidence is unknown.</param>
     /// <param name="sourceStillExists">Live check by the host, made after robocopy has exited.</param>
     /// <param name="claimedByOtherJob">
-    /// True when another job of this session plans to write, or wrote, this destination. Its
-    /// file may be the only copy of a moved source, so this job must not touch it.
+    /// True when another job of this session that has not ended plans to write this
+    /// destination (<see cref="ClaimSet"/>). Its file may be the only copy of a moved source, so
+    /// this job never deletes it; it is reported as left in place, so the user still hears
+    /// that it may be incomplete.
+    /// </param>
+    /// <param name="deleteAllowed">
+    /// False when the job's ledger could not match robocopy's paths
+    /// (<see cref="StepLedger.PathsUnreliable"/>): nothing is deleted, and every file that
+    /// would have been is reported as left in place instead, so the cancel still says which
+    /// files may be incomplete.
     /// </param>
     /// <remarks>
     /// The kill evidence is read before <paramref name="claimedByOtherJob"/> and
     /// <paramref name="sourceStillExists"/>: absent and not-open evidence never delete or report
     /// anything whatever those say, and a cancel early in a large paste has hundreds of
     /// thousands of such files, each of which would otherwise cost a stat on the source volume
-    /// and a pass over every job in history.
+    /// and a pass over every active job.
     /// </remarks>
     public static CleanupPlan Select(
         IEnumerable<KilledRunFile> killedRunFiles,
@@ -231,7 +222,8 @@ public static class CancelCleanup
         bool move,
         Func<string, bool> destinationExists,
         Func<string, bool> sourceStillExists,
-        Func<string, bool> claimedByOtherJob)
+        Func<string, bool> claimedByOtherJob,
+        bool deleteAllowed = true)
     {
         var completed = new HashSet<string>(completedSources.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
         var present = new HashSet<string>(presentBeforeStep.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
@@ -266,32 +258,26 @@ public static class CancelCleanup
                 // user's data. Nothing below could change that, so nothing more is asked.
                 continue;
             }
-            if (claimedByOtherJob(file.DestinationPath))
-            {
-                // Another paste wrote or is writing this name; it is not ours to judge.
-                continue;
-            }
             if (move && !sourceStillExists(file.SourcePath))
             {
                 // Robocopy /MOV deletes a source only after its copy finished, and the
                 // kill can land between that delete and the file's output line. The
-                // destination is then the only copy left.
+                // destination is then the only copy left, and it is complete.
                 continue;
             }
 
-            switch (seen.Evidence)
+            var proven = seen.Evidence == KillEvidence.OpenByRobocopy && seen.Identity.IsKnown;
+            if (proven && deleteAllowed && !claimedByOtherJob(file.DestinationPath))
             {
-                case KillEvidence.OpenByRobocopy when seen.Identity.IsKnown:
-                    delete.Add(new CleanupTarget(file.DestinationPath, seen.Identity));
-                    break;
-                default:
-                    // Nothing proves who wrote it. Most likely a partial copy, so the user is
-                    // told it may be incomplete; deleting it could destroy someone else's file.
-                    if (destinationExists(file.DestinationPath))
-                    {
-                        left.Add(file.DestinationPath);
-                    }
-                    break;
+                delete.Add(new CleanupTarget(file.DestinationPath, seen.Identity));
+            }
+            else if (destinationExists(file.DestinationPath))
+            {
+                // Not proven ours, or ours but not to be deleted (another active paste plans
+                // this name, or the ledger lost track of robocopy's paths). Most likely a
+                // partial copy, so the user is told it may be incomplete; deleting it could
+                // destroy someone else's file.
+                left.Add(file.DestinationPath);
             }
         }
         return new CleanupPlan(delete, left);

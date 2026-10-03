@@ -39,16 +39,17 @@ public static class ProgressWindowPolicy
             || (OnTerminal(atDelay) == ProgressWindowAction.ShowSummary && !atDelay.Acknowledged));
 
     /// <summary>
-    /// Done, a no-op and a plain cancel close the window. DoneWithErrors, Failed and a cancel
-    /// that left files possibly incomplete show the summary, because each one needs a
-    /// "Try again" or "Skip" from the user. So does a Done job that left files alone because
-    /// their names appeared at the destination mid-paste: Explorer would have asked about
-    /// them, and the summary is where the user learns which ones. Non-terminal states stay.
+    /// Done, a no-op and a plain cancel close the window. Every outcome that needs the user
+    /// (<see cref="JobSnapshot.OutcomeNeedsUser"/>: DoneWithErrors, Failed, and a cancel that
+    /// left files possibly incomplete or came after errors) shows the summary, because each
+    /// one needs a "Try again" or "Skip" from the user. So does a Done job that left files
+    /// alone because their names appeared at the destination mid-paste: Explorer would have
+    /// asked about them, and the summary is where the user learns which ones. Non-terminal
+    /// states stay.
     /// </summary>
     public static ProgressWindowAction OnTerminal(JobSnapshot job) => job.State switch
     {
-        JobState.DoneWithErrors or JobState.Failed => ProgressWindowAction.ShowSummary,
-        JobState.Canceled when job.DamagedOnCancel > 0 => ProgressWindowAction.ShowSummary,
+        _ when JobStates.IsTerminal(job.State) && job.OutcomeNeedsUser => ProgressWindowAction.ShowSummary,
         JobState.Done when job.SkippedAppeared > 0 => ProgressWindowAction.ShowSummary,
         JobState.Done or JobState.Canceled => ProgressWindowAction.Close,
         _ => ProgressWindowAction.Stay,

@@ -72,8 +72,10 @@ public sealed record JobSnapshot(
     public int SkippedAppeared { get; init; }
 
     /// <summary>
-    /// A Failed job's files whose robocopy run started and then failed or died before finishing
-    /// them. Robocopy allocates each file at full length before writing it, so these can look
+    /// A Failed or Canceled job's files whose robocopy run started and then failed or died
+    /// before finishing them (for a cancel: those robocopy reported failing, and earlier steps'
+    /// failures; the files the cancel itself interrupted are <see cref="DamagedOnCancel"/>).
+    /// Robocopy allocates each file at full length before writing it, so these can look
     /// complete while holding only part of the data.
     /// </summary>
     public int MayBeIncomplete { get; init; }
@@ -84,10 +86,21 @@ public sealed record JobSnapshot(
     /// </summary>
     public Guid? RetriedBy { get; init; }
 
+    /// <summary>
+    /// The finished job left something for the user to deal with: errors, a failure, or (for a
+    /// cancel) files that may be incomplete or failed before the cancel. A cancel is the user's
+    /// own action, but it does not undo what went wrong before it.
+    /// </summary>
+    public bool OutcomeNeedsUser => State switch
+    {
+        JobState.DoneWithErrors or JobState.Failed => true,
+        JobState.Canceled => DamagedOnCancel > 0 || MayBeIncomplete > 0 || ErrorCount > 0,
+        _ => false,
+    };
+
     public bool NeedsAttention =>
         State == JobState.AwaitingDecision
-        || (!Acknowledged && State is JobState.DoneWithErrors or JobState.Failed)
-        || (!Acknowledged && State == JobState.Canceled && DamagedOnCancel > 0);
+        || (!Acknowledged && OutcomeNeedsUser);
 }
 
 public enum TrayIconState

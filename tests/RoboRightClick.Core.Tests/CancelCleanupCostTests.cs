@@ -4,7 +4,7 @@ namespace RoboRightClick.Core.Tests;
 
 /// <summary>
 /// Cancel cleanup's cost and the memory a cancel and a finished job keep: evidence first, so
-/// absent and not-open files cost nothing more; absent paths and finished claims as hashes.
+/// absent and not-open files cost nothing more; absent paths as hashes; claims gone once a job ends.
 /// </summary>
 public class CancelCleanupCostTests
 {
@@ -45,7 +45,7 @@ public class CancelCleanupCostTests
     }
 
     [Fact]
-    public void Open_and_unknown_evidence_still_asks_both()
+    public void Open_and_unknown_evidence_asks_the_source_and_only_a_proven_partial_asks_the_other_jobs()
     {
         var killed = new[] { Killed(1), Killed(2) };
         var atKill = new KillObservations();
@@ -59,7 +59,9 @@ public class CancelCleanupCostTests
             sourceStillExists: _ => { sourceAsked++; return true; },
             claimedByOtherJob: _ => { claimedAsked++; return false; });
 
-        Assert.Equal(2, claimedAsked);
+        // Only a file about to be deleted needs the other jobs' word: an unproven one is
+        // reported either way.
+        Assert.Equal(1, claimedAsked);
         Assert.Equal(2, sourceAsked);
         Assert.Equal([killed[0].File.DestinationPath], plan.Delete.Select(d => d.Path));
         Assert.Equal([killed[1].File.DestinationPath], plan.LeftInPlace);
@@ -86,7 +88,7 @@ public class CancelCleanupCostTests
     }
 
     [Fact]
-    public void A_finished_jobs_claims_shrink_to_hashes_and_still_answer()
+    public void Claims_cover_files_and_whole_renamed_items_and_clear_when_the_job_ends()
     {
         var claims = new ClaimSet();
         for (var i = 0; i < 10_000; i++)
@@ -95,18 +97,15 @@ public class CancelCleanupCostTests
         }
         claims.AddRoot(@"D:\dst\renamed");
 
-        claims.Compact();
-
-        Assert.True(claims.IsCompact);
         Assert.True(claims.Contains(@"d:\DST\f42.bin"));
-        Assert.True(claims.Contains(@"D:\dst\f9999.bin"));
         Assert.True(claims.Contains(@"D:\dst\renamed\inside\x.txt"));
         Assert.False(claims.Contains(@"D:\dst\f10000.bin"));
-        Assert.False(claims.Contains(@"D:\other\f42.bin"));
 
-        // A job still adding after it compacted (it never does) would not lose the claim.
-        claims.AddFile(@"D:\dst\late.bin");
-        Assert.True(claims.Contains(@"D:\dst\late.bin"));
+        claims.Clear();
+
+        Assert.True(claims.IsEmpty);
+        Assert.False(claims.Contains(@"D:\dst\f42.bin"));
+        Assert.False(claims.Contains(@"D:\dst\renamed\inside\x.txt"));
     }
 
     [Fact]

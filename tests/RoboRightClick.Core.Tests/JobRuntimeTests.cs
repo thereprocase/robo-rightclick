@@ -224,9 +224,11 @@ public class DisplayAndTrayTests
         Assert.Equal(@"D:\", DisplayText.SourcesSummary([@"D:\"]));
     }
 
+    /// <summary>A snapshot with two errors, except a Canceled one, which is a plain cancel (no errors) unless a test says otherwise.</summary>
     internal static JobSnapshot Job(JobState state, LoggingMode mode = LoggingMode.Normal, bool acknowledged = false, double? speed = null) => new(
         Guid.NewGuid(), null, TransferVerb.Copy, [@"C:\secret-src\alpha.txt", @"C:\secret-src\beta"], @"D:\secret-dst",
-        state, mode, DateTimeOffset.UnixEpoch, 512, 1024, 3, 4, speed, speed is null ? null : TimeSpan.FromMinutes(4), 2, acknowledged);
+        state, mode, DateTimeOffset.UnixEpoch, 512, 1024, 3, 4, speed, speed is null ? null : TimeSpan.FromMinutes(4),
+        state == JobState.Canceled ? 0 : 2, acknowledged);
 
     [Fact]
     public void Tray_state_priority_is_attention_then_running_then_paused()

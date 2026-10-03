@@ -8,8 +8,9 @@ namespace RoboRightClick.Jobs;
 internal interface IDestinationClaims
 {
     /// <summary>
-    /// True when a job other than <paramref name="askingJob"/> planned or wrote
-    /// <paramref name="destinationPath"/> this session. Cancel cleanup never deletes such a file.
+    /// True when a job other than <paramref name="askingJob"/> that has not ended plans to write
+    /// <paramref name="destinationPath"/>. Cancel cleanup never deletes such a file; it reports
+    /// it as possibly incomplete instead. An ended job claims nothing (<see cref="ClaimSet"/>).
     /// </summary>
     bool ClaimedByOtherJob(Guid askingJob, string destinationPath);
 }
@@ -86,10 +87,14 @@ internal sealed record JobStart(
 /// robocopy, record which unfinished destinations exist and which of them it holds open
 /// (<see cref="ObserveAtKill"/>), kill and wait; then CancelCleanup.Select(ledger.KilledRunFiles,
 /// ledger.CompletedSources, presence set, those observations, move, existence checks,
-/// Claims.ClaimedByOtherJob), skipped entirely when ledger.PathsUnreliable. Each delete goes
-/// through <see cref="ProcessNative.DeleteFileIfSameFile"/>, which checks identity and
-/// attributes and deletes on one handle opened without following links; LeftInPlace becomes
-/// <see cref="JobSnapshot.DamagedOnCancel"/> and <see cref="DamagedPaths"/>.</para>
+/// Claims.ClaimedByOtherJob, deleteAllowed), with deleting off when ledger.PathsUnreliable
+/// (the files are still reported). Each delete goes through
+/// <see cref="ProcessNative.DeleteFileIfSameFile"/>, which checks identity and attributes and
+/// deletes on one handle opened without following links; a delete that fails leaves the file
+/// reported. LeftInPlace becomes <see cref="JobSnapshot.DamagedOnCancel"/> and
+/// <see cref="DamagedPaths"/>. The ledger's <see cref="StepLedger.MayBeIncomplete"/> files that
+/// cleanup neither deleted nor reported (robocopy's failures before the cancel) become
+/// <see cref="JobSnapshot.MayBeIncomplete"/>, so a cancel never hides them.</para>
 /// <para>Finalizing: create LinkFolders empty, clear the clipboard for a cut that ended
 /// Done with at least one item moved, ShellNotify, emit the JobSummary (errors capped at
 /// <see cref="JobRecords.MaxRecordedErrors"/>), then JobOutcome.FinalState. A Failed job's
@@ -171,8 +176,7 @@ internal sealed class Job
     // then dropped.
     private KillObservations _atKill = new();
 
-    // Claims: destinations this job planned. Kept for the job's life in history, compacted to
-    // hashes once it ends (ClaimSet), so a finished million-file job does not keep every path.
+    // Claims: destinations this job plans, answered only until it ends and then dropped.
     private readonly ClaimSet _claims = new();
 
     // The run whose callbacks are current; 0 = none. Callbacks of any other run are ignored.
@@ -258,10 +262,11 @@ internal sealed class Job
     /// <summary>
     /// Files "Try again" would repeat, and failed in-process steps. DoneWithErrors, and Failed
     /// by its outcome: the ledger's retry candidates of robocopy steps plus the in-process steps
-    /// that failed. Canceled with damage: the files the cancel left possibly incomplete ("Finish
-    /// copying them"). Each robocopy file says whether the retry may overwrite its destination
-    /// (<see cref="RetryCandidate.MayOverwrite"/>); the rest are asked about in the child's scan.
-    /// Null when there is nothing to repeat.
+    /// that failed. Canceled: the files the cancel left possibly incomplete ("Finish copying
+    /// them") together with what had already failed before the cancel (the ledger never lists
+    /// the files the cancel interrupted as failures). Each robocopy file says whether the retry
+    /// may overwrite its destination (<see cref="RetryCandidate.MayOverwrite"/>); the rest are
+    /// asked about in the child's scan. Null when there is nothing to repeat.
     /// </summary>
     /// <remarks>
     /// Only robocopy steps' files are taken from <see cref="StepLedger.Retryable"/> (the
@@ -284,18 +289,10 @@ internal sealed class Job
             ExecutionPlan? result = null;
             foreach (var part in _parts)
             {
-                IReadOnlyList<RetryCandidate> files;
-                IReadOnlyList<int> failedInProcess;
-                if (state == JobState.Canceled)
-                {
-                    files = part.Damaged;
-                    failedInProcess = [];
-                }
-                else
-                {
-                    files = part.RetryCandidates ?? [];
-                    failedInProcess = part.Ledger.FailedInProcessSteps;
-                }
+                var files = state == JobState.Canceled
+                    ? MergeCandidates(part.Damaged, part.RetryCandidates ?? [])
+                    : part.RetryCandidates ?? [];
+                var failedInProcess = part.Ledger.FailedInProcessSteps;
                 if (files.Count == 0 && failedInProcess.Count == 0)
                 {
                     continue;
@@ -395,13 +392,17 @@ internal sealed class Job
         }
     }
 
-    /// <summary>Destinations this job planned, for <see cref="IDestinationClaims"/>.</summary>
+    /// <summary>
+    /// Destinations this job plans while it has not ended, for <see cref="IDestinationClaims"/>.
+    /// An ended job claims nothing: its files were in place before any later job's step
+    /// started, and that job's presence check already keeps them.
+    /// </summary>
     public bool Claims(string destinationPath)
     {
         lock (_lock)
         {
             // A rename moves a whole item; everything under its destination is this job's.
-            return _claims.Contains(destinationPath);
+            return !JobStates.IsTerminal(_lifecycle.State) && _claims.Contains(destinationPath);
         }
     }
 
@@ -1096,7 +1097,7 @@ internal sealed class Job
             RecordSkippedAppearedLocked();
             if (final == JobState.Failed)
             {
-                RecordMayBeIncompleteLocked();
+                RecordMayBeIncompleteLocked(exclude: null);
             }
             MoveLocked(final, SummaryLocked(final));
             ReleaseLocked();
@@ -1107,7 +1108,8 @@ internal sealed class Job
     /// <summary>
     /// After a cancel: whatever ran has stopped (RobocopyRun returns only after the kill and
     /// the end of output; CopyFileEx removed its own partial file). Removes the partial files
-    /// the job created, never anything else.
+    /// the job created, never anything else, and reports every file that may be incomplete:
+    /// the ones the cancel left, and the ones robocopy had already failed on.
     /// </summary>
     private async Task FinishCanceledAsync()
     {
@@ -1133,11 +1135,12 @@ internal sealed class Job
         DeliverNotices();
 
         Cleanup? cleanup = null;
-        if (parts.Length > 0 && !unreliable && killed.Count > 0)
+        if (parts.Length > 0 && killed.Count > 0)
         {
-            // Skipped entirely when the ledger could not match robocopy's paths: it can no
-            // longer tell finished files from partial ones, and keeping data wins.
-            cleanup = await RunBlockingAsync(() => CleanUpPartialFiles(parts, killed, completed, presence, atKill)).ConfigureAwait(false);
+            // When the ledger could not match robocopy's paths it can no longer tell finished
+            // files from partial ones: nothing is deleted (keeping data wins), but the files a
+            // delete would have taken are still reported as possibly incomplete.
+            cleanup = await RunBlockingAsync(() => CleanUpPartialFiles(parts, killed, completed, presence, atKill, deleteAllowed: !unreliable)).ConfigureAwait(false);
         }
         else
         {
@@ -1148,6 +1151,7 @@ internal sealed class Job
 
         lock (_lock)
         {
+            var handled = new HashSet<string>(WinPath.Comparer);
             if (cleanup is { } c)
             {
                 _damagedOnCancel = c.LeftInPlace.Count;
@@ -1156,7 +1160,13 @@ internal sealed class Job
                 {
                     parts[i].Damaged.AddRange(c.DamagedByPart[i]);
                 }
+                handled.UnionWith(c.LeftInPlace.Select(WinPath.NormalizeForMatch));
+                handled.UnionWith(c.Deleted.Select(WinPath.NormalizeForMatch));
             }
+            // Robocopy's failures before the cancel (an ERROR it printed, a run that died) may
+            // be full-length partial copies just like the interrupted ones; the cancel must not
+            // make them disappear from the report.
+            RecordMayBeIncompleteLocked(exclude: handled);
             RecordSkippedAppearedLocked();
             MoveLocked(JobState.Canceled, SummaryLocked(JobState.Canceled));
             ReleaseLocked();
@@ -1169,7 +1179,8 @@ internal sealed class Job
         List<KilledRunFile> killed,
         List<string> completed,
         HashSet<string> presence,
-        KillObservations atKill)
+        KillObservations atKill,
+        bool deleteAllowed)
     {
         var move = Start.Order.Verb == TransferVerb.Move;
         var plan = CancelCleanup.Select(
@@ -1180,7 +1191,8 @@ internal sealed class Job
             move,
             destinationExists: Services.FileSystem.Exists,
             sourceStillExists: File.Exists,
-            claimedByOtherJob: path => Services.Claims.ClaimedByOtherJob(Id, path));
+            claimedByOtherJob: path => Services.Claims.ClaimedByOtherJob(Id, path),
+            deleteAllowed);
 
         // Invariant 1, belt and braces: whatever the selection says, a path this job reads as
         // a source is never deleted by cleanup.
@@ -1196,26 +1208,32 @@ internal sealed class Job
             }
         }
 
-        var deleted = 0;
+        var deleted = new List<string>();
+        var left = new List<string>(plan.LeftInPlace);
         foreach (var target in plan.Delete)
         {
             if (sources.Contains(WinPath.NormalizeForMatch(target.Path)))
             {
                 continue;
             }
-            // A file in use, already gone, denied or no longer the one robocopy held open is
-            // left: when in doubt, keep data.
+            // A file in use, denied or no longer the one robocopy held open is left: when in
+            // doubt, keep data. Whatever is still there is reported, so a partial copy the
+            // delete could not take is not passed over in silence.
             if (ProcessNative.DeleteFileIfSameFile(target.Path, target.Identity))
             {
-                deleted++;
+                deleted.Add(target.Path);
+            }
+            else if (Services.FileSystem.Exists(target.Path))
+            {
+                left.Add(target.Path);
             }
         }
-        TraceCleanup(killed.Count, atKill, plan, deleted);
+        TraceCleanup(killed.Count, atKill, plan, deleted.Count, deleteAllowed);
 
         // The files left in place may be incomplete: "Finish copying them" repeats them.
         // For a cut whose source is already gone the move had finished, so there is nothing
         // to repeat (and a retry would only fail on the missing source).
-        var leftInPlace = new HashSet<string>(plan.LeftInPlace.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
+        var leftInPlace = new HashSet<string>(left.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
         var damagedByPart = new List<RetryCandidate>[parts.Length];
         for (var p = 0; p < parts.Length; p++)
         {
@@ -1244,7 +1262,7 @@ internal sealed class Job
                 }
             }
         }
-        return new Cleanup(plan.LeftInPlace, damagedByPart);
+        return new Cleanup(left, deleted, damagedByPart);
     }
 
     /// <summary>
@@ -1254,12 +1272,12 @@ internal sealed class Job
     /// allowed in ephemeral mode. It is how a test tells "nothing was proven" from "the
     /// delete failed".
     /// </summary>
-    private static void TraceCleanup(int candidates, KillObservations atKill, CleanupPlan plan, int deleted)
+    private static void TraceCleanup(int candidates, KillObservations atKill, CleanupPlan plan, int deleted, bool deleteAllowed)
     {
         int Count(KillEvidence evidence) => atKill.Count(evidence);
         System.Diagnostics.Trace.WriteLine(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"RoboRightClick cancel cleanup: candidates={candidates} observed={atKill.Total} open={Count(KillEvidence.OpenByRobocopy)} notOpen={Count(KillEvidence.NotOpenByRobocopy)} absent={Count(KillEvidence.Absent)} unknown={Count(KillEvidence.Unknown)} toDelete={plan.Delete.Count} deleted={deleted} leftInPlace={plan.LeftInPlace.Count}"));
+            $"RoboRightClick cancel cleanup: candidates={candidates} observed={atKill.Total} open={Count(KillEvidence.OpenByRobocopy)} notOpen={Count(KillEvidence.NotOpenByRobocopy)} absent={Count(KillEvidence.Absent)} unknown={Count(KillEvidence.Unknown)} deleteAllowed={deleteAllowed} toDelete={plan.Delete.Count} deleted={deleted} leftInPlace={plan.LeftInPlace.Count}"));
     }
 
     /// <summary>Explorer leaves an empty folder for each directory link robocopy skipped (docs/parity.md).</summary>
@@ -1583,15 +1601,20 @@ internal sealed class Job
     }
 
     /// <summary>
-    /// A Failed job's files whose robocopy run started and then failed or died: robocopy
-    /// allocates full length first, so these may look complete. Read once at the end.
+    /// A Failed or Canceled job's files whose robocopy run started and then failed or died:
+    /// robocopy allocates full length first, so these may look complete. Read once at the end.
     /// </summary>
-    private void RecordMayBeIncompleteLocked()
+    /// <param name="exclude">Normalized destinations a cancel's cleanup already deleted or reported.</param>
+    private void RecordMayBeIncompleteLocked(HashSet<string>? exclude)
     {
         foreach (var part in _parts)
         {
             foreach (var file in part.Ledger.MayBeIncomplete)
             {
+                if (exclude is not null && exclude.Contains(WinPath.NormalizeForMatch(file.DestinationPath)))
+                {
+                    continue;
+                }
                 _mayBeIncomplete++;
                 if (_mayBeIncompletePaths.Count < JobRecords.MaxRecordedErrors)
                 {
@@ -1682,24 +1705,24 @@ internal sealed class Job
     /// <summary>
     /// Finished jobs stay in memory for the Jobs window; their plan and ledger can hold
     /// hundreds of bytes per file, so they are kept only while "Try again" can use them.
-    /// Claims stay, as hashes (<see cref="ClaimSet.Compact"/>): they are the session-wide record
-    /// cancel cleanup consults. The kill observations go.
+    /// Claims go: an ended job claims nothing (<see cref="Claims"/>). So do the kill observations.
     /// </summary>
     private void ReleaseLocked()
     {
         var state = _lifecycle.State;
         // A Failed job keeps its ledger when its outcome (not an exception) failed it: its
         // files may be partial, so "Try again" repeats them file by file like DoneWithErrors.
+        // A Canceled one keeps it for the files the cancel left and those that failed before it.
+        var ledgerRetryable = _parts.Any(p => p.Ledger.Retryable.Count > 0 || p.Ledger.FailedInProcessSteps.Count > 0);
         var retryable = state == JobState.DoneWithErrors
-            || (state == JobState.Canceled && _damagedOnCancel > 0)
-            || (state == JobState.Failed && !_failedUnexpectedly
-                && _parts.Any(p => p.Ledger.Retryable.Count > 0 || p.Ledger.FailedInProcessSteps.Count > 0));
+            || (state == JobState.Canceled && (_damagedOnCancel > 0 || ledgerRetryable))
+            || (state == JobState.Failed && !_failedUnexpectedly && ledgerRetryable);
         if (!retryable)
         {
             _parts.Clear();
             _plan = null;
         }
-        else if (state != JobState.Canceled)
+        else
         {
             // Whether each file may be overwritten depends on what was there before its step;
             // fixed now, so the presence set itself can go.
@@ -1713,7 +1736,7 @@ internal sealed class Job
         }
         _presence = null;
         _atKill.Clear();
-        _claims.Compact();
+        _claims.Clear();
     }
 
     private void Touch() => Interlocked.Increment(ref _version);
@@ -1883,6 +1906,32 @@ internal sealed class Job
             .Where(r => r.StepIndex >= 0 && r.StepIndex < part.Plan.Steps.Count && part.Plan.Steps[r.StepIndex].Step is RobocopyStep)
             .ToList();
 
+    /// <summary>
+    /// A canceled job's retry files: those the cancel left and those that failed before it,
+    /// once each. A file in both may be overwritten when either record says so: each is
+    /// evidence on its own that this paste was writing it.
+    /// </summary>
+    private static List<RetryCandidate> MergeCandidates(IReadOnlyList<RetryCandidate> damaged, IReadOnlyList<RetryCandidate> failed)
+    {
+        var merged = new List<RetryCandidate>(damaged.Count + failed.Count);
+        var byDestination = new Dictionary<string, int>(WinPath.Comparer);
+        foreach (var candidate in damaged.Concat(failed))
+        {
+            var key = WinPath.NormalizeForMatch(candidate.File.DestinationPath);
+            if (byDestination.TryGetValue(key, out var index))
+            {
+                if (candidate.MayOverwrite && !merged[index].MayOverwrite)
+                {
+                    merged[index] = merged[index] with { MayOverwrite = true };
+                }
+                continue;
+            }
+            byDestination[key] = merged.Count;
+            merged.Add(candidate);
+        }
+        return merged;
+    }
+
     private static ExecutionPlan? Merge(ExecutionPlan? first, ExecutionPlan? second)
     {
         if (first is null || second is null)
@@ -1941,7 +1990,9 @@ internal sealed class Job
     /// <summary>One sink/event delivery: the job's creation, or a state change with the summary of a terminal one.</summary>
     private sealed record Notice(JobDescription? Created, StateChange? Change, JobSummary? Summary);
 
-    private sealed record Cleanup(IReadOnlyList<string> LeftInPlace, List<RetryCandidate>[] DamagedByPart);
+    /// <param name="LeftInPlace">Files reported as possibly incomplete (including any a delete could not take).</param>
+    /// <param name="Deleted">Partial copies the cleanup deleted.</param>
+    private sealed record Cleanup(IReadOnlyList<string> LeftInPlace, IReadOnlyList<string> Deleted, List<RetryCandidate>[] DamagedByPart);
 
     /// <summary>One executed plan with its ledger. Guarded by the job's lock, except <see cref="Plan"/>, which is immutable.</summary>
     private sealed class LedgerPart(ExecutionPlan plan, bool robocopyRetries)
