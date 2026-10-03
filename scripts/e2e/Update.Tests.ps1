@@ -83,6 +83,8 @@ function Assert-NoLeftovers([string]$What) {
     }
 }
 
+# PowerShell hands an empty array from a function back as $null, so callers wrap the call in
+# @() before reading .Count (strict mode throws on $null.Count).
 function Get-TrayIds { @(Get-RoboProcesses | Where-Object { $_.Path -eq $script:E2E.InstalledExe } | ForEach-Object { $_.Id }) }
 
 # config.json as a build from before the per-drive thread choice wrote it: no format 2, and the
@@ -124,7 +126,7 @@ Assert-InstalledBuild $olderHash $olderVersion 'A, before'
 Assert-That ($null -ne (Get-RoboConfigText)) 'config.json exists after the first install'
 Set-FormatOneConfig
 $configBefore = Get-RoboConfigText
-$trayBefore = Get-TrayIds
+$trayBefore = @(Get-TrayIds)
 
 $code = Invoke-RoboCommand -ExePath $newer -Arguments @('--install', '--quiet')
 Assert-That ($code -eq 0) "newer --install exits 0 (got $code)"
@@ -132,7 +134,7 @@ Assert-InstalledBuild $newerHash $newerVersion 'A'
 Assert-That ((Get-RoboConfigText) -ceq $configBefore) 'A: config.json is unchanged'
 Assert-NoLeftovers 'A'
 Wait-TrayRunning
-$trayAfter = Get-TrayIds
+$trayAfter = @(Get-TrayIds)
 Assert-That (@($trayAfter | Where-Object { $trayBefore -contains $_ }).Count -eq 0) 'A: the old tray exited and a new one runs'
 $threadsLine = @((Get-PasteRobocopyLog 'A') -split "`r?`n" | Where-Object { $_ -like '# threads*' })
 Assert-That ($threadsLine.Count -ge 1 -and $threadsLine[0] -match '^# threads /MT:\d+ \(auto') "A: the format-1 'threads': 32 reads as auto after the update ($($threadsLine -join ' | '))"
@@ -191,7 +193,7 @@ icacls $script:E2E.InstallDir /deny "${sid}:(OI)(IO)(X)" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'G: icacls could not add the deny-execute entry.' }
 try {
     $code = Invoke-RoboCommand -ExePath $newer -Arguments @('--install', '--quiet')
-    $traysG = Get-TrayIds
+    $traysG = @(Get-TrayIds)
 }
 finally {
     icacls $script:E2E.InstallDir /remove:d $sid | Out-Null

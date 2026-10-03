@@ -77,11 +77,15 @@ function Test-SearchedOnly([string]$Path) {
 
 # Windows' own background writers, judged unrelated to the app in the 2026-10-02 testlog entries:
 # the web cache database, the per-user class registration hive logs, the WebView cache, and
-# another app's settings. A change here is not a trace, but the content is still searched for the
-# marker and the test path (and said so when it cannot be read).
+# another app's settings. Added 2026-10-03, once job 6 opened File Explorer windows: Explorer's
+# icon cache (iconcache_*.db, written when a window shows icons) and OneDrive's sync engine
+# logs; both were searched and held neither the marker nor the test path. A change here is not
+# a trace, but the content is still searched for the marker and the test path (and said so
+# when it cannot be read).
 $judgedNoise = @(
     '\Microsoft\Windows\WebCache\', '\Microsoft\Windows\UsrClass.dat', '\EBWebView\',
-    '\Packages\Microsoft.MicrosoftOfficeHub_'
+    '\Packages\Microsoft.MicrosoftOfficeHub_', '\Microsoft\Windows\Explorer\iconcache_',
+    '\Microsoft\OneDrive\logs\'
 )
 function Test-JudgedNoise([string]$Path) {
     foreach ($n in $judgedNoise) { if ($Path.IndexOf($n, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true } }

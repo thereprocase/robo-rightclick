@@ -113,9 +113,13 @@ try {
     $hwnd = Open-ExplorerLocation $destE1
     [System.Windows.Forms.SendKeys]::SendWait('^t')
     Start-Sleep -Milliseconds 1500
-    [System.Windows.Forms.SendKeys]::SendWait('^l')
-    Start-Sleep -Milliseconds 700
-    [System.Windows.Forms.SendKeys]::SendWait((ConvertTo-SendKeysText $destE2) + '{ENTER}')
+    # The new tab is navigated through its ShellWindows entry, not by typing into its address
+    # bar: on build 26200 a path typed after Ctrl+L into a new tab's Home page did not navigate
+    # (docs/testlog.md 2026-10-03), and the test is about the paste, not the address bar.
+    $newTab = @(Get-ExplorerWindows | Where-Object {
+            [IntPtr][long]$_.HWND -eq $hwnd -and (Get-ExplorerWindowPath $_) -ine $destE1 })
+    if ($newTab.Count -ne 1) { throw "E: expected one new tab in the window after Ctrl+T, found $($newTab.Count)" }
+    $newTab[0].Navigate2($destE2)
     [void](Wait-ExplorerShows $destE2)
     Set-ExplorerFileListFocus $hwnd
     Send-PasteHotkey

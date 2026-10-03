@@ -641,11 +641,14 @@ function Get-ExplorerWindows {
     return @($shell.Windows())
 }
 
-# Closes every File Explorer window, so the next one opened is the only one.
+# Closes every File Explorer window, so the next one opened is the only one. Quit on a tab's
+# entry can leave another tab of the window open, so it is repeated until none is left.
 function Close-ExplorerWindows {
-    foreach ($w in Get-ExplorerWindows) { try { $w.Quit() } catch { } }
     $deadline = (Get-Date).AddSeconds(10)
-    while (@(Get-ExplorerWindows).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    do {
+        foreach ($w in Get-ExplorerWindows) { try { $w.Quit() } catch { } }
+        Start-Sleep -Milliseconds 300
+    } while (@(Get-ExplorerWindows).Count -gt 0 -and (Get-Date) -lt $deadline)
 }
 
 # The folder path a ShellWindows entry shows, or $null (virtual locations have none).
@@ -683,13 +686,29 @@ function Set-ForegroundWindowFirmly([IntPtr]$Hwnd) {
 
 # Keyboard focus into the file list: the UI Automation element of File Explorer's item view
 # (class UIItemsView, the DirectUIHWND under SHELLDLL_DefView that the hotkey requires).
+# On build 26200 the UIItemsView element itself is not keyboard-focusable and SetFocus throws
+# "Target element cannot receive focus"; its DUIListView parent is, and focusing it puts the
+# keyboard focus in the same DirectUIHWND. So the nearest focusable element from the item view
+# upwards, never above the window, takes the focus.
 function Set-ExplorerFileListFocus([IntPtr]$Hwnd) {
     $window = [Windows.Automation.AutomationElement]::FromHandle($Hwnd)
     $byClass = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ClassNameProperty), 'UIItemsView'
+    $walker = [Windows.Automation.TreeWalker]::ControlViewWalker
     $deadline = (Get-Date).AddSeconds(10)
     while ((Get-Date) -lt $deadline) {
         $list = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $byClass)
-        if ($list) { $list.SetFocus(); Start-Sleep -Milliseconds 300; return }
+        if ($list) {
+            $target = $list
+            while ($target -and -not $target.Current.IsKeyboardFocusable -and -not [Windows.Automation.Automation]::Compare($target, $window)) {
+                $target = $walker.GetParent($target)
+            }
+            if (-not $target -or -not $target.Current.IsKeyboardFocusable) {
+                throw 'Neither the file list (UIItemsView) nor an element around it inside the window accepts the keyboard focus.'
+            }
+            $target.SetFocus()
+            Start-Sleep -Milliseconds 300
+            return
+        }
         Start-Sleep -Milliseconds 250
     }
     throw 'No file list (UIItemsView) found in the File Explorer window.'
@@ -709,7 +728,12 @@ function Open-ExplorerLocation([string]$Location, [int]$TimeoutSec = 15) {
         $windows = @(Get-ExplorerWindows)
     }
     if ($windows.Count -eq 0) { throw "File Explorer did not open $Location within $TimeoutSec s." }
-    $hwnd = [IntPtr][long]$windows[0].HWND
+    # A window left open by an earlier step must not be mistaken for this one: a folder is
+    # found by its path, anything else (a library, a zip) only when it is the only window.
+    if (Test-Path -LiteralPath $Location -PathType Container) { $window = Wait-ExplorerShows $Location $TimeoutSec }
+    elseif ($windows.Count -eq 1) { $window = $windows[0] }
+    else { throw "File Explorer has $($windows.Count) windows open; cannot tell which one shows $Location." }
+    $hwnd = [IntPtr][long]$window.HWND
     Set-ForegroundWindowFirmly $hwnd
     Set-ExplorerFileListFocus $hwnd
     return $hwnd
