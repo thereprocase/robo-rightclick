@@ -5,6 +5,22 @@ namespace RoboRightClick.Core.Tests;
 public class SettingsTests
 {
     [Fact]
+    public void Config_json_writes_the_hotkey_readably_and_reads_it_back()
+    {
+        var s = Settings.Default with { ExtraArgs = new ExtraArgs("/IORATE:4M", "") };
+        var text = SettingsSerializer.Serialize(s);
+
+        // A person reads this file: '+' stays '+', with no \u escape.
+        Assert.Contains("\"pasteHotkey\": \"Ctrl+Shift+V\"", text);
+        Assert.DoesNotContain("\\u", text);
+
+        var back = SettingsSerializer.Parse(text);
+        Assert.Empty(back.Problems);
+        Assert.Equal("Ctrl+Shift+V", back.Settings.PasteHotkey?.Format());
+        Assert.Equal("/IORATE:4M", back.Settings.ExtraArgs.Copy);
+    }
+
+    [Fact]
     public void Defaults_match_the_install_contract()
     {
         var d = Settings.Default;

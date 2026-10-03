@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -265,8 +266,20 @@ public static class SettingsSerializer
             },
             [PasteHotkeyKey] = s.PasteHotkey?.Format() ?? string.Empty,
         };
-        return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        return root.ToJsonString(WriteOptions);
     }
+
+    /// <summary>
+    /// config.json is a file people open and edit. The default encoder escapes characters that
+    /// matter only inside HTML, so the hotkey was written as "Ctrl\u002BShift\u002BV"
+    /// (docs/testlog.md 2026-10-03). The relaxed encoder still escapes quotes, backslashes and
+    /// control characters, everything JSON itself requires; the file is never embedded in HTML.
+    /// </summary>
+    private static readonly JsonSerializerOptions WriteOptions = new()
+    {
+        WriteIndented = true,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private static readonly HashSet<string> KnownKeys = new(StringComparer.Ordinal)
     {
