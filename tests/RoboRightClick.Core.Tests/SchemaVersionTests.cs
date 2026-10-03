@@ -17,7 +17,7 @@ public class SchemaVersionTests
     {
         using var doc = JsonDocument.Parse(SettingsSerializer.Serialize(Settings.Default));
         Assert.Equal(SettingsSerializer.CurrentVersion, doc.RootElement.GetProperty("version").GetInt32());
-        Assert.Equal(1, SettingsSerializer.CurrentVersion);
+        Assert.Equal(2, SettingsSerializer.CurrentVersion);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public class SchemaVersionTests
     [Fact]
     public void No_save_may_overwrite_a_config_from_a_newer_version()
     {
-        var newer = """{ "version": 2, "threads": "auto" }""";
+        var newer = """{ "version": 3, "threads": "auto" }""";
         Assert.False(SettingsSerializer.MayOverwrite(newer));
         Assert.False(SettingsSerializer.MayOverwrite("""{ "version": 2147483647 }"""));
     }
@@ -129,7 +129,7 @@ public class SchemaVersionTests
     [InlineData(null, false, false, true)]
     [InlineData(null, false, true, true)]
     [InlineData("""{ "version": 1 }""", false, true, true)]
-    [InlineData("""{ "version": 2 }""", false, false, false)]
+    [InlineData("""{ "version": 3 }""", false, false, false)]
     [InlineData("""{ "version": "x" }""", false, false, false)]
     // The file exists but cannot be read now: the last load decides.
     [InlineData(null, true, false, true)]
@@ -204,4 +204,43 @@ public class SchemaVersionTests
     private static JobDescription Job() => new(Id, TransferVerb.Copy, [@"C:\src\a.txt"], @"D:\dest", Created);
 
     private static JobRecord Record() => new(Job(), [new StateChange(JobState.Queued, Created)], [], null);
+}
+
+/// <summary>Builds before "auto" wrote "threads": 32 into every config.json; an update must not keep it as a choice.</summary>
+public class ThreadsMigrationTests
+{
+    [Theory]
+    [InlineData("""{ "version": 1, "threads": 32 }""")]
+    [InlineData("""{ "threads": 32, "retries": 0 }""")]
+    public void The_old_default_in_a_format_1_file_reads_as_auto(string text)
+    {
+        var result = SettingsSerializer.Parse(text);
+
+        Assert.True(result.Settings.AutoThreads);
+        Assert.Empty(result.Problems);
+        Assert.False(result.SavesRefused);
+        using var saved = JsonDocument.Parse(SettingsSerializer.Serialize(result.Settings));
+        Assert.Equal("auto", saved.RootElement.GetProperty("threads").GetString());
+        Assert.Equal(SettingsSerializer.CurrentVersion, saved.RootElement.GetProperty("version").GetInt32());
+    }
+
+    [Fact]
+    public void Any_other_format_1_count_stays_fixed()
+    {
+        var result = SettingsSerializer.Parse("""{ "version": 1, "threads": 16 }""");
+
+        Assert.False(result.Settings.AutoThreads);
+        Assert.Equal(16, result.Settings.Threads);
+    }
+
+    [Fact]
+    public void Thirty_two_chosen_in_the_current_format_stays_thirty_two()
+    {
+        var saved = SettingsSerializer.Serialize(Settings.Default with { AutoThreads = false, Threads = 32 });
+
+        var result = SettingsSerializer.Parse(saved);
+
+        Assert.False(result.Settings.AutoThreads);
+        Assert.Equal(32, result.Settings.Threads);
+    }
 }

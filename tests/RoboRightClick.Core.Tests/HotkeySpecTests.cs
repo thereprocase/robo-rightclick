@@ -234,7 +234,7 @@ public class HotkeySpecTests
     [Fact]
     public void The_setting_needs_no_format_version_change()
     {
-        Assert.Equal(1, SettingsSerializer.CurrentVersion);
+        // Added in format 1; format 2 changed only how "threads" reads.
         var result = SettingsSerializer.Parse("""{ "version": 1, "pasteHotkey": "Ctrl+Shift+V" }""");
         Assert.Empty(result.Problems);
         Assert.False(result.SavesRefused);

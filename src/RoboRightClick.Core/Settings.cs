@@ -120,7 +120,19 @@ public static class SettingsSerializer
     /// change means an older build would misread or lose something on save; an older build
     /// then loads what it knows and refuses to save over the file.
     /// </summary>
-    public const int CurrentVersion = 1;
+    /// <remarks>
+    /// 2: "threads": n means a count the user chose. In format 1 the installer wrote
+    /// <see cref="LegacyDefaultThreads"/> into every new config.json, so format 1's 32 is read
+    /// as "auto" (<see cref="ReadThreads"/>); any other format-1 count stays fixed.
+    /// </remarks>
+    public const int CurrentVersion = 2;
+
+    /// <summary>
+    /// The thread count format 1 wrote as its default, before "auto" existed. Builds before the
+    /// per-drive choice serialized it into every config.json, so it says nothing about the
+    /// user's wish.
+    /// </summary>
+    public const int LegacyDefaultThreads = 32;
 
     public const string VersionKey = "version";
 
@@ -169,7 +181,7 @@ public static class SettingsSerializer
         var d = Settings.Default;
         var s = d with
         {
-            AutoThreads = ReadThreads(root, d, problems, out var threads),
+            AutoThreads = ReadThreads(root, d, version, problems, out var threads),
             Threads = threads,
             Retries = ReadInt(root, "retries", d.Retries, 0, 1_000, problems),
             RetryWaitSeconds = ReadInt(root, "retryWaitSeconds", d.RetryWaitSeconds, 0, 3_600, problems),
@@ -309,8 +321,13 @@ public static class SettingsSerializer
                 : null;
     }
 
-    /// <summary>"threads" is either "auto" or a fixed count; anything else falls back to auto.</summary>
-    private static bool ReadThreads(JsonObject root, Settings defaults, List<string> problems, out int threads)
+    /// <summary>
+    /// "threads" is either "auto" or a fixed count; anything else falls back to auto. A format-1
+    /// file's <see cref="LegacyDefaultThreads"/> is the old default, not a choice, and reads as
+    /// auto, so an update brings the per-drive default to everyone who never set the field; the
+    /// next save writes "auto" with the current version.
+    /// </summary>
+    private static bool ReadThreads(JsonObject root, Settings defaults, int? version, List<string> problems, out int threads)
     {
         threads = defaults.Threads;
         if (!root.TryGetPropertyValue("threads", out var node) || node is null)
@@ -325,6 +342,10 @@ public static class SettingsSerializer
             }
             if (v.TryGetValue<int>(out var n) && n >= Settings.MinThreads && n <= Settings.MaxThreads)
             {
+                if (version == 1 && n == LegacyDefaultThreads)
+                {
+                    return true;
+                }
                 threads = n;
                 return false;
             }

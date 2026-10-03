@@ -62,7 +62,7 @@ Always-on robocopy flags: `/MT:<n>` (per run, from `threads`; 32 unless a spinni
 
 ```json
 {
-  "version": 1,                      // format version; a newer or unreadable one is read, never saved over
+  "version": 2,                      // format version; a newer or unreadable one is read, never saved over
   "threads": "auto",               // per drive: 32 SSD/network, 8 spinning disk, 4 within one; or a fixed 1-128
   "retries": 0, "retryWaitSeconds": 0,
   "conflictDefault": "ask",          // ask | replace | skip | keepNewer

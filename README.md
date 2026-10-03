@@ -341,7 +341,7 @@ Limits. The guarantee covers what this app writes, not what Windows records:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `threads` | `"auto"` | robocopy `/MT` threads. `"auto"` picks per drive: 32 for SSDs and network shares, 8 when a spinning disk is involved, 4 within one spinning disk. A number from 1 to 128 fixes it. Each run's count and the drive types it was based on are in the job's `robocopy.log` |
+| `threads` | `"auto"` | robocopy `/MT` threads. `"auto"` picks per drive: 32 for SSDs and network shares, 8 when a spinning disk is involved, 4 within one spinning disk. A number from 1 to 128 fixes it. Each run's count and the drive types it was based on are in the job's `robocopy.log`. Builds before `"auto"` wrote `32` into every config.json; in a version-1 file `32` is therefore read as `"auto"`, and the next save writes `"auto"` with version 2. Any other version-1 number stays fixed |
 | `retries` / `retryWaitSeconds` | `0` / `0` | robocopy `/R` and `/W`; Explorer doesn't retry on its own either |
 | `conflictDefault` | `ask` | `ask` (Explorer's Replace/Skip prompt), `replace`, `skip`, `keepNewer` |
 | `maxConcurrentJobs` | `0` | `0` = unlimited, as in Explorer |
@@ -352,7 +352,7 @@ Limits. The guarantee covers what this app writes, not what Windows records:
 | `showProgressWindow` | `true` | open a progress window for each paste, like Explorer's copy dialog |
 | `extraArgs.copy` / `extraArgs.move` | `""` | extra robocopy switches from an allow-list (`/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n`); anything else is rejected |
 | `pasteHotkey` | `"Ctrl+Shift+V"` | the Robo-Paste hotkey (see above); `""` turns it off. Unlike the other settings, an invalid value turns it off (with a warning) instead of using the default. A file without this setting means the default |
-| `version` | `1` | the file's format version, written by the app; leave it as it is. A file without it is read as version 1; one that is not a positive whole number is treated like a newer version's file |
+| `version` | `2` | the file's format version, written by the app; leave it as it is. A file without it is read as version 1; one that is not a positive whole number is treated like a newer version's file |
 
 A config.json written by a newer version of the app (a higher `version`) is read by an older
 one for the settings it knows, with a tray warning, and is never saved over: saving from the
