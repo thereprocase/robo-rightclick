@@ -79,7 +79,8 @@ internal sealed record JobStart(
 /// no-op, since "Nothing to do" would read as "the earlier paste's files are fine". A
 /// suspected file the user kept becomes <see cref="JobSnapshot.MayBeIncomplete"/>.
 /// Everything refused also goes Scanning → Finalizing, and an answer that leaves no step
-/// (every conflict of a cut skipped) goes AwaitingDecision → Finalizing.</para>
+/// (every conflict of a cut skipped, or every file of a copied file batch kept) goes
+/// AwaitingDecision → Finalizing.</para>
 /// <para>Running: steps in order. Before each step, re-check which of its destinations
 /// exist (one listing per destination folder) and add them to the presence set that cancel
 /// cleanup reads. RenameStep and move-mode KeepBothStep by InProcessCopier.Rename (a

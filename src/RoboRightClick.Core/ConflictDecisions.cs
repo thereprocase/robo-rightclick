@@ -85,7 +85,7 @@ public static class ExecutionPlanner
     /// <para>Uniform cases keep the plan's steps unchanged: every conflict Replace (policy
     /// Replace), or a copy where every conflict is Skip (policy Skip) or decided by KeepNewer
     /// (policy KeepNewer). Robocopy's class filters are safe there because a copy deletes
-    /// nothing.</para>
+    /// nothing. A file batch whose every file is kept is dropped: it would copy nothing.</para>
     /// <para>Every other case is split. Let K be the source directories holding a conflict
     /// that is not replaced (kept or keep-both). A file-batch step becomes: the Replace names
     /// (policy Replace), the non-conflicting names (policy Ask), each chunked like
@@ -416,6 +416,14 @@ public static class ExecutionPlanner
                         }
                         step = batch with { FileNames = named.Select(f => WinPath.GetFileName(f.SourcePath)).ToList() };
                         files = files.Where(f => !RobocopyArgs.IsSwitchLikeName(WinPath.GetFileName(f.SourcePath))).ToList();
+                    }
+                    if (files.Count == 0)
+                    {
+                        // Every named file is kept, so robocopy would copy nothing. Running the
+                        // step anyway made a copy whose only file was skipped end as a finished
+                        // copy of one item, toast included (docs/testlog.md 2026-10-03, second
+                        // gate entry); without it the job is a no-op, as the same cut already is.
+                        return;
                     }
                     Steps.Add(new ExecutionStep(step, policy, files));
                     break;

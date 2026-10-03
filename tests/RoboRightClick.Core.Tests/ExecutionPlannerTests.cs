@@ -129,6 +129,51 @@ public class ExecutionPlannerTests
         Assert.Equal([@"C:\src\T\s\b.txt"], plan.Kept.Select(c => c.SourcePath));
     }
 
+    /// <summary>
+    /// A copy of one file whose only conflict was skipped used to run an empty robocopy step
+    /// and end as "Copy finished, 1 item" (docs/testlog.md 2026-10-03, second gate entry).
+    /// </summary>
+    [Fact]
+    public void A_copy_batch_whose_every_file_is_kept_plans_no_step_and_is_a_no_op()
+    {
+        var disk = new FakeDisk()
+            .File(@"C:\src\a.txt", minute: 1).File(@"D:\dst\a.txt", minute: 9)
+            .File(@"C:\src\b.txt", minute: 1).File(@"D:\dst\b.txt", minute: 9);
+        var scan = Scan(disk, Batch(@"C:\src", @"D:\dst", false, "a.txt", "b.txt"));
+        Assert.Equal(2, scan.Conflicts.Count);
+
+        foreach (var (configured, choice) in new (ConflictPolicy, ConflictChoice?)[]
+                 {
+                     (ConflictPolicy.Ask, new ConflictChoice.SkipAll()),
+                     (ConflictPolicy.Ask, Decide((@"D:\dst\a.txt", FileDecision.Skip), (@"D:\dst\b.txt", FileDecision.Skip))),
+                     (ConflictPolicy.Skip, null),
+                     // Neither source is newer, so KeepNewer keeps both destinations.
+                     (ConflictPolicy.KeepNewer, null),
+                 })
+        {
+            var plan = ExecutionPlanner.Apply(scan, configured, choice, NothingTaken);
+
+            Assert.Empty(plan.Steps);
+            Assert.True(plan.IsNoOp);
+            Assert.Equal([@"C:\src\a.txt", @"C:\src\b.txt"], plan.Kept.Select(c => c.SourcePath));
+        }
+    }
+
+    [Fact]
+    public void A_copied_folder_whose_every_file_is_kept_still_runs_for_its_folders()
+    {
+        // A tree step also creates the folders; only a file batch has nothing left to do.
+        var disk = new FakeDisk().File(@"C:\src\T\s\b.txt").File(@"D:\dst\T\s\b.txt").Dir(@"C:\src\T\empty");
+        var scan = Scan(disk, Tree(@"C:\src\T", @"D:\dst\T", move: false));
+
+        var plan = ExecutionPlanner.Apply(scan, ConflictPolicy.Ask, new ConflictChoice.SkipAll(), NothingTaken);
+
+        var step = Assert.Single(plan.Steps);
+        Assert.Same(scan.Plan.Steps[0], step.Step);
+        Assert.Empty(step.Files);
+        Assert.False(plan.IsNoOp);
+    }
+
     [Fact]
     public void A_keep_newer_copy_keeps_its_steps_and_keeps_the_files_that_are_not_newer()
     {
