@@ -112,4 +112,23 @@ public class SettingsTests
         Assert.Equal(Settings.Default, result.Settings);
         Assert.Contains(result.Problems, p => p.Contains("theads"));
     }
+
+    [Theory]
+    [InlineData(32)]
+    [InlineData(16)]
+    [InlineData(1)]
+    public void A_thread_count_typed_in_the_settings_window_is_kept_as_typed(int threads)
+    {
+        // The window builds its object from its fields alone, with no "version". 32 is format
+        // 1's old default, which reads as "auto"; typed in the window it is a choice.
+        var fields = new System.Text.Json.Nodes.JsonObject { ["threads"] = threads };
+
+        var read = SettingsSerializer.ParseEdited(fields);
+
+        Assert.Empty(read.Problems);
+        Assert.False(read.Settings.AutoThreads);
+        Assert.Equal(threads, read.Settings.Threads);
+        Assert.Contains($"\"threads\": {threads}", SettingsSerializer.Serialize(read.Settings));
+        Assert.False(fields.ContainsKey(SettingsSerializer.VersionKey));
+    }
 }

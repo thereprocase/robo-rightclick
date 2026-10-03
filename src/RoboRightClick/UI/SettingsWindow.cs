@@ -517,7 +517,7 @@ internal sealed class SettingsWindow : Gridline.Window
         var anyProblem = false;
         foreach (var field in _fields)
         {
-            var problems = SettingsSerializer.Parse(ToJson([field]).ToJsonString()).Problems.Select(p => Clean(field.Key, p)).ToList();
+            var problems = SettingsSerializer.ParseEdited(ToJson([field])).Problems.Select(p => Clean(field.Key, p)).ToList();
             if (field.ExtraProblem?.Invoke() is { } extra)
             {
                 problems.Add(extra);
@@ -526,7 +526,7 @@ internal sealed class SettingsWindow : Gridline.Window
             field.Problem.Visible = problems.Count > 0;
             anyProblem |= problems.Count > 0;
         }
-        var all = SettingsSerializer.Parse(ToJson(_fields).ToJsonString());
+        var all = SettingsSerializer.ParseEdited(ToJson(_fields));
         _valid = !anyProblem && all.Problems.Count == 0 ? all.Settings : null;
         ProbeHotkey(_valid?.PasteHotkey);
         _save.Enabled = _valid is not null;

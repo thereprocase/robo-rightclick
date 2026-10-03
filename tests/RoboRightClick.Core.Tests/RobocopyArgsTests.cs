@@ -183,6 +183,37 @@ public class RobocopyArgsTests
     public void Unsafe_extra_args_are_refused(string extra) =>
         Assert.NotEmpty(RobocopyArgs.ExtraArgProblems(extra));
 
+    [Theory]
+    // A non-breaking space pasted from a web page, and other separators the C runtime does not
+    // split on: robocopy would get "/J<NBSP>/Z" as one argument and fail every run.
+    [InlineData("/J\u00A0/Z")]
+    [InlineData("/J\u2028/Z")]
+    [InlineData("/J\u0085/Z")]
+    [InlineData("/J\n/Z")]
+    [InlineData("/J\r\n/Z")]
+    [InlineData("/J\u00A0")]
+    public void Separators_robocopy_does_not_split_on_are_refused(string extra)
+    {
+        var problems = RobocopyArgs.ExtraArgProblems(extra);
+
+        Assert.NotEmpty(problems);
+        Assert.Contains("\\u", Assert.Single(problems));
+        Assert.DoesNotContain(" /J", RobocopyArgs.Build(FileStep, Settings.Default with { ExtraArgs = new ExtraArgs(extra, extra) }, ConflictPolicy.Ask, Pipe));
+    }
+
+    [Fact]
+    public void Extra_args_reach_robocopy_joined_by_single_plain_spaces()
+    {
+        const string extra = " /J \t\t /Z  /IORATE:50M ";
+        var s = Settings.Default with { ExtraArgs = new ExtraArgs(extra, extra) };
+
+        Assert.Empty(RobocopyArgs.ExtraArgProblems(extra));
+        Assert.EndsWith(" /J /Z /IORATE:50M", RobocopyArgs.Build(FileStep, s, ConflictPolicy.Ask, Pipe));
+        var read = SettingsSerializer.Parse("{\"version\": 2, \"extraArgs\": {\"copy\": \"/J\\t/Z\", \"move\": \"/J\\u00A0/Z\"}}");
+        Assert.Equal(new ExtraArgs("/J /Z", string.Empty), read.Settings.ExtraArgs);
+        Assert.Contains(read.Problems, p => p.StartsWith("'extraArgs.move' ignored", StringComparison.Ordinal));
+    }
+
     [Fact]
     public void Extra_args_have_a_length_cap()
     {

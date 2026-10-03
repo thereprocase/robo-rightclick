@@ -68,10 +68,20 @@ public static class RobocopyArgs
     };
 
     /// <summary>
+    /// What separates extraArgs switches: a plain space or a tab, the only characters the C
+    /// runtime's command-line parser splits on. .NET's whitespace split also breaks on a
+    /// non-breaking space (pasted from a web page) or a line break (a hand-edited config.json),
+    /// which would pass validation and then reach robocopy inside one argument it rejects,
+    /// failing every run with "Invalid Parameter".
+    /// </summary>
+    private static readonly char[] ExtraArgSeparators = [' ', '\t'];
+
+    /// <summary>
     /// Problems with an extraArgs value, one per offending token; empty means it is safe to
-    /// append. Every token must be a bare '/'-switch from <see cref="AllowedSwitches"/> or
-    /// <see cref="AllowedSizeSwitches"/>: no quotes, no '^', no positional tokens (robocopy
-    /// would read those as extra file filters).
+    /// append. Tokens are split as the command line splits them (<see cref="ExtraArgSeparators"/>),
+    /// and any other whitespace or control character is refused. Every token must be a bare
+    /// '/'-switch from <see cref="AllowedSwitches"/> or <see cref="AllowedSizeSwitches"/>: no
+    /// quotes, no '^', no positional tokens (robocopy would read those as extra file filters).
     /// </summary>
     public static IReadOnlyList<string> ExtraArgProblems(string extraArgs)
     {
@@ -81,15 +91,31 @@ public static class RobocopyArgs
             problems.Add($"longer than {MaxExtraArgsLength} characters");
             return problems;
         }
-        foreach (var token in extraArgs.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var token in extraArgs.Split(ExtraArgSeparators, StringSplitOptions.RemoveEmptyEntries))
         {
-            if (!IsAllowedToken(token))
+            if (token.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            {
+                problems.Add($"'{Visible(token)}' contains a space or line break that is not a plain space; separate switches with plain spaces");
+            }
+            else if (!IsAllowedToken(token))
             {
                 problems.Add($"'{token}' is not an allowed extra switch");
             }
         }
         return problems;
     }
+
+    /// <summary>
+    /// An extraArgs value as it goes on the command line and into config.json: its switches
+    /// joined by single plain spaces, so a tab or a run of spaces never reaches robocopy. Only
+    /// for a value <see cref="ExtraArgProblems"/> accepts.
+    /// </summary>
+    public static string NormalizeExtraArgs(string extraArgs) =>
+        string.Join(' ', extraArgs.Split(ExtraArgSeparators, StringSplitOptions.RemoveEmptyEntries));
+
+    /// <summary>A token with each invisible character written as \uXXXX, so a problem message shows what is wrong.</summary>
+    private static string Visible(string token) =>
+        string.Concat(token.Select(c => char.IsWhiteSpace(c) || char.IsControl(c) ? $"\\u{(int)c:X4}" : c.ToString()));
 
     /// <remarks>
     /// Exact names and a digits-plus-unit value grammar leave no room for quotes, carets or
@@ -190,7 +216,7 @@ public static class RobocopyArgs
         var extra = step.Move ? settings.ExtraArgs.Move : settings.ExtraArgs.Copy;
         if (!string.IsNullOrWhiteSpace(extra) && ExtraArgProblems(extra).Count == 0)
         {
-            sb.Append(' ').Append(extra.Trim());
+            sb.Append(' ').Append(NormalizeExtraArgs(extra));
         }
         return sb.ToString();
     }

@@ -148,6 +148,19 @@ public static class SettingsSerializer
         AllowTrailingCommas = true,
     };
 
+    /// <summary>
+    /// The Settings window's fields, read as the current format. The window builds an object
+    /// from its fields alone, with no "version"; <see cref="Parse"/> reads a missing version as
+    /// format 1, whose "threads": 32 is the old default and means "auto", so a user who typed 32
+    /// would have saved "auto" without a word. Every other value is read as Parse reads it.
+    /// </summary>
+    public static SettingsLoadResult ParseEdited(JsonObject fields)
+    {
+        var stamped = (JsonObject)fields.DeepClone();
+        stamped[VersionKey] = CurrentVersion;
+        return Parse(stamped.ToJsonString());
+    }
+
     public static SettingsLoadResult Parse(string json)
     {
         var problems = new List<string>();
@@ -459,6 +472,6 @@ public static class SettingsSerializer
             problems.Add($"'extraArgs.{key}' ignored: {string.Join("; ", rejected)}");
             return string.Empty;
         }
-        return text.Trim();
+        return RobocopyArgs.NormalizeExtraArgs(text);
     }
 }
