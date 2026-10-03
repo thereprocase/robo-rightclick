@@ -221,10 +221,16 @@ public static class ToastText
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
     };
 
-    /// <summary>At startup (normal mode): job logs show pastes that never finished because the app ended.</summary>
+    /// <summary>
+    /// At startup (normal mode): job logs show pastes that never finished because the app
+    /// ended. A click opens the log folder, not the Jobs window: Jobs lists only this session's
+    /// pastes, and these ran in an earlier one. Each such job's job.json ends in
+    /// <see cref="JobRecords.InterruptedStateName"/> and names its sources and destination.
+    /// </summary>
     public static Toast ForInterrupted(int count) => new(
         count == 1 ? "A paste was interrupted" : $"{count} pastes were interrupted",
-        "RoboRightClick ended while copying. Some files at the destination may be incomplete. Open Jobs for details.",
+        "RoboRightClick ended while copying, so some files at the destination may be incomplete. "
+            + "Click to open the job logs: a job.json ending in \"interrupted\" names the paste.",
         ToastKind.Warning);
 
     /// <summary>Ephemeral mode was switched while normal-mode jobs run.</summary>

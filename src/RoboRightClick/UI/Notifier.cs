@@ -11,6 +11,9 @@ internal enum ToastTarget
     /// <summary>The Settings window (settings-problem toast).</summary>
     Settings,
 
+    /// <summary>The log folder (interrupted pastes of an earlier session, which the Jobs window does not list).</summary>
+    Logs,
+
     /// <summary>Nothing (informational toasts such as the tray hint).</summary>
     None,
 }

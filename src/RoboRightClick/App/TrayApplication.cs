@@ -366,7 +366,7 @@ internal sealed class TrayApplication : ApplicationContext
         switch (StartupRules.PickStartupToast(interrupted, settingsToastShown, _afterInstall))
         {
             case StartupToast.Interrupted:
-                _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Jobs);
+                _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Logs);
                 break;
             case StartupToast.TrayHint:
                 _notifier.Show(ToastText.ForTrayHint(_settings.Current.PasteHotkey), ToastTarget.None);
@@ -500,6 +500,9 @@ internal sealed class TrayApplication : ApplicationContext
                 break;
             case ToastTarget.Settings:
                 ShowSettings();
+                break;
+            case ToastTarget.Logs:
+                OpenLogs();
                 break;
         }
     }

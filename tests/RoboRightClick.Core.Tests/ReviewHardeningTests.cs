@@ -474,6 +474,19 @@ public class SnapshotAndToastTests
     }
 
     [Fact]
+    public void The_interrupted_notice_points_to_the_logs_not_to_jobs()
+    {
+        // The Jobs window lists only this session's pastes; an interrupted one ran in an
+        // earlier session, so "Open Jobs" would show an empty list.
+        var toast = ToastText.ForInterrupted(1);
+
+        Assert.DoesNotContain("Jobs", toast.Body, StringComparison.Ordinal);
+        Assert.Contains("job logs", toast.Body, StringComparison.Ordinal);
+        Assert.Contains($"\"{JobRecords.InterruptedStateName}\"", toast.Body, StringComparison.Ordinal);
+        Assert.True(toast.Body.Length <= ToastText.MaxBalloonText, toast.Body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    [Fact]
     public void Settings_toast_names_the_first_problem()
     {
         var toast = ToastText.ForSettingsProblems(["'threads' must be an integer from 1 to 128; using 32", "x", "y"]);
