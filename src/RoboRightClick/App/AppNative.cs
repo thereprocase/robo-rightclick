@@ -20,9 +20,20 @@ internal static partial class AppNative
     public const int WM_QUERYENDSESSION = 0x0011;
     public const int WM_ENDSESSION = 0x0016;
 
+    /// <summary>SetWindowPos insert-after values and flags for a z-order change that neither moves, sizes nor activates.</summary>
+    public static readonly nint HWND_TOPMOST = -1;
+    public static readonly nint HWND_NOTOPMOST = -2;
+    public const uint SWP_NOSIZE = 0x0001;
+    public const uint SWP_NOMOVE = 0x0002;
+    public const uint SWP_NOACTIVATE = 0x0010;
+
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool AttachConsole(uint dwProcessId);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     /// <summary>Frees HICONs from Bitmap.GetHicon (TrayIcons).</summary>
     [LibraryImport("user32.dll", SetLastError = true)]

@@ -1,4 +1,5 @@
 using System.Globalization;
+using RoboRightClick.App;
 using RoboRightClick.Core;
 using RoboRightClick.Jobs;
 
@@ -125,6 +126,26 @@ internal sealed class ProgressWindow : Gridline.Window
 
     /// <summary>Appears without taking the keyboard from whatever the user is typing in.</summary>
     protected override bool ShowWithoutActivation => true;
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        RaiseWithoutActivating();
+    }
+
+    /// <summary>
+    /// Shown without activation by the tray, which is not the foreground process, the window
+    /// opened below the File Explorer window the paste was started from and was visible only as
+    /// a taskbar button (docs/testlog.md 2026-10-03). Passing through the topmost band puts it
+    /// on top of the other normal windows, where Explorer's own progress window appears, and
+    /// still leaves the keyboard focus where the user has it.
+    /// </summary>
+    private void RaiseWithoutActivating()
+    {
+        const uint flags = AppNative.SWP_NOMOVE | AppNative.SWP_NOSIZE | AppNative.SWP_NOACTIVATE;
+        AppNative.SetWindowPos(Handle, AppNative.HWND_TOPMOST, 0, 0, 0, 0, flags);
+        AppNative.SetWindowPos(Handle, AppNative.HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+    }
 
     protected override void OnLoad(EventArgs e)
     {
