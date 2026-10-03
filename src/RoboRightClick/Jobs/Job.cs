@@ -92,7 +92,10 @@ internal sealed record JobStart(
 /// ends' drives, and the sink gets a "# threads" line after the command line.
 /// After a robocopy step that ended normally, the files it never mentioned are checked on disk
 /// (<see cref="StepLedger.ResolveUnreported"/>): a vanished source is a refusal, a destination
-/// that appeared is a late arrival, anything else failed.
+/// that appeared is a late arrival, anything else failed and is listed as an error. After every
+/// robocopy step, the destinations of the files it did not finish are listed once per folder
+/// (<see cref="StepLedger.RecordAbsentAfterRun"/>), so only files with something there are
+/// reported as possibly incomplete.
 /// Events go through the ledger; observed bytes = ledger.CompletedBytesOfFinishedSteps +
 /// this run's read counter, from callbacks of the current run only. ShellNotify after each
 /// step. A closed gate before Running moves straight on to Paused; the loop waits on the
@@ -107,12 +110,14 @@ internal sealed record JobStart(
 /// <see cref="ProcessNative.DeleteFileIfSameFile"/>, which checks identity and attributes and
 /// deletes on one handle opened without following links; a delete that fails leaves the file
 /// reported. LeftInPlace becomes <see cref="JobSnapshot.DamagedOnCancel"/> and
-/// <see cref="DamagedPaths"/>. The ledger's <see cref="StepLedger.MayBeIncomplete"/> files that
+/// <see cref="DamagedPaths"/>. The ledger's <see cref="StepLedger.SuspectedPartials"/> files that
 /// cleanup neither deleted nor reported (robocopy's failures before the cancel) become
 /// <see cref="JobSnapshot.MayBeIncomplete"/>, so a cancel never hides them.</para>
 /// <para>Finalizing: create LinkFolders empty, clear the clipboard for a cut that ended
 /// Done with at least one item moved, ShellNotify, emit the JobSummary (errors capped at
-/// <see cref="JobRecords.MaxRecordedErrors"/>), then JobOutcome.FinalState. A Failed job's
+/// <see cref="JobRecords.MaxRecordedErrors"/>), then JobOutcome.FinalState, which also reads
+/// the ledgers' unfinished files: a file robocopy did not copy keeps the job from ending Done
+/// whatever the exit code said. Possibly incomplete files are recorded in every end state. A Failed job's
 /// <see cref="JobSnapshot.FailureReason"/> comes from <see cref="FailureText.Describe"/>.
 /// Any unexpected exception, in any state, ends the job Failed.</para>
 /// <para>The job never deletes a source: only robocopy /MOV(E) and renames move anything.</para>
@@ -363,7 +368,7 @@ internal sealed class Job
         }
     }
 
-    /// <summary>Destinations a Failed job's robocopy runs may have left partly written (first <see cref="JobRecords.MaxRecordedErrors"/>).</summary>
+    /// <summary>Destinations this job's robocopy runs may have left partly written, in any end state (first <see cref="JobRecords.MaxRecordedErrors"/>).</summary>
     public IReadOnlyList<string> MayBeIncompletePaths
     {
         get
@@ -1006,6 +1011,18 @@ internal sealed class Job
         {
             await RunBlockingAsync(() => ResolveUnreported(part, index, unreported)).ConfigureAwait(false);
         }
+        if (step.Step is RobocopyStep)
+        {
+            IReadOnlyList<PlannedFile> failed;
+            lock (_lock)
+            {
+                failed = part.Ledger.FailedAfterRun(index);
+            }
+            if (failed.Count > 0)
+            {
+                await RunBlockingAsync(() => RecordAbsentAfterRun(part, index, failed)).ConfigureAwait(false);
+            }
+        }
 
         NotifyShellAfterStep(step.Step, outcome);
 
@@ -1156,6 +1173,7 @@ internal sealed class Job
         }
 
         int issues;
+        int unfinished;
         lock (_lock)
         {
             // A source that vanished before robocopy reached it: "could not be found", as Explorer says.
@@ -1167,8 +1185,9 @@ internal sealed class Job
                 }
             }
             issues = _issues.Count;
+            unfinished = _parts.Sum(p => p.Ledger.FailedRobocopyFileCount);
         }
-        var final = JobOutcome.FinalState(outcomes, canceled: false, issues);
+        var final = JobOutcome.FinalState(outcomes, canceled: false, issues, unfinished);
         var completedSources = outcomes.Sum(o => o.CompletedSources.Count);
 
         if (final == JobState.Done && completedSources > 0 && Start.CutClipboardSequence is { } sequence)
@@ -1195,10 +1214,9 @@ internal sealed class Job
             _failureReason = failureReason;
             _finalErrorCount = final == JobState.DoneWithErrors ? ErrorCountLocked(outcomes) : _totalErrors;
             RecordSkippedAppearedLocked();
-            if (final == JobState.Failed)
-            {
-                RecordMayBeIncompleteLocked(exclude: null);
-            }
+            // Per step, whatever the job's end state: a run that died after other files
+            // completed leaves the job DoneWithErrors, and its in-flight files must still be named.
+            RecordMayBeIncompleteLocked(exclude: null);
             RecordKeptSuspectedLocked();
             FixSuspectedLocked(leftByCancel: []);
             MoveLocked(final, SummaryLocked(final));
@@ -1511,7 +1529,42 @@ internal sealed class Job
         }
         lock (_lock)
         {
-            part.Ledger.ResolveUnreported(index, file => !sourceGone.Contains(file), destinationPresent.Contains);
+            // Robocopy neither copied these nor said why: each is listed as an error, so the
+            // summary names the file "Try again" repeats.
+            foreach (var failed in part.Ledger.ResolveUnreported(index, file => !sourceGone.Contains(file), destinationPresent.Contains))
+            {
+                RecordErrorLocked(StepLedger.UnreportedFailure(failed));
+            }
+            Touch();
+        }
+    }
+
+    /// <summary>
+    /// After a robocopy step: which of the files it did not finish have nothing at their
+    /// destination (<see cref="StepLedger.RecordAbsentAfterRun"/>), so a run that failed on the
+    /// destination folder does not list every planned file as possibly incomplete. One listing
+    /// per destination folder, off the lock; a folder that cannot be listed proves nothing.
+    /// </summary>
+    private void RecordAbsentAfterRun(LedgerPart part, int index, IReadOnlyList<PlannedFile> failed)
+    {
+        var absent = new HashSet<PlannedFile>(ReferenceEqualityComparer.Instance);
+        foreach (var folder in failed.GroupBy(f => WinPath.GetParent(f.DestinationPath), WinPath.Comparer))
+        {
+            if (Services.FileSystem.NamesIn(folder.Key) is not { } names)
+            {
+                continue;
+            }
+            foreach (var file in folder)
+            {
+                if (!names.Contains(WinPath.GetFileName(file.DestinationPath)))
+                {
+                    absent.Add(file);
+                }
+            }
+        }
+        lock (_lock)
+        {
+            part.Ledger.RecordAbsentAfterRun(index, absent.Contains);
         }
     }
 
@@ -1704,15 +1757,19 @@ internal sealed class Job
     }
 
     /// <summary>
-    /// A Failed or Canceled job's files whose robocopy run started and then failed or died:
-    /// robocopy allocates full length first, so these may look complete. Read once at the end.
+    /// The files robocopy may have left half written (<see cref="StepLedger.SuspectedPartials"/>):
+    /// its run started and then failed or died on them, and their destination was not proved
+    /// absent after the run. Robocopy allocates full length first, so these may look complete.
+    /// Read once at the end, in every end state, before <see cref="ReleaseLocked"/> drops the
+    /// presence set; the same list <see cref="FixSuspectedLocked"/> hands to a derived job.
     /// </summary>
     /// <param name="exclude">Normalized destinations a cancel's cleanup already deleted or reported.</param>
     private void RecordMayBeIncompleteLocked(HashSet<string>? exclude)
     {
+        var presence = _presence;
         foreach (var part in _parts)
         {
-            foreach (var file in part.Ledger.MayBeIncomplete)
+            foreach (var file in part.Ledger.SuspectedPartials(path => presence is not null && presence.Contains(path)))
             {
                 if (exclude is not null && exclude.Contains(WinPath.NormalizeForMatch(file.DestinationPath)))
                 {
@@ -1842,8 +1899,10 @@ internal sealed class Job
     private int ErrorCountLocked(List<StepOutcome> outcomes)
     {
         var retryable = _parts.Sum(p => RobocopyRetryable(p).Count + p.Ledger.FailedInProcessSteps.Count);
+        // Counted even when the ledger lost track of robocopy's paths (retryable is then empty).
+        var unfinished = _parts.Sum(p => p.Ledger.FailedRobocopyFileCount + p.Ledger.FailedInProcessSteps.Count);
         var broken = outcomes.Count(IsBroken);
-        return Math.Max(_totalErrors, Math.Max(retryable, broken));
+        return Math.Max(Math.Max(_totalErrors, unfinished), Math.Max(retryable, broken));
     }
 
     private void AddClaimsLocked(ExecutionPlan plan)

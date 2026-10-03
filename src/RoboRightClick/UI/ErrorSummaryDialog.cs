@@ -126,7 +126,10 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         {
             var total = Math.Max(job.ErrorCount, errors.Count);
             var title = string.Create(CultureInfo.InvariantCulture, $"Could not be {done} ({total:N0})");
-            var rows = errors.Select(e => new DetailRow(e.Path, string.Create(CultureInfo.InvariantCulture, $"{e.Message.Trim()} (error {e.Code})")));
+            // Code 0: a file robocopy neither copied nor reported (StepLedger.UnreportedFailure); there is no Windows code to show.
+            var rows = errors.Select(e => new DetailRow(e.Path, e.Code == 0
+                ? e.Message.Trim()
+                : string.Create(CultureInfo.InvariantCulture, $"{e.Message.Trim()} (error {e.Code})")));
             AddFill(ListPane(title, text: null, rows, "Errors"));
             filled = true;
 

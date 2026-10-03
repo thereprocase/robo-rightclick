@@ -325,7 +325,7 @@ public class RetryEvidenceTests
         // Robocopy could not be started at all: no exit code, no output.
         ledger.StepFinished(1, null, killedByCancel: false);
 
-        Assert.Equal([A], ledger.MayBeIncomplete);
+        Assert.Equal([A], ledger.SuspectedPartials(_ => false));
         Assert.Equal(3, ledger.Retryable.Count);
     }
 }

@@ -31,7 +31,7 @@ public class CancelReportTests
         // The user cancels while robocopy writes big.iso.
         ledger.StepFinished(0, exitCode: null, killedByCancel: true);
 
-        Assert.Equal([Video], ledger.MayBeIncomplete);
+        Assert.Equal([Video], ledger.SuspectedPartials(_ => false));
         Assert.Equal([(0, Video)], ledger.Retryable);
         Assert.Equal([Video, Big], ledger.KilledRunFiles.Select(k => k.File));
     }

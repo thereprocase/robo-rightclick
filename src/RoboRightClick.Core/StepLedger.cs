@@ -209,17 +209,20 @@ public sealed class StepLedger
     /// <summary>
     /// Sorts a step's unreported files (see the remarks) by what the host found on disk after
     /// the run. Only files still unreported are touched; calling it twice changes nothing more.
+    /// Returns the files it found failed: robocopy neither copied them nor said why, so the job
+    /// lists each as an error (<see cref="UnreportedFailure"/>) and does not end Done.
     /// </summary>
     /// <param name="sourceExists">Whether the file's source is still there.</param>
     /// <param name="destinationExists">Whether something is at the file's destination.</param>
-    public void ResolveUnreported(int stepIndex, Func<PlannedFile, bool> sourceExists, Func<PlannedFile, bool> destinationExists)
+    public IReadOnlyList<PlannedFile> ResolveUnreported(int stepIndex, Func<PlannedFile, bool> sourceExists, Func<PlannedFile, bool> destinationExists)
     {
         var state = StateOf(stepIndex);
         if (state.Unreported is not { } indices)
         {
-            return;
+            return [];
         }
         state.Unreported = null;
+        var failed = new List<PlannedFile>();
         foreach (var i in indices)
         {
             if (state.Status[i] is not (FileStatus.SkippedLateArrival or FileStatus.FailedUnreached))
@@ -230,8 +233,88 @@ public sealed class StepLedger
             state.Status[i] = !sourceExists(file) ? FileStatus.SourceGone
                 : state.Policy != ConflictPolicy.Replace && destinationExists(file) ? FileStatus.SkippedLateArrival
                 : FileStatus.FailedUnreached;
+            if (state.Status[i] == FileStatus.FailedUnreached)
+            {
+                failed.Add(file);
+            }
+        }
+        return failed;
+    }
+
+    /// <summary>The message of <see cref="UnreportedFailure"/>. Path-free, like every message the summary shows.</summary>
+    public const string UnreportedFailureMessage = "Robocopy ended without copying this file and without reporting an error for it.";
+
+    /// <summary>
+    /// The error the job lists for a file <see cref="ResolveUnreported"/> found failed. Code 0:
+    /// robocopy gave none. Named by its source, as robocopy names the files it fails on.
+    /// </summary>
+    public static ErrorReported UnreportedFailure(PlannedFile file) => new(0, "Copying File", file.SourcePath, UnreportedFailureMessage);
+
+    /// <summary>
+    /// How many files of robocopy steps robocopy did not finish, as the ledger stands: reported
+    /// failing, never reached, left by a run that died, or found failed by
+    /// <see cref="ResolveUnreported"/>. Counted whether or not <see cref="PathsUnreliable"/>:
+    /// <see cref="JobOutcome.FinalState"/> reads it, and a job with any such file never ends
+    /// Done ("Everything was copied") however its runs exited.
+    /// </summary>
+    public int FailedRobocopyFileCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var state in _steps)
+            {
+                if (state.IsRobocopy)
+                {
+                    count += state.Status.Count(IsFailed);
+                }
+            }
+            return count;
         }
     }
+
+    /// <summary>
+    /// The files of a robocopy step that ran and did not finish them, for the host's look at
+    /// their destinations after the run (<see cref="RecordAbsentAfterRun"/>). Empty for a step
+    /// robocopy never ran.
+    /// </summary>
+    public IReadOnlyList<PlannedFile> FailedAfterRun(int stepIndex)
+    {
+        var state = StateOf(stepIndex);
+        if (!state.IsRobocopy || !state.Ran)
+        {
+            return [];
+        }
+        var files = new List<PlannedFile>();
+        for (var i = 0; i < state.Status.Length; i++)
+        {
+            if (IsFailed(state.Status[i]))
+            {
+                files.Add(state.Files[i]);
+            }
+        }
+        return files;
+    }
+
+    /// <summary>
+    /// The host's look after a run: which of <see cref="FailedAfterRun"/>'s destinations it
+    /// proved absent (one listing per folder). Nothing there means robocopy wrote nothing there,
+    /// so the file is not <see cref="SuspectedPartials"/>. Only proof counts: a folder that
+    /// could not be listed, or a step nobody looked at, leaves its files possibly incomplete.
+    /// </summary>
+    public void RecordAbsentAfterRun(int stepIndex, Func<PlannedFile, bool> destinationAbsent)
+    {
+        var state = StateOf(stepIndex);
+        for (var i = 0; i < state.Status.Length; i++)
+        {
+            if (IsFailed(state.Status[i]) && destinationAbsent(state.Files[i]))
+            {
+                (state.AbsentAfterRun ??= []).Add(i);
+            }
+        }
+    }
+
+    private static bool IsFailed(FileStatus status) => status is FileStatus.FailedReported or FileStatus.FailedUnreached;
 
     /// <summary>
     /// Files robocopy did not copy because their source was gone when it got to them (a temp
@@ -242,30 +325,43 @@ public sealed class StepLedger
         _steps.SelectMany(s => s.Files.Where((_, i) => s.Status[i] == FileStatus.SourceGone)).ToList();
 
     /// <summary>
-    /// Destinations that may hold part of a file: the files of robocopy runs that actually ran
-    /// (they produced output or an exit code) and failed or died without finishing those files.
-    /// Robocopy allocates a file at full length before writing it, so these can look complete.
-    /// </summary>
-    public IReadOnlyList<PlannedFile> MayBeIncomplete =>
-        _steps.Where(s => s.IsRobocopy && s.Ran)
-            .SelectMany(s => s.Files.Where((_, i) => s.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached))
-            .ToList();
-
-    /// <summary>
-    /// The <see cref="MayBeIncomplete"/> files robocopy may actually have written: their
-    /// destination was free when the step started, or the step's policy overwrites. A file that
-    /// was there before under Skip flags is the user's, untouched by robocopy. A retry child
-    /// asks about each of these rather than letting a configured Skip or KeepNewer keep it
-    /// (<see cref="FileConflict.SuspectedPartial"/>).
+    /// Destinations that may hold part of a file, decided per step whatever the job's end state:
+    /// files of robocopy runs that actually ran (they produced output or an exit code) and
+    /// failed or died without finishing them, where robocopy may actually have written: the
+    /// destination was free when the step started, or the step's policy overwrites (a file that
+    /// was there before under Skip flags is the user's, untouched by robocopy), and it was not
+    /// proved absent after the run (<see cref="RecordAbsentAfterRun"/>: a run that failed on the
+    /// destination folder wrote nothing). Robocopy allocates a file at full length before
+    /// writing it, so these can look complete. The one list for both uses: the summary's "may
+    /// be incomplete" section, and what a retry child always asks about rather than letting a
+    /// configured Skip or KeepNewer keep it (<see cref="FileConflict.SuspectedPartial"/>).
     /// </summary>
     /// <param name="presentBeforeStep">As for <see cref="RetryCandidates"/>, by normalized path.</param>
-    public IReadOnlyList<PlannedFile> SuspectedPartials(Func<string, bool> presentBeforeStep) =>
-        _steps.Where(s => s.IsRobocopy && s.Ran)
-            .SelectMany(s => s.Files
-                .Where((_, i) => s.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached)
-                .Where(f => RobocopyArgs.MayOverwriteExisting(s.Policy) || !presentBeforeStep(WinPath.NormalizeForMatch(f.DestinationPath)))
-                .ToList())
-            .ToList();
+    public IReadOnlyList<PlannedFile> SuspectedPartials(Func<string, bool> presentBeforeStep)
+    {
+        var files = new List<PlannedFile>();
+        foreach (var state in _steps)
+        {
+            if (!state.IsRobocopy || !state.Ran)
+            {
+                continue;
+            }
+            var overwrites = RobocopyArgs.MayOverwriteExisting(state.Policy);
+            for (var i = 0; i < state.Status.Length; i++)
+            {
+                if (!IsFailed(state.Status[i]) || state.AbsentAfterRun?.Contains(i) == true)
+                {
+                    continue;
+                }
+                var file = state.Files[i];
+                if (overwrites || !presentBeforeStep(WinPath.NormalizeForMatch(file.DestinationPath)))
+                {
+                    files.Add(file);
+                }
+            }
+        }
+        return files;
+    }
 
     /// <summary>Normalized source paths reported complete, for cancel cleanup.</summary>
     public IReadOnlyCollection<string> CompletedSources
@@ -619,6 +715,9 @@ public sealed class StepLedger
 
         /// <summary>Files <see cref="StepFinished"/> found unreported after a normal exit, until resolved.</summary>
         public List<int>? Unreported { get; set; }
+
+        /// <summary>Failed files whose destination the host proved absent after the run (<see cref="RecordAbsentAfterRun"/>).</summary>
+        public HashSet<int>? AbsentAfterRun { get; set; }
 
         public bool Finished { get; set; }
 

@@ -31,7 +31,14 @@ public static class JobOutcome
     /// could run: per-file errors are DoneWithErrors, which is what offers "Try again".
     /// </summary>
     /// <param name="planIssues">Items refused at planning (into own subfolder, a drive root); Explorer reports these as errors.</param>
-    public static JobState FinalState(IReadOnlyList<StepOutcome> outcomes, bool canceled, int planIssues)
+    /// <param name="unfinishedFiles">
+    /// Files the ledgers say robocopy did not finish (<see cref="StepLedger.FailedRobocopyFileCount"/>).
+    /// Robocopy can exit 0 or 1 without copying a file and without an error line (a filter it did
+    /// not match, a file its Skip flags passed over that was gone again by the check, a Replace
+    /// step that skipped silently); the exit code alone would then end the job Done, clear a
+    /// cut's clipboard and offer no "Try again" for files still only at the source.
+    /// </param>
+    public static JobState FinalState(IReadOnlyList<StepOutcome> outcomes, bool canceled, int planIssues, int unfinishedFiles = 0)
     {
         if (canceled)
         {
@@ -47,6 +54,7 @@ public static class JobOutcome
 
         var anyErrors = anyBroken
             || planIssues > 0
+            || unfinishedFiles > 0
             || outcomes.Any(o => o.Errors.Count > 0 || o.ExitCode is { SomeCopiesFailed: true });
         return anyErrors ? JobState.DoneWithErrors : JobState.Done;
     }

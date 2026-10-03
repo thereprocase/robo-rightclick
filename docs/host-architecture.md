@@ -432,7 +432,7 @@ Step execution:
     is deleted; an existing new file is reported as possibly incomplete instead. A delete that
     fails leaves the file reported the same way.
   `LeftInPlace` becomes `JobSnapshot.DamagedOnCancel` (attention, toast, "Finish copying them" /
-  "Finish moving them"). The ledger's `MayBeIncomplete` files that cleanup neither deleted nor
+  "Finish moving them"). The ledger's `SuspectedPartials` files that cleanup neither deleted nor
   reported (robocopy's ERROR lines and dead runs before the cancel) become
   `JobSnapshot.MayBeIncomplete`; a cancel with any of those, or with errors, needs attention,
   shows the summary and toasts (`JobSnapshot.OutcomeNeedsUser`), and keeps its ledger so
@@ -442,6 +442,16 @@ Step execution:
   cancel deletes the partial overwrite (the loss is the overwrite's, which a normal run makes
   too); robocopy decides skip or copy when it lists a folder, so a file that appears after that
   listing is overwritten in any run, canceled or not (robocopy's own race, not cleanup's).
+- **Files robocopy did not finish** decide the end state, not the exit code alone:
+  `JobOutcome.FinalState` reads `StepLedger.FailedRobocopyFileCount`, so a file robocopy never
+  mentioned in a run that exited 0 or 1, whose source is still there and destination is not
+  (or under Replace), ends the job `DoneWithErrors` with an error naming it
+  (`StepLedger.UnreportedFailure`), and a cut's clipboard is not cleared. Which files may be
+  incomplete is decided per step, in every end state: after each robocopy step the job lists the
+  destination folders of the files it did not finish once (`StepLedger.RecordAbsentAfterRun`),
+  and `StepLedger.SuspectedPartials` keeps only files of a run that ran, not proved absent
+  afterwards, and either new at the destination or under an overwriting policy. The summary's
+  "may be incomplete" list and what a retry child always asks about are that one list.
 - **Errors** → `DoneWithErrors`; "Try again (N)" = `JobManager.Retry(parent)`. Per ledger part,
   `RetryPlanner.ForFailures(plan, candidates, ledger.FailedInProcessSteps)`, where the
   candidates are `StepLedger.RetryCandidates(presence)`, fixed when the job ends (for a

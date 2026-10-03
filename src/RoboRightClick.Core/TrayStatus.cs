@@ -76,9 +76,12 @@ public sealed record JobSnapshot(
     public int SkippedAppeared { get; init; }
 
     /// <summary>
-    /// A Failed or Canceled job's files whose robocopy run started and then failed or died
-    /// before finishing them (for a cancel: those robocopy reported failing, and earlier steps'
-    /// failures; the files the cancel itself interrupted are <see cref="DamagedOnCancel"/>).
+    /// Files whose robocopy run started and then failed or died before finishing them, with
+    /// something at their destination afterwards (<see cref="StepLedger.SuspectedPartials"/>),
+    /// in any end state: a run that dies after other files completed leaves the job
+    /// DoneWithErrors, and its in-flight files are still listed. For a cancel: those robocopy
+    /// reported failing, and earlier steps' failures; the files the cancel itself interrupted
+    /// are <see cref="DamagedOnCancel"/>.
     /// For a "Try again" child, in any end state, also the files the earlier paste left possibly
     /// incomplete that the user chose to keep (<see cref="FileConflict.SuspectedPartial"/>).
     /// Robocopy allocates each file at full length before writing it, so these can look
