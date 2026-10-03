@@ -20,9 +20,11 @@ namespace RoboRightClick.App;
 /// then exits 0) → ComCallerSecurity.InitializeProcess → SettingsStore.Load →
 /// ClipboardService, JobLogStore, JobManager, VerbDispatcher (constructors do no I/O) →
 /// ComServer.Register → SingleInstance.SignalReady → NotifyIcon → message loop. Posted to
-/// run once the loop is up: settings watcher, the settings-problem toast, the interrupted-
-/// jobs check (normal mode), the first-run tray hint, log pruning. Any exception before the
-/// loop shows a Gridline notice with the reason and exits 1.</para>
+/// run once the loop is up: the Robo-Paste hotkey's hook and locator threads
+/// (<see cref="PasteHotkey"/>, <see cref="ExplorerFolderLocator"/>; started after SignalReady
+/// so Explorer's activation never waits on them), settings watcher, the settings-problem
+/// toast, the interrupted-jobs check (normal mode), the first-run tray hint, log pruning.
+/// Any exception before the loop shows a Gridline notice with the reason and exits 1.</para>
 /// <para>Unhandled exceptions (<see cref="CrashPolicy"/>): Application.ThreadException and
 /// AppDomain.UnhandledException are handled. While any ephemeral job is active the process
 /// kills its robocopy children and ends with TerminateProcess, so Windows Error Reporting
@@ -34,13 +36,16 @@ namespace RoboRightClick.App;
 /// shutdown" screen. On WM_ENDSESSION(true), JobManager.CancelAllAndWaitAsync with a 5 s
 /// limit so cancel cleanup still runs.</para>
 /// <para>Exit order (async, message loop still pumping): confirm if JobManager.HasActiveJobs
-/// → ComServer.Dispose (revoke) → await JobManager.CancelAllAndWaitAsync → hide icon →
+/// → ComServer.Dispose (revoke) → hotkey off (locator stopped, then WM_QUIT to the hook
+/// thread, which unhooks; joined for 1 s) → await JobManager.CancelAllAndWaitAsync → hide icon →
 /// dispose the rest → release the mutex → ExitThread. An exit request from another process
 /// (SingleInstance.ExitRequested, marshaled to the UI thread) is honored only when no jobs
 /// are active; otherwise it toasts and stays.</para>
 /// <para>Tray: left click and double click open Jobs (a job AwaitingDecision brings its
 /// conflict dialog to the front instead). Menu: Jobs…, Pause all (checked while on),
-/// Resume all, Ephemeral mode (check), Settings…, Open logs (hidden in ephemeral), Exit.
+/// Resume all, Ephemeral mode (check), the hotkey line ("Robo-Paste hotkey: Ctrl+Shift+V…",
+/// "off…", "off (setting invalid)…" or "not active…"; opens Settings at the field),
+/// Settings…, Open logs (hidden in ephemeral), Exit.
 /// Icon and tooltip follow TrayStatus.Derive on JobManager.StateChanged, settings changes
 /// and a 1 s timer while jobs run; the tooltip is set only when its text changes.
 /// JobManager.Created opens a progress window after ~1 s when showProgressWindow is on.
@@ -97,6 +102,13 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _ephemeralItem;
     private readonly ToolStripMenuItem _openLogsItem;
     private readonly ToolStripMenuItem _resumeAllItem;
+    private readonly ToolStripMenuItem _hotkeyItem;
+    private readonly PasteHotkey _pasteHotkey;
+    private readonly ExplorerFolderLocator _hotkeyLocator;
+
+    // The hotkey threads did not start (StartHotkey). The hook thread never reports this
+    // itself, so without it the tray line would name a hotkey that does nothing.
+    private bool _hotkeyStartFailed;
     private readonly JobsWindow _jobsWindow;
     private readonly ProgressWindowHost _progressWindows;
     private readonly SessionEndWindow _sessionWindow;
@@ -160,6 +172,11 @@ internal sealed class TrayApplication : ApplicationContext
             _comServer.Register();
             _instance.SignalReady();
 
+            // Constructed here, started once the loop runs. Owned hook first, so teardown stops
+            // the locator (which waits on the hook's press signal) before the hook thread.
+            _pasteHotkey = Own(new PasteHotkey());
+            _hotkeyLocator = Own(new ExplorerFolderLocator(_pasteHotkey, _ui, dispatcher));
+
             // Explorer's activation can proceed from here; the rest is the tray's own UI.
             Gridline.LoadFonts();
             _trayIcons = Own(new TrayIcons());
@@ -167,6 +184,7 @@ internal sealed class TrayApplication : ApplicationContext
             _ephemeralItem = new ToolStripMenuItem("Ephemeral mode", null, (_, _) => ToggleEphemeral());
             _openLogsItem = new ToolStripMenuItem("Open logs", null, (_, _) => OpenLogs());
             _resumeAllItem = new ToolStripMenuItem("Resume all", null, (_, _) => ResumeAll());
+            _hotkeyItem = new ToolStripMenuItem(string.Empty, null, (_, _) => ShowSettings(SettingsSerializer.PasteHotkeyKey));
             _menu = Own(BuildMenu());
             _icon.ContextMenuStrip = _menu;
             _jobsWindow = Own(new JobsWindow(_jobs, _logStore) { Prompts = _prompts });
@@ -263,6 +281,7 @@ internal sealed class TrayApplication : ApplicationContext
             _resumeAllItem,
             new ToolStripSeparator(),
             _ephemeralItem,
+            _hotkeyItem,
             new ToolStripMenuItem("Settings…", null, (_, _) => ShowSettings()),
             _openLogsItem,
             new ToolStripSeparator(),
@@ -305,6 +324,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             return;
         }
+        StartHotkey();
         try
         {
             _settings.Watch(_ui);
@@ -349,7 +369,7 @@ internal sealed class TrayApplication : ApplicationContext
                 _notifier.Show(ToastText.ForInterrupted(interrupted), ToastTarget.Jobs);
                 break;
             case StartupToast.TrayHint:
-                _notifier.Show(ToastText.ForTrayHint(), ToastTarget.None);
+                _notifier.Show(ToastText.ForTrayHint(_settings.Current.PasteHotkey), ToastTarget.None);
                 break;
         }
 
@@ -377,6 +397,7 @@ internal sealed class TrayApplication : ApplicationContext
         }
         // A raised maxConcurrentJobs starts waiting jobs now, not at the next state change.
         _jobs.SettingsChanged();
+        _pasteHotkey.Apply(_hotkeyStartFailed ? null : _settings.Current.PasteHotkey);
         RefreshTray();
         ToastSettingsProblemsIfNew();
     }
@@ -438,6 +459,10 @@ internal sealed class TrayApplication : ApplicationContext
             previous?.Dispose();
         }
 
+        var hotkey = _settings.Current.PasteHotkey;
+        _hotkeyItem.Text = ToastText.HotkeyTrayLine(
+            HotkeyStatusRules.Derive(hotkey, _settings.LoadProblems, _pasteHotkey.HookFailed || _hotkeyStartFailed), hotkey);
+
         var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive, _jobs.Snapshots());
         _pauseAllItem.Checked = state.PauseAllChecked;
         _ephemeralItem.Checked = state.EphemeralChecked;
@@ -481,13 +506,49 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void ShowJobs() => _jobsWindow.ShowJobs();
 
-    private void ShowSettings()
+    private void ShowSettings(string? highlightKey = null)
     {
         if (_settingsWindow is null || _settingsWindow.IsDisposed)
         {
             _settingsWindow = new SettingsWindow(_settings, _logStore, _jobs);
         }
-        _settingsWindow.ShowSettings();
+        _settingsWindow.ShowSettings(highlightKey);
+    }
+
+    /// <summary>
+    /// The hotkey threads. A failure leaves the tray running without the hotkey; the tray
+    /// line then says "not active" until the tray is started again.
+    /// </summary>
+    private void StartHotkey()
+    {
+        try
+        {
+            _pasteHotkey.Start(_settings.Current.PasteHotkey);
+            _hotkeyLocator.Start();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ThreadStateException or OutOfMemoryException)
+        {
+            // Nothing else depends on the hotkey. A hook thread that did start must not take
+            // the key with no locator to paste it, so it is told to drop its hooks.
+            _hotkeyStartFailed = true;
+            _pasteHotkey.Apply(null);
+        }
+    }
+
+    /// <summary>
+    /// Exit: no new hotkey paste may start while jobs wind down. The locator goes first (it
+    /// waits on the hook's signal), then the hook thread is told to quit and unhooks itself.
+    /// </summary>
+    private void StopHotkey()
+    {
+        if (_owned.Remove(_hotkeyLocator))
+        {
+            DisposeQuietly(_hotkeyLocator);
+        }
+        if (_owned.Remove(_pasteHotkey))
+        {
+            DisposeQuietly(_pasteHotkey);
+        }
     }
 
     /// <summary>A checked "Pause all" turns it off again; leaving the click inert would read as broken.</summary>
@@ -648,6 +709,7 @@ internal sealed class TrayApplication : ApplicationContext
     {
         _shuttingDown = true;
         RevokeComServer();
+        StopHotkey();
         try
         {
             _prompts.Shutdown();

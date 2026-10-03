@@ -100,6 +100,56 @@ on files and folders. **Robo-Paste** appears on a folder, a drive and the empty 
 a folder window, but not when several folders are selected. Each item has its own icon since
 commit e13fa37; that Explorer shows it is not yet verified on Windows.
 
+With the classic menu open, one letter runs an item, as with Explorer's own: **Y** for
+Robo-Cop**y**, **U** for Robo-C**u**t, **B** for Ro**b**o-Paste. Explorer already uses C, T and
+P for its Copy, Cut and Paste. If another menu item uses the same letter, pressing it moves
+between the two and Enter runs the selected one. An install from before this change gets the
+letters when it is installed again. That the letters work as described is not yet verified on
+Windows.
+
+## Robo-Paste hotkey
+
+**Ctrl+Shift+V** in a File Explorer folder, or on the desktop, runs Robo-Paste into that
+folder: the same paste as right-clicking its background and choosing Robo-Paste. Nothing in
+this section is verified on Windows yet; the checks that will verify it are listed in
+[docs/decisions/0001-paste-hotkey.md](docs/decisions/0001-paste-hotkey.md).
+
+- It works while the tray app is running. A right-click starts the tray; the hotkey cannot.
+- Click in the folder's file list first. With focus in the navigation pane, the search box,
+  the address bar or a name being edited, the key goes to that control as usual (in text
+  fields Ctrl+Shift+V is paste as plain text).
+- Holding the keys down pastes once, and so does pressing them twice within half a second.
+- Ctrl+Z does not undo a Robo-Paste.
+- Pressed right after a Ctrl+C or Ctrl+X, it waits up to a second for that copy or cut to
+  reach the clipboard, and otherwise does nothing and says so, rather than paste what was on
+  the clipboard before. A Ctrl+C with nothing selected counts too: wait 2 seconds after it.
+- Libraries, This PC, the Recycle Bin, search results, Control Panel and zip folders are
+  refused with a notification, as with the right-click.
+- In ephemeral mode, keep using Robo-Copy and Robo-Cut: after a plain Ctrl+C or Ctrl+X,
+  clipboard managers and other apps that watch the clipboard can record the file list;
+  Robo-Copy and Robo-Cut mark it to be skipped. Windows' own clipboard history (Win+V) is
+  not expected to keep file lists at all (not yet verified).
+- Change it or turn it off in Settings (**Hotkey**), from the tray menu's hotkey line, or in
+  `config.json` (`"pasteHotkey": ""` is off). An install from before the hotkey existed gets
+  it switched on when upgraded. The message at the end of the install names it (an install
+  with `--quiet` shows none), and so does the tray's first notice, unless a notice about
+  interrupted pastes or a settings problem takes its place.
+- The combination is Ctrl, optionally Shift, and one key: A to Z, 0 to 9 or F1 to F12 (not
+  F10). Alt and the Windows key are not allowed, and neither are combinations File Explorer
+  already uses (Settings says why for each one).
+- In File Explorer and on the desktop the hotkey gets the combination before another app's
+  global shortcut for it would. Settings notes it when another app has registered the same
+  combination.
+
+How it works: while File Explorer or the desktop is the active window, the app watches the
+keyboard with a low-level keyboard hook, and removes the hook as soon as another window is
+active. It takes the combination only when the focus is in a file list, and lets every other
+key through. It records no keys. The one thing it keeps, in memory only, is the time of the
+last Ctrl+C or Ctrl+X in a file list and the clipboard's change counter at that moment, so a
+paste right after it can wait for the clipboard. Nothing about the hotkey is written to disk
+or to a log.
+The code that may touch the keyboard hook is confined to two files, which a test checks.
+
 ## Uninstall
 
 Settings, Apps, Installed apps, **RoboRightClick**, Uninstall. Or run
@@ -155,6 +205,15 @@ seconds, docs/testlog.md 2026-10-02). To start it by hand, run
 `startWithWindows` is off; after a sign-in on the test VM it appeared 7.4 seconds after
 Explorer started (same entry). `Get-Process RoboRightClick` shows whether it runs.
 
+**The hotkey does nothing.** The tray menu's hotkey line says whether it is on: "off"
+(turned off), "off (setting invalid)" (Settings shows the problem) or "not active" (Windows
+refused a hook the hotkey needs, or the hotkey could not start). A refused keyboard hook is
+tried again the next time File Explorer becomes the active window; if the line still says
+"not active", exit the tray from its menu and start it again. Check that the tray is running and that the focus is in the file list, not the
+navigation pane or a text field. In a File Explorer window running as administrator the
+hotkey is not expected to work, because Windows keeps its keys from a normal app (not yet
+verified).
+
 **A click does nothing.** Every refusal (nothing on the clipboard, too many items, a folder
 that is not on a drive) is reported as a Windows notification. If notifications are off or
 Do not disturb is on, check the notification center. If Explorer reports "Server execution
@@ -193,6 +252,9 @@ Windows and which are design decisions not yet measured. In plain words:
   but a different size.
 - After **Try again** completes a cut, the emptied source folders stay.
 - One click takes at most 250,000 items; select their folder instead.
+- The Robo-Paste hotkey refuses libraries and zip folders (Explorer's Ctrl+V pastes into
+  them), does nothing with focus in the navigation pane (Explorer's Ctrl+V pastes into the
+  selected folder there), and may wait or refuse right after a Ctrl+C or Ctrl+X.
 
 ## Scripting
 
@@ -226,7 +288,8 @@ afterwards. Robo-Paste accepts files copied with a plain Ctrl+C.
 
 Set `logging` to `ephemeral` (tray menu, Settings, or `config.json`). Then the app writes
 nothing about jobs to disk: no job files, no history, no temp files. Toasts name no paths,
-and clipboard writes are marked to stay out of clipboard history and cloud clipboard. The
+and clipboard writes are marked to be skipped by clipboard managers and other apps that
+watch the clipboard, clipboard history and cloud clipboard. The
 one file it writes is `config.json`, which holds the setting itself. History is kept in memory
 until the app exits. The change applies to jobs started after it. No crash log is written in
 ephemeral mode, nor for the rest of a session in which any ephemeral job ran. Job logs and a
@@ -258,6 +321,7 @@ Limits. The guarantee covers what this app writes, not what Windows records:
 | `notifyOnComplete` | `true` | toast when a job finishes (path-free in ephemeral mode) |
 | `showProgressWindow` | `true` | open a progress window for each paste, like Explorer's copy dialog |
 | `extraArgs.copy` / `extraArgs.move` | `""` | extra robocopy switches from an allow-list (`/J`, `/Z`, `/SL`, `/COMPRESS`, `/NOOFFLOAD`, `/FFT`, `/DST`, `/IORATE:n`, `/IOMAXSIZE:n`, `/THRESHOLD:n`); anything else is rejected |
+| `pasteHotkey` | `"Ctrl+Shift+V"` | the Robo-Paste hotkey (see above); `""` turns it off. Unlike the other settings, an invalid value turns it off (with a warning) instead of using the default. A file without this setting means the default |
 | `version` | `1` | the file's format version, written by the app; leave it as it is. A file without it is read as version 1; one that is not a positive whole number is treated like a newer version's file |
 
 A config.json written by a newer version of the app (a higher `version`) is read by an older

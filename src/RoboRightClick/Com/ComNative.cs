@@ -32,6 +32,24 @@ internal static partial class ComNative
     [LibraryImport("ole32.dll")]
     public static partial int CoCreateInstance(in Guid rclsid, nint pUnkOuter, uint dwClsContext, in Guid riid, out nint ppv);
 
+    public const uint COINIT_MULTITHREADED = 0x0;
+
+    /// <summary>S_OK, or S_FALSE when the thread was already in the MTA.</summary>
+    [LibraryImport("ole32.dll")]
+    public static partial int CoInitializeEx(nint pvReserved, uint dwCoInit);
+
+    /// <summary>Lets <see cref="CoCancelCall"/> cancel this thread's outgoing synchronous calls.</summary>
+    [LibraryImport("ole32.dll")]
+    public static partial int CoEnableCallCancellation(nint pReserved);
+
+    /// <summary>Cancels the outgoing call the given (native) thread is blocked in; that call returns RPC_E_CALL_CANCELED.</summary>
+    [LibraryImport("ole32.dll")]
+    public static partial int CoCancelCall(uint dwThreadId, uint ulTimeout);
+
+    /// <summary>The path is CoTaskMem-allocated; the caller frees it.</summary>
+    [LibraryImport("shell32.dll")]
+    public static partial int SHGetKnownFolderPath(in Guid rfid, uint dwFlags, nint hToken, out nint ppszPath);
+
     /// <summary>Process-wide, once, before any COM object exists.</summary>
     [LibraryImport("ole32.dll")]
     public static partial int CoInitializeSecurity(

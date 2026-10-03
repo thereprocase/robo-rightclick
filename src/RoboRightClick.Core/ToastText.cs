@@ -43,6 +43,25 @@ public enum VerbRefusal
     SelectionTooLarge,
 
     /// <summary>
+    /// The Robo-Paste hotkey: File Explorer did not say which folder is open within
+    /// <see cref="HotkeyDeadline.BudgetMs"/>. Nothing is pasted, and a late answer is dropped.
+    /// </summary>
+    ExplorerNotResponding,
+
+    /// <summary>
+    /// The Robo-Paste hotkey: no single open File Explorer tab matched the one that had the
+    /// keyboard focus, so nothing is pasted rather than guessing (never a neighboring tab).
+    /// </summary>
+    FolderNotIdentified,
+
+    /// <summary>
+    /// The Robo-Paste hotkey right after a Ctrl+C or Ctrl+X: the copy or cut had not reached
+    /// the clipboard within <see cref="ClipboardGuard.WaitMs"/>, so pasting would have used
+    /// the previous clipboard (<see cref="ClipboardGuard"/>).
+    /// </summary>
+    ClipboardNotReady,
+
+    /// <summary>
     /// Something unexpected stopped the verb before it could hand anything on. Without this,
     /// an exception inside the dispatcher would leave the click with no visible result.
     /// </summary>
@@ -164,7 +183,7 @@ public static class ToastText
             ToastKind.Warning),
         VerbRefusal.DestinationNotFileSystem => new(
             "Can't Robo-Paste here",
-            "Robo-Paste works in folders on a drive or network share.",
+            "Robo-Paste works in folders on a drive or network share, not in libraries, zip files or other virtual folders.",
             ToastKind.Warning),
         VerbRefusal.NotOneDestination => new("Can't Robo-Paste here", "Select one destination folder.", ToastKind.Warning),
         VerbRefusal.SelectionNotFiles => new(
@@ -176,6 +195,21 @@ public static class ToastText
             "Too many items selected",
             $"Robo-Copy, Robo-Cut and Robo-Paste take up to {SelectionLimits.MaxItems:N0} selected items at once, "
                 + "fewer when their paths are very long. Select the folder that holds them instead.",
+            ToastKind.Warning),
+        VerbRefusal.ExplorerNotResponding => new(
+            "File Explorer isn't responding",
+            "Robo-Paste couldn't find out which folder is open, so nothing was pasted. Try again in a moment.",
+            ToastKind.Warning),
+        VerbRefusal.FolderNotIdentified => new(
+            "Can't tell which folder is open",
+            "Nothing was pasted. Click in the folder's file list and try again, or right-click its background and use Robo-Paste.",
+            ToastKind.Warning),
+        // The guard cannot tell a slow copy from a Ctrl+C that copied nothing (no selection),
+        // so the text blames neither; after RecentMs the guard no longer applies.
+        VerbRefusal.ClipboardNotReady => new(
+            "Clipboard not ready",
+            "The clipboard hasn't changed since the Ctrl+C or Ctrl+X just before, so nothing was pasted. "
+                + $"Wait {ClipboardGuard.RecentMs / 1000} seconds and try again to paste what the clipboard holds then.",
             ToastKind.Warning),
         VerbRefusal.Failed => new("Something went wrong", "Robo-Copy, Robo-Cut or Robo-Paste could not finish. Try again.", ToastKind.Warning),
         _ => throw new ArgumentOutOfRangeException(nameof(refusal)),
@@ -199,11 +233,29 @@ public static class ToastText
         "It was asked to close, but jobs are still running. Try again when they finish.",
         ToastKind.Warning);
 
-    /// <summary>First tray start: Windows 11 puts new tray icons in the hidden overflow.</summary>
-    public static Toast ForTrayHint() => new(
+    /// <summary>Windows cuts a balloon's text at 255 characters (NOTIFYICONDATA.szInfo).</summary>
+    public const int MaxBalloonText = 255;
+
+    /// <summary>
+    /// First tray start after an install or upgrade: Windows 11 puts new tray icons in the
+    /// hidden overflow. With the hotkey on, one sentence names it, so an upgrade that turns
+    /// it on (a config without "pasteHotkey" means the default) says so.
+    /// </summary>
+    public static Toast ForTrayHint(HotkeySpec? pasteHotkey = null) => new(
         "RoboRightClick is running",
-        "Right-click files, then Show more options, for Robo-Copy, Robo-Cut and Robo-Paste. Drag this icon out of the overflow to keep it visible.",
+        "Right-click files, then Show more options, for Robo-Copy, Robo-Cut and Robo-Paste. "
+            + (pasteHotkey is null ? string.Empty : $"{pasteHotkey.Format()} in a folder runs Robo-Paste (Settings changes it). ")
+            + "Drag this icon out of the overflow to keep it visible.",
         ToastKind.Info);
+
+    /// <summary>The tray menu's hotkey line; it opens Settings, hence the ellipsis.</summary>
+    public static string HotkeyTrayLine(HotkeyStatus status, HotkeySpec? pasteHotkey) => status switch
+    {
+        HotkeyStatus.Active when pasteHotkey is not null => $"Robo-Paste hotkey: {pasteHotkey.Format()}…",
+        HotkeyStatus.Invalid => "Robo-Paste hotkey: off (setting invalid)…",
+        HotkeyStatus.Failed => "Robo-Paste hotkey: not active…",
+        _ => "Robo-Paste hotkey: off…",
+    };
 
     /// <summary>
     /// Path-free in every mode: setting names only. Shows the first problem so the user

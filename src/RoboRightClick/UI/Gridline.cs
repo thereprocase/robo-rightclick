@@ -993,6 +993,15 @@ internal static class Gridline
             };
             UseFont(Box, mono ? Face.Mono : Face.Sans, SizeUi);
             Controls.Add(Box);
+
+            // A disabled edit keeps an explicitly set BackColor, which would leave a white box
+            // inside the grey panel OnPaint draws; the box follows the panel instead. Its text
+            // grey is the system's disabled colour, which an edit control does not let us set.
+            Box.EnabledChanged += (_, _) =>
+            {
+                Box.BackColor = Box.Enabled ? White : GrayLight;
+                Invalidate();
+            };
         }
 
         public TextBox Box { get; }

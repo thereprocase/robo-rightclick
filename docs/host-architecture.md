@@ -17,8 +17,9 @@ One process, `RoboRightClick.exe`. Arrows are "calls".
 
 ```
 Explorer ──COM (out-of-proc)──▶ Com/ClassFactory ─▶ Com/VerbCommand ─▶ IVerbHandler
-CLI (same exe) ─▶ Cli/CliRunner ─▶ Com/ComClient ──COM──┘                   │
-                                                                            ▼
+CLI (same exe) ─▶ Cli/CliRunner ─▶ Com/ComClient ──COM──┘                   ▲  │
+Keyboard ─▶ App/PasteHotkey (LL hook) ─▶ Verbs/ExplorerFolderLocator ───────┘  │ (UI post)
+                                         └──COM──▶ Explorer's ShellWindows     ▼
                                 Verbs/VerbDispatcher ─▶ Verbs/ClipboardService (Win32 clipboard)
                                           │ PasteOrder (raw paths, nothing resolved)
                                           ▼
@@ -43,7 +44,9 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `App/SettingsStore.cs` | config.json load (per-field fallback), watch, atomic save, `.bad` copy, change event. |
 | `App/TrayIcons.cs` | GDI+-drawn icons per `TrayIconState` × ephemeral tint. |
 | `App/HostEnvironment.cs` | `AppPaths`, version, exe path, user SID, install-location check. |
-| `App/AppNative.cs` | Small user32/kernel32 imports for the app shell. |
+| `App/AppNative.cs` | Small user32/kernel32 imports for the app shell (and the Settings hotkey probe). |
+| `App/PasteHotkey.cs` | The Robo-Paste hotkey's hook thread: foreground WinEvent hook, scoped `WH_KEYBOARD_LL` hook, latch, capture slot (docs/decisions/0001-paste-hotkey.md). |
+| `App/KeyboardHookNative.cs` | The hook imports. With PasteHotkey.cs the only file allowed to name the hook APIs (`scripts/test.sh`). |
 | `Com/ComInterfaces.cs` | `[GeneratedComInterface]` declarations, HRESULTs, shell constants. |
 | `Com/ComNative.cs` | ole32/shell32 imports, the process `StrategyBasedComWrappers`. |
 | `Com/ComCallerSecurity.cs` | `CoInitializeSecurity` and the caller integrity check. |
@@ -55,6 +58,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `Verbs/VerbDispatcher.cs` | What copy / cut / paste do once paths arrive. No file-system calls. |
 | `Verbs/ClipboardService.cs` | Raw Win32 clipboard with a message-only owner window. |
 | `Verbs/ClipboardNative.cs` | user32/kernel32/shell32 clipboard imports. |
+| `Verbs/ExplorerFolderLocator.cs` | Hotkey press → open folder (ShellWindows, tab match, `IFolderView::GetFolder`) or desktop folder; watchdog; clipboard guard; hands the folder to `IVerbHandler.Invoke`. |
 | `Jobs/JobManager.cs` | All jobs: enqueue, queue policy, claims, control, snapshots, events, retry. |
 | `Jobs/Job.cs` | One job's lifecycle (doc comment is the flow spec); `JobServices`, `JobStart`. |
 | `Jobs/PauseGate.cs` | A job's pause latch shared by its steps. |
@@ -95,7 +99,7 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `ClipboardPayload.cs` | `DROPFILES` and drop-effect bytes, decode limits, exclusion formats. | implemented, tested, sabotage-checked |
 | `ComSecurity.cs` | COM access and launch descriptors (SDDL). | implemented, tested, sabotage-checked |
 | `Registration.cs` | HKCU footprint as typed data; Installed-apps entry; autostart resolver. | implemented, tested |
-| `ShellVerbs.cs` | Verb table: CLSIDs, labels, associations, `MultiSelectModel`. | implemented, tested |
+| `ShellVerbs.cs` | Verb table: CLSIDs, labels, menu labels with access keys, associations, `MultiSelectModel`. | implemented, tested, sabotage-checked (access keys) |
 | `CommandLine.cs` | CLI grammar → `CliCommand`; exit codes. | implemented, tested |
 | `TrayStatus.cs` | `JobSnapshot` (incl. refusals, damage, failure, wait, cancel); tray state, tooltip. | implemented, tested |
 | `ToastText.cs` | Job toasts (path-free in ephemeral), refusal and settings toasts. | implemented, tested |
@@ -112,6 +116,9 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | `UninstallPlan.cs` | Exactly which files and folders uninstall removes; the validated self-delete command. | implemented, tested, sabotage-checked |
 | `ConflictSelection.cs`, `JobStateText.cs`, `ProgressWindowPolicy.cs`, `ToastBatch.cs` | Conflict-dialog ticks, state wording, when a progress window opens or turns into the summary, toast coalescing. | implemented, tested |
 | `StartupRules.cs` | Tray start, exit, menu state, startup toast choice, conflict-to-front. | implemented, tested |
+| `HotkeySpec.cs` | `pasteHotkey` grammar, canonical form, reserved combinations with reasons, virtual-key mapping. | implemented, tested, sabotage-checked |
+| `HotkeyGate.cs` | `HotkeyMatcher`, `HotkeyLatch`, `HotkeyRepeatGuard` (double tap), `HotkeyGate.Decide` (file-list allow-list), window-class classification, `HotkeyStatus`. | implemented, tested, sabotage-checked |
+| `HotkeyTarget.cs` | `HotkeyPress`, `TabMatch.Choose`, `PasteFolderRule`, `HotkeyDeadline`, `ClipboardGuard`. | implemented, tested, sabotage-checked |
 | `WinPath.cs` | Windows path rules as strings, incl. `ExtendedLengthPath` / `StripVerbatimPrefix` for raw Win32 calls. | implemented, tested |
 
 ## 2. Threading model
@@ -123,6 +130,8 @@ App/TrayApplication (composition root)     │            ├─ Jobs/InProcessC
 | **Job workers** | `Job.RunAsync` continuations on the thread pool; steps sequential inside a job, jobs parallel. | Never touch UI objects. Ask the user only through `IJobPrompts`. Clipboard clear goes through `JobServices.ClearClipboardIfUnchanged`, which posts to the UI thread. Never call the sink, an event or the UI while holding the job lock. |
 | **Pipe reader + consumer** | Per robocopy run: a reader that only drains the pipe into a bounded channel of line batches (64), and a consumer that parses, updates the ledger (one lock per batch) and writes to the sink. | The channel absorbs bursts: a sink that is briefly slow (antivirus scanning robocopy.log) does not hold up the pipe, and a sink or parser that throws never stops the drain. It is bounded on purpose, so memory stays bounded: a sink that stays slower than robocopy's output, or blocks, fills the channel, the reader then waits, and robocopy waits on its next log write until the consumer catches up. |
 | **Progress sampler** | One `PeriodicTimer` loop for the app (333 ms). | Skips runs whose gate is closed. Disposing a run's tracking blocks until its in-flight callback returns. |
+| **Hotkey hook** (`PasteHotkey`) | One dedicated background thread, above-normal priority, with its own message loop: the foreground WinEvent hook and, while File Explorer or the desktop is in front, the `WH_KEYBOARD_LL` hook. Started after `SignalReady`; settings changes post a new immutable spec to it; on exit WM_QUIT, unhook on this thread, joined for 1 s. | The keyboard callback allocates nothing, calls nothing that sends a window message, passes the key on any failure, and only fills a preallocated slot and signals an event. No logging of any kind. Windows removes the process's hooks if it dies. |
+| **Hotkey locator** (`ExplorerFolderLocator`) | One long-lived background MTA thread, one press at a time (a press while one is in flight is taken and ignored). | Calls File Explorer out of process (ShellWindows → `IShellBrowser` → `IFolderView`); a 1.5 s watchdog from the key's tick abandons the press, toasts, `CoCancelCall`s the stuck call and drops a late answer. Never touches UI objects: results go to `IVerbHandler` through a UI-thread post. Abandoned if stuck at exit. |
 
 Shared state: each `Job` guards lifecycle, ledger, progress and errors with one private lock;
 `Snapshot()` copies under it into an immutable `JobSnapshot`. `JobManager` guards its job list
@@ -154,8 +163,23 @@ are alphabetical and must not be used for ordering. IIDs and order were checked 
 `SIGDN_FILESYSPATH = 0x80058000`. `BHID_DataObject = {B8C0BD9F-ED24-455C-83E6-D5390C4FE8C4}`.
 Strings from `GetDisplayName` are freed with `Marshal.FreeCoTaskMem`. Unused methods keep
 placeholder signatures because they hold vtable slots. Every proxy received from Explorer is
-released deterministically on the UI thread with `ComObject.FinalRelease()`, never left to the
-finalizer thread.
+released deterministically with `ComObject.FinalRelease()`, never left to the finalizer
+thread: the selection's on the UI thread, the hotkey locator's on the locator thread, which
+is the thread (MTA) that obtained them.
+
+The hotkey locator is a COM client of File Explorer's ShellWindows (slots checked against
+Wine's `exdisp.idl`, `servprov.idl`, `oleidl.idl` and `shobjidl.idl`):
+
+| Interface | IID | Methods in vtable order |
+|---|---|---|
+| `IShellWindows` | `85CB6900-4D95-11CF-960C-0080C7F4EE85` | IDispatch's 4, then Count, Item(VARIANT, IDispatch**), _NewEnum, Register, RegisterPending, Revoke, OnNavigate, OnActivated, FindWindowSW, OnCreated, ProcessAttachDetach |
+| `IServiceProvider` (`IOleServiceProvider`) | `6D5140C1-7436-11CE-8034-00AA006009FA` | QueryService (one slot; RemoteQueryService is its `call_as` form) |
+| `IShellBrowser` | `000214E2-0000-0000-C000-000000000046` | IOleWindow's GetWindow, ContextSensitiveHelp, then InsertMenusSB, SetMenuSB, RemoveMenusSB, SetStatusTextSB, EnableModelessSB, TranslateAcceleratorSB, BrowseObject, GetViewStateStream, GetControlWindow, SendControlMsg (`[local]`, still a slot), QueryActiveShellView (slot 15), OnViewWindowActive, SetToolbarItems |
+| `IFolderView` | `CDE725B0-CCC9-4519-917E-325D72FAB4CE` | GetCurrentViewMode, SetCurrentViewMode, GetFolder (slot 5), Item, ItemCount, Items, GetSelectionMarkedItem, GetFocusedItem, GetItemPosition, GetSpacing, GetDefaultSpacing, GetAutoArrange, SelectItem, SelectAndPositionItems |
+
+`CLSID_ShellWindows = {9BA05972-F6A8-11CF-A442-00A0C90A8F39}`,
+`SID_STopLevelBrowser = {4C96BE40-915C-11CF-99D3-00AA004AE837}`. The `Item` index is a VT_I4
+VARIANT passed by value as a blittable 24-byte struct (`VariantInt32`, win-x64 layout).
 
 ### Identities (fixed; changing one orphans installed keys)
 
@@ -231,7 +255,7 @@ key and the app's own Uninstall key.
 | ⌫ `Software\Classes\AppID\{B708F29C-…}` | (default) / `AccessPermission` / `LaunchPermission` | `RoboRightClick` / SD / SD (REG_BINARY from SDDL) |
 | ⌫ `Software\Classes\CLSID\{verb clsid}` | (default) / `AppID` | `RoboRightClick Robo-Copy` / `{B708F29C-…}` |
 | `…\CLSID\{verb clsid}\LocalServer32` | (default) | `"<install dir>\RoboRightClick.exe"` |
-| ⌫ `Software\Classes\<assoc>\shell\<Verb>` | `MUIVerb` / `MultiSelectModel` | `Robo-Copy` / `Player` (copy, cut) or `Single` (paste) |
+| ⌫ `Software\Classes\<assoc>\shell\<Verb>` | `MUIVerb` / `MultiSelectModel` | `Robo-Cop&y` (`Robo-C&ut`, `Ro&bo-Paste`: `ShellVerbInfo.MenuLabel`, one access key each; the CLSID name keeps the plain `Label`) / `Player` (copy, cut) or `Single` (paste) |
 | (same key) | `Icon` | `<install dir>\robo-copy.ico` (`robo-cut.ico`, `robo-paste.ico`): written by install beside the exe, deleted by uninstall; one pixel-fitted frame per display scale, 16–48 px |
 | `…\shell\<Verb>\command` | `DelegateExecute` | `{verb clsid}` |
 | ⌫ `Software\Microsoft\Windows\CurrentVersion\Uninstall\RoboRightClick` | `DisplayName`, `DisplayVersion`, `DisplayIcon`, `InstallLocation`, `UninstallString`, `NoModify`=1, `NoRepair`=1 | Settings → Apps → Installed apps entry |
@@ -421,8 +445,11 @@ Step execution:
   (attention > running > paused > idle; tooltip ≤ 127 chars). Left click and double click open
   Jobs. Menu: Jobs…, Pause all (checked while on), Resume all, Ephemeral mode (check),
   Settings…, Open logs (hidden in ephemeral), Exit (confirms when jobs are active, with the
-  Gridline confirmation). The installer starts the tray with `--after-install`; that start,
-  and only that one, shows the hint about pinning the tray icon (`StartupRules.PickStartupToast`).
+  Gridline confirmation). Between Ephemeral mode and Settings… a hotkey line
+  (`ToastText.HotkeyTrayLine`: the combination, "off", "off (setting invalid)" or "not
+  active") opens Settings at the Hotkey field. The installer starts the tray with
+  `--after-install`; that start, and only that one, shows the hint about pinning the tray
+  icon, which also names the hotkey when it is on (`StartupRules.PickStartupToast`).
   Settings are saved off the UI thread (`SettingsStore.SaveAsync`); a reload re-runs the
   start queue (`JobManager.SettingsChanged`).
 - **Jobs window**, **Settings window**, **Conflict dialog**, **Error summary**: specified in
@@ -580,6 +607,9 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Generated COM vtables match the shell's (`[GeneratedComInterface]` on these IDLs) | verified for every method the app calls: `IClassFactory`, `IExecuteCommand`, `IObjectWithSelection`, `IInitializeCommand`, `IShellItemArray.BindToHandler`/`GetCount`, `IDataObject.GetData` (testlog 2026-10-02) |
 | Install and uninstall footprint, verbs against Explorer, cut safety, cancel cleanup and ephemeral mode through every `scripts/e2e` script | verified (testlog 2026-10-02, user experience entry: `Run-All.ps1`, all seven scripts pass on the final build, Ephemeral with judged Windows noise excluded) |
 | Every Gridline surface (install offer and results, progress, Jobs, conflict, error summary, settings, tray menu and icons, toasts) | verified on screen at 100% and 150% (testlog 2026-10-02, user experience entry, `docs/evidence/2026-10-02/12-30`); the tray's four error notices **unverified** |
+| Robo-Paste hotkey: hook scoping, gate, latch, tab capture, folder lookup, watchdog, clipboard guard, Settings row, tray line | **unverified**; Core decisions tested and sabotage-checked on Linux; the release gate is in docs/decisions/0001-paste-hotkey.md |
+| `IShellBrowser::GetWindow` returns the tab's `ShellTabWindowClass` window | **unverified** (gate 2); if it returns the frame instead, every Explorer hotkey press is refused, never misdirected |
+| Classic-menu access keys (Y, U, B) run their items | **unverified** (gate 14) |
 | Everything else in the host | **unverified**; cross-compiles only |
 
 ## 13. Work packages (disjoint file ownership)

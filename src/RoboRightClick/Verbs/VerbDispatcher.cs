@@ -9,7 +9,9 @@ namespace RoboRightClick.Verbs;
 
 /// <summary>
 /// What each verb does once the COM layer has its paths. Invoked on the UI thread from
-/// Execute; the work is queued on the same thread so Execute returns immediately. Verbs run
+/// Execute, or from a post by the Robo-Paste hotkey's locator, which hands over the open
+/// folder exactly as a folder-background click would; the work is queued on the same thread
+/// so the caller returns immediately. Verbs run
 /// strictly one after another in click order (an async queue: the next starts when the
 /// previous one's clipboard access finished), so a copy followed at once by a paste sees
 /// its own clipboard write. No file-system call happens here: the UI thread also serves

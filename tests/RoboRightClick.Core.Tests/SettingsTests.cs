@@ -17,6 +17,7 @@ public class SettingsTests
         Assert.Equal(LoggingMode.Normal, d.Logging);
         Assert.Equal(ExtraArgs.None, d.ExtraArgs);
         Assert.True(d.ShowProgressWindow);
+        Assert.Equal("Ctrl+Shift+V", d.PasteHotkey?.Format());
     }
 
     [Fact]
@@ -36,6 +37,7 @@ public class SettingsTests
             NotifyOnComplete = false,
             ShowProgressWindow = false,
             ExtraArgs = new ExtraArgs("/J", "/Z /IORATE:50M"),
+            PasteHotkey = HotkeySpec.Parse("Ctrl+F9").Spec,
         };
 
         var result = SettingsSerializer.Parse(SettingsSerializer.Serialize(s));
@@ -94,11 +96,13 @@ public class SettingsTests
     [InlineData("not json")]
     [InlineData("[1,2]")]
     [InlineData("")]
-    public void Unreadable_config_yields_defaults(string json)
+    public void Unreadable_config_yields_defaults_with_the_hotkey_off(string json)
     {
         var result = SettingsSerializer.Parse(json);
-        Assert.Equal(Settings.Default, result.Settings);
-        Assert.Single(result.Problems);
+        Assert.True(result.Unreadable);
+        Assert.Equal(Settings.Default with { PasteHotkey = null }, result.Settings);
+        Assert.Equal(2, result.Problems.Count);
+        Assert.Equal(SettingsSerializer.PasteHotkeyUnreadableProblem, Assert.Single(result.Problems, SettingsSerializer.IsPasteHotkeyProblem));
     }
 
     [Fact]

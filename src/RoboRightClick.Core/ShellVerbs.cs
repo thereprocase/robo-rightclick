@@ -14,13 +14,23 @@ public enum ShellVerb
 /// "Player": the whole selection arrives in one Execute call. "Single": the shell shows the
 /// item only for a single selection, which is how Explorer's own Paste behaves on folders.
 /// </param>
+/// <param name="Label">The plain name, without an access key: the COM class name, messages, toasts.</param>
+/// <param name="MenuLabel">
+/// The classic-menu text (MUIVerb): <paramref name="Label"/> with one "&amp;" before its
+/// access key, so a keyboard user can run the item with one letter once the menu is open.
+/// </param>
 public sealed record ShellVerbInfo(
     ShellVerb Verb,
     Guid Clsid,
     string KeyName,
     string Label,
+    string MenuLabel,
     IReadOnlyList<string> Associations,
-    string MultiSelectModel);
+    string MultiSelectModel)
+{
+    /// <summary>The letter after the "&amp;" in <see cref="MenuLabel"/>, upper case.</summary>
+    public char AccessKey => char.ToUpperInvariant(MenuLabel[MenuLabel.IndexOf('&', StringComparison.Ordinal) + 1]);
+}
 
 /// <summary>
 /// The verb table. The CLSIDs are part of the installed registry footprint and of the
@@ -34,19 +44,23 @@ public static class ShellVerbs
     /// </summary>
     public static readonly Guid AppId = new("b708f29c-8ed8-40bd-832e-f05180f1b285");
 
+    // Access keys: the obvious letters are Explorer's own (C Copy, P Paste, T Cut, O Open,
+    // R Properties, A Copy as path, E Edit or Refresh), so each label's free letter is used.
+    // U is Undo, but only on the folder-background menu, where Robo-Cut never appears.
+    // A duplicate letter would still work: Windows then cycles through the items with it.
     public static readonly ShellVerbInfo RoboCopy = new(
         ShellVerb.RoboCopy, new Guid("bd15dc6a-fbc1-4949-b61d-3b8fc390062f"),
-        "RoboCopy", "Robo-Copy", ["AllFilesystemObjects"], "Player");
+        "RoboCopy", "Robo-Copy", "Robo-Cop&y", ["AllFilesystemObjects"], "Player");
 
     public static readonly ShellVerbInfo RoboCut = new(
         ShellVerb.RoboCut, new Guid("1a061376-a3f7-41bf-a516-e635ed91acdf"),
-        "RoboCut", "Robo-Cut", ["AllFilesystemObjects"], "Player");
+        "RoboCut", "Robo-Cut", "Robo-C&ut", ["AllFilesystemObjects"], "Player");
 
     // Background = right-click on empty space inside a folder; Directory and Drive =
     // right-click on a folder or drive, pasting into it, as Explorer's own Paste does.
     public static readonly ShellVerbInfo RoboPaste = new(
         ShellVerb.RoboPaste, new Guid("9d1bae79-13c3-427f-a7e6-34150d5c49ab"),
-        "RoboPaste", "Robo-Paste", [BackgroundAssociation, "Directory", "Drive"], "Single");
+        "RoboPaste", "Robo-Paste", "Ro&bo-Paste", [BackgroundAssociation, "Directory", "Drive"], "Single");
 
     public static readonly IReadOnlyList<ShellVerbInfo> All = [RoboCopy, RoboCut, RoboPaste];
 

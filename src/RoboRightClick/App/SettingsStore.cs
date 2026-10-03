@@ -95,9 +95,12 @@ internal sealed class SettingsStore : IDisposable
             if (readFailed)
             {
                 // A file that exists but could not be read is treated like one that could not
-                // be parsed: defaults for now, and a .bad copy before anything overwrites it.
-                _lastLoadUnreadable = true;
-                _loadProblems = ["config could not be read; using defaults"];
+                // be parsed: defaults with the hotkey off for now, and a .bad copy before
+                // anything overwrites it.
+                var result = SettingsSerializer.UnreadableResult("config could not be read; using defaults");
+                _lastLoadUnreadable = result.Unreadable;
+                _current = result.Settings;
+                _loadProblems = result.Problems;
             }
         }
     }

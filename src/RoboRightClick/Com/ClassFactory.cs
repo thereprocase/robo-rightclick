@@ -11,9 +11,11 @@ namespace RoboRightClick.Com;
 internal interface IVerbHandler
 {
     /// <summary>
-    /// Called on the UI (STA) thread inside Explorer's Execute call. Must return quickly:
-    /// Explorer waits on it. Implementations post the real work and return. The paths are
-    /// untrusted (any same-user COM client can send them) and are checked by the handler.
+    /// Called on the UI (STA) thread: inside Explorer's Execute call for a menu click, or from
+    /// a UI-thread post for the Robo-Paste hotkey (<see cref="Verbs.ExplorerFolderLocator"/>).
+    /// Must return quickly: Explorer, or the next click, waits on it. Implementations post the
+    /// real work and return. The paths are untrusted (any same-user COM client can send them,
+    /// and the hotkey's folder comes from File Explorer) and are checked by the handler.
     /// </summary>
     /// <param name="skippedItems">Selected items that had no file-system path.</param>
     /// <param name="shellIdList">
@@ -23,9 +25,10 @@ internal interface IVerbHandler
     void Invoke(ShellVerb verb, IReadOnlyList<string> paths, int skippedItems, byte[]? shellIdList);
 
     /// <summary>
-    /// Called on the UI thread inside Execute when the selection was refused before any path
-    /// could be handed on (<see cref="VerbRefusal.SelectionTooLarge"/>), so the click does not
-    /// end in silence. Must return quickly: implementations post the toast and return.
+    /// Called on the UI thread when a click or hotkey press was refused before any path could
+    /// be handed on (<see cref="VerbRefusal.SelectionTooLarge"/> inside Execute; the hotkey's
+    /// own refusals from a UI-thread post), so it does not end in silence. Must return
+    /// quickly: implementations post the toast and return.
     /// </summary>
     void RefuseSelection(ShellVerb verb, VerbRefusal refusal);
 }

@@ -588,6 +588,139 @@ function Restore-RoboConfig([string]$OriginalText) {
 }
 
 # ---------------------------------------------------------------------------
+# File Explorer windows and the Robo-Paste hotkey (Hotkey.Tests.ps1, Ephemeral.Tests.ps1)
+# ---------------------------------------------------------------------------
+
+function Initialize-WindowNative {
+    if ('RrcWindowNative' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class RrcWindowNative {
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+}
+'@
+}
+
+# SendKeys reads + ^ % ~ ( ) { } [ ] as commands. A path must be escaped: a short %TEMP%
+# path such as C:\Users\ABCDEF~1\... contains a ~, which SendKeys sends as Enter.
+function ConvertTo-SendKeysText([string]$Text) {
+    return [regex]::Replace($Text, '[+^%~(){}\[\]]', { param($m) '{' + $m.Value + '}' })
+}
+
+function Get-ExplorerWindows {
+    $shell = New-Object -ComObject Shell.Application
+    return @($shell.Windows())
+}
+
+# Closes every File Explorer window, so the next one opened is the only one.
+function Close-ExplorerWindows {
+    foreach ($w in Get-ExplorerWindows) { try { $w.Quit() } catch { } }
+    $deadline = (Get-Date).AddSeconds(10)
+    while (@(Get-ExplorerWindows).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+}
+
+# The folder path a ShellWindows entry shows, or $null (virtual locations have none).
+function Get-ExplorerWindowPath($Window) {
+    try { return $Window.Document.Folder.Self.Path } catch { return $null }
+}
+
+function Wait-ExplorerShows([string]$Path, [int]$TimeoutSec = 15) {
+    $want = $Path.TrimEnd('\')
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-Date) -lt $deadline) {
+        foreach ($w in Get-ExplorerWindows) {
+            $p = Get-ExplorerWindowPath $w
+            if ($p -and $p.TrimEnd('\') -ieq $want) { return $w }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw "File Explorer did not show $Path within $TimeoutSec s."
+}
+
+function Set-ForegroundWindowFirmly([IntPtr]$Hwnd) {
+    Initialize-WindowNative
+    for ($i = 0; $i -lt 5; $i++) {
+        [void][RrcWindowNative]::ShowWindow($Hwnd, 9) # SW_RESTORE
+        [void][RrcWindowNative]::SetForegroundWindow($Hwnd)
+        Start-Sleep -Milliseconds 300
+        if ([RrcWindowNative]::GetForegroundWindow() -eq $Hwnd) { return }
+        # Windows lets a process take the foreground right after it sent input; a tap of Alt
+        # is that input.
+        [RrcWindowNative]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+        [RrcWindowNative]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+    }
+    throw 'Could not bring the File Explorer window to the front.'
+}
+
+# Keyboard focus into the file list: the UI Automation element of File Explorer's item view
+# (class UIItemsView, the DirectUIHWND under SHELLDLL_DefView that the hotkey requires).
+function Set-ExplorerFileListFocus([IntPtr]$Hwnd) {
+    $window = [Windows.Automation.AutomationElement]::FromHandle($Hwnd)
+    $byClass = New-Object Windows.Automation.PropertyCondition ([Windows.Automation.AutomationElement]::ClassNameProperty), 'UIItemsView'
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        $list = $window.FindFirst([Windows.Automation.TreeScope]::Descendants, $byClass)
+        if ($list) { $list.SetFocus(); Start-Sleep -Milliseconds 300; return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw 'No file list (UIItemsView) found in the File Explorer window.'
+}
+
+<#
+Opens $Location (a folder, a zip file or a shell: location) in File Explorer, which must have
+no window open (Close-ExplorerWindows), brings the window to the front and puts the focus in
+its file list. Returns the window handle.
+#>
+function Open-ExplorerLocation([string]$Location, [int]$TimeoutSec = 15) {
+    Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList (Quote-Arg $Location) | Out-Null
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    $windows = @()
+    while ($windows.Count -eq 0 -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 250
+        $windows = @(Get-ExplorerWindows)
+    }
+    if ($windows.Count -eq 0) { throw "File Explorer did not open $Location within $TimeoutSec s." }
+    $hwnd = [IntPtr][long]$windows[0].HWND
+    Set-ForegroundWindowFirmly $hwnd
+    Set-ExplorerFileListFocus $hwnd
+    return $hwnd
+}
+
+# The default hotkey, as one press and release. SendKeys input is injected at this script's
+# integrity level, which the hook accepts (it refuses only lower-integrity injection).
+function Send-PasteHotkey { [System.Windows.Forms.SendKeys]::SendWait('^+v') }
+
+# The default hotkey held down: Ctrl and Shift, then V repeating every 33 ms as a held key
+# does, then the releases.
+function Send-PasteHotkeyHeld([int]$Milliseconds = 2000) {
+    Initialize-WindowNative
+    $ctrl = 0x11; $shift = 0x10; $v = 0x56; $keyUp = 2
+    [RrcWindowNative]::keybd_event($ctrl, 0, 0, [UIntPtr]::Zero)
+    [RrcWindowNative]::keybd_event($shift, 0, 0, [UIntPtr]::Zero)
+    $deadline = (Get-Date).AddMilliseconds($Milliseconds)
+    do {
+        [RrcWindowNative]::keybd_event($v, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 33
+    } while ((Get-Date) -lt $deadline)
+    [RrcWindowNative]::keybd_event($v, 0, $keyUp, [UIntPtr]::Zero)
+    [RrcWindowNative]::keybd_event($shift, 0, $keyUp, [UIntPtr]::Zero)
+    [RrcWindowNative]::keybd_event($ctrl, 0, $keyUp, [UIntPtr]::Zero)
+}
+
+# A second paste of the same file into the same folder asks Replace or Skip (conflictDefault
+# "ask"); no such question means there was no second paste.
+function Test-ConflictQuestionShown {
+    foreach ($p in Get-RoboProcesses) {
+        if (Find-UiaElement $p.Id 'Replace') { return $true }
+    }
+    return $false
+}
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -596,11 +729,11 @@ function Restore-RoboConfig([string]$OriginalText) {
 # If one of them changes, change this table in the same commit.
 $script:AppId = '{B708F29C-8ED8-40BD-832E-F05180F1B285}'
 $script:Verbs = @(
-    @{ Key = 'RoboCopy'; Label = 'Robo-Copy'; Icon = 'robo-copy.ico'; Clsid = '{BD15DC6A-FBC1-4949-B61D-3B8FC390062F}'; Multi = 'Player'
+    @{ Key = 'RoboCopy'; Label = 'Robo-Copy'; MenuLabel = 'Robo-Cop&y'; Icon = 'robo-copy.ico'; Clsid = '{BD15DC6A-FBC1-4949-B61D-3B8FC390062F}'; Multi = 'Player'
         Associations = @('AllFilesystemObjects') },
-    @{ Key = 'RoboCut'; Label = 'Robo-Cut'; Icon = 'robo-cut.ico'; Clsid = '{1A061376-A3F7-41BF-A516-E635ED91ACDF}'; Multi = 'Player'
+    @{ Key = 'RoboCut'; Label = 'Robo-Cut'; MenuLabel = 'Robo-C&ut'; Icon = 'robo-cut.ico'; Clsid = '{1A061376-A3F7-41BF-A516-E635ED91ACDF}'; Multi = 'Player'
         Associations = @('AllFilesystemObjects') },
-    @{ Key = 'RoboPaste'; Label = 'Robo-Paste'; Icon = 'robo-paste.ico'; Clsid = '{9D1BAE79-13C3-427F-A7E6-34150D5C49AB}'; Multi = 'Single'
+    @{ Key = 'RoboPaste'; Label = 'Robo-Paste'; MenuLabel = 'Ro&bo-Paste'; Icon = 'robo-paste.ico'; Clsid = '{9D1BAE79-13C3-427F-A7E6-34150D5C49AB}'; Multi = 'Single'
         Associations = @('Directory\Background', 'Directory', 'Drive') }
 )
 $script:RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
@@ -623,7 +756,8 @@ function Get-ExpectedRegistry([string]$ExePath, [string]$Version) {
         Add-Row "$clsidKey\LocalServer32" '' 'String' $quoted
         foreach ($assoc in $v.Associations) {
             $verbKey = "Software\Classes\$assoc\shell\$($v.Key)"
-            Add-Row $verbKey 'MUIVerb' 'String' $v.Label
+            # The menu text carries the access key ("&"); the class name above does not.
+            Add-Row $verbKey 'MUIVerb' 'String' $v.MenuLabel
             Add-Row $verbKey 'Icon' 'String' (Join-Path (Split-Path -Parent $ExePath) $v.Icon)
             # A background click selects nothing; Explorer hides a background verb marked Single.
             if ($assoc -ne 'Directory\Background') {

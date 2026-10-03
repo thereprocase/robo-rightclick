@@ -1,6 +1,7 @@
 <#
 Ephemeral audit (product invariant 2): with logging set to ephemeral, five jobs of different
-kinds write nothing about themselves to disk or to the places Windows keeps records.
+kinds, and a sixth started with the Robo-Paste hotkey (docs/decisions/0001-paste-hotkey.md),
+write nothing about themselves to disk or to the places Windows keeps records.
 
 Phase 1, ephemeral. Snapshots %APPDATA%, %LOCALAPPDATA% and %TEMP% (names, sizes, times and
 hashes; this covers Recent items, jump lists, CrashDumps, the per-user WER folder and the
@@ -223,9 +224,10 @@ try {
     # =======================================================================
     # Phase 1: ephemeral
     # =======================================================================
-    Write-Host '[1] ephemeral: copy, cut, cancel, conflict, failure'
+    Write-Host '[1] ephemeral: copy, cut, cancel, conflict, failure, hotkey paste'
     Set-RoboConfig @{
         logging = 'ephemeral'; showProgressWindow = $true; conflictDefault = 'ask'; notifyOnComplete = $true
+        pasteHotkey = 'Ctrl+Shift+V'
         extraArgs = @{ copy = '/IORATE:8M'; move = '/IORATE:8M' }
     }
 
@@ -235,7 +237,8 @@ try {
     $destBig = Join-Path $work 'dest-big'
     $destConflict = Join-Path $work 'dest-conflict'
     $destFail = Join-Path $work 'dest-fail'
-    New-Item -ItemType Directory -Path $srcDir, $destCopy, $destCut, $destBig, $destConflict, $destFail | Out-Null
+    $destHotkey = Join-Path $work 'dest-hotkey'
+    New-Item -ItemType Directory -Path $srcDir, $destCopy, $destCut, $destBig, $destConflict, $destFail, $destHotkey | Out-Null
 
     $copyFile = Join-Path $srcDir "$marker-copy.txt"
     $cutFile = Join-Path $srcDir "$marker-cut.txt"
@@ -249,6 +252,14 @@ try {
     Set-Content -LiteralPath $conflictFile -Value 'the version being pasted'
     Set-Content -LiteralPath (Join-Path $destConflict "$marker-conflict.txt") -Value 'the version already there'
     Set-Content -LiteralPath $lockedFile -Value 'locked'
+    $hotkeyFile = Join-Path $srcDir "$marker-hotkey.txt"
+    Set-Content -LiteralPath $hotkeyFile -Value 'hotkey'
+
+    # Explorer writes its own records (shell bags, view state) when a window opens on a folder.
+    # Open the hotkey's destination before the first snapshot so only the paste is measured.
+    Close-ExplorerWindows
+    $hotkeyWindow = Open-ExplorerLocation $destHotkey
+    Start-Sleep -Seconds 3
     $startedAt = Get-Date
 
     $before = Get-Snapshot
@@ -296,12 +307,22 @@ try {
     finally { $lock.Dispose() }
     Assert-That (-not (Test-Path -LiteralPath (Join-Path $destFail "$marker-locked.txt"))) 'job 5 (failure): the locked file did not arrive'
 
+    # 6. hotkey: Robo-Copy, then the Robo-Paste hotkey in the destination's file list
+    Assert-That ((Invoke-Robo -Verb copy -Paths $hotkeyFile) -eq 0) 'job 6 (hotkey): Robo-Copy accepted'
+    Set-ForegroundWindowFirmly $hotkeyWindow
+    Set-ExplorerFileListFocus $hotkeyWindow
+    Send-PasteHotkey
+    Wait-PathExists (Join-Path $destHotkey "$marker-hotkey.txt") 30
+    [void](Wait-Settled -Path $destHotkey -MinFiles 1)
+    Write-Step 'job 6 (hotkey): pasted into the open folder'
+
     Start-Sleep -Seconds 8
     Close-ErrorSummary
     Close-TrayDialogs
 
     $after = Get-Snapshot
     Write-Step "snapshot after: $($after.Count) files"
+    Close-ExplorerWindows
 
     $problems = New-Object System.Collections.Generic.List[string]
     foreach ($path in $after.Keys) {

@@ -66,6 +66,14 @@ public sealed record Settings
 
     public ExtraArgs ExtraArgs { get; init; } = ExtraArgs.None;
 
+    /// <summary>
+    /// The Robo-Paste keyboard shortcut in File Explorer and on the desktop; null is off.
+    /// Unlike every other field, an invalid value means off, not the default (see
+    /// <see cref="SettingsSerializer"/>): the default would switch on a keyboard hook the
+    /// user may have been trying to switch off.
+    /// </summary>
+    public HotkeySpec? PasteHotkey { get; init; } = HotkeySpec.Default;
+
     public static readonly Settings Default = new();
 }
 
@@ -138,11 +146,11 @@ public static class SettingsSerializer
         }
         catch (JsonException ex)
         {
-            return new(Settings.Default, [$"config is not valid JSON ({ex.Message}); using defaults"]) { Unreadable = true };
+            return UnreadableResult($"config is not valid JSON ({ex.Message}); using defaults");
         }
         if (root is null)
         {
-            return new(Settings.Default, ["config is not a JSON object; using defaults"]) { Unreadable = true };
+            return UnreadableResult("config is not a JSON object; using defaults");
         }
 
         var version = ReadVersion(root);
@@ -173,6 +181,7 @@ public static class SettingsSerializer
             NotifyOnComplete = ReadBool(root, "notifyOnComplete", d.NotifyOnComplete, problems),
             ShowProgressWindow = ReadBool(root, "showProgressWindow", d.ShowProgressWindow, problems),
             ExtraArgs = ReadExtraArgs(root, problems),
+            PasteHotkey = ReadPasteHotkey(root, problems),
         };
 
         // A newer file is expected to hold settings this version does not know, and so may a
@@ -229,6 +238,7 @@ public static class SettingsSerializer
                 ["copy"] = s.ExtraArgs.Copy,
                 ["move"] = s.ExtraArgs.Move,
             },
+            [PasteHotkeyKey] = s.PasteHotkey?.Format() ?? string.Empty,
         };
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
     }
@@ -237,7 +247,38 @@ public static class SettingsSerializer
     {
         VersionKey, "threads", "retries", "retryWaitSeconds", "conflictDefault", "maxConcurrentJobs",
         "logging", "logRetentionJobs", "startWithWindows", "notifyOnComplete", "showProgressWindow", "extraArgs",
+        PasteHotkeyKey,
     };
+
+    /// <summary>
+    /// The Robo-Paste hotkey. Added without a format version change: an older build reports
+    /// it as an unknown setting and drops it when it saves, and a file without it means the
+    /// default (<see cref="HotkeySpec.Default"/>), so an upgrade turns the hotkey on.
+    /// </summary>
+    public const string PasteHotkeyKey = "pasteHotkey";
+
+    /// <summary>The end of every "pasteHotkey" problem: unlike other fields it falls back to off.</summary>
+    public const string PasteHotkeyOffSuffix = "; the hotkey is off";
+
+    /// <summary>The second problem of an unreadable file (<see cref="UnreadableResult"/>).</summary>
+    public const string PasteHotkeyUnreadableProblem =
+        $"'{PasteHotkeyKey}' is unknown because the file could not be read{PasteHotkeyOffSuffix}";
+
+    /// <summary>
+    /// What a config.json that is not a JSON object, or that exists but could not be read from
+    /// disk, loads as: every default except the hotkey, which is off. Its default is a keyboard
+    /// hook, and the damaged file may be one that switched it off; a fallback must never switch
+    /// on a hook the user may have switched off, as for an invalid "pasteHotkey" alone. The
+    /// second problem names the setting, so the tray says "off (setting invalid)" rather than
+    /// "off", and Settings marks the field.
+    /// </summary>
+    /// <param name="problem">Why the file could not be used, path-free.</param>
+    public static SettingsLoadResult UnreadableResult(string problem) =>
+        new(Settings.Default with { PasteHotkey = null }, [problem, PasteHotkeyUnreadableProblem]) { Unreadable = true };
+
+    /// <summary>A load problem about "pasteHotkey" (the tray then says the hotkey is off because of it).</summary>
+    public static bool IsPasteHotkeyProblem(string problem) =>
+        problem.StartsWith($"'{PasteHotkeyKey}'", StringComparison.Ordinal);
 
     private static string ToJsonName<T>(T value) where T : struct, Enum
     {
@@ -336,6 +377,32 @@ public static class SettingsSerializer
         var allowed = string.Join(" | ", Enum.GetValues<T>().Select(ToJsonName));
         problems.Add($"'{key}' must be one of {allowed}; using {ToJsonName(fallback)}");
         return fallback;
+    }
+
+    /// <summary>
+    /// "pasteHotkey": missing means the default; "" means off. Anything else that is not a
+    /// valid combination (a non-string, null, over 32 characters, a reserved or malformed
+    /// one) also means off, with a problem naming the setting. This is the one field that
+    /// does not fall back to its default, like "version": the default here is a keyboard hook,
+    /// and a typo must not switch on what the user meant to switch off.
+    /// </summary>
+    private static HotkeySpec? ReadPasteHotkey(JsonObject root, List<string> problems)
+    {
+        if (!root.TryGetPropertyValue(PasteHotkeyKey, out var node))
+        {
+            return HotkeySpec.Default;
+        }
+        if (node is not JsonValue v || v.GetValueKind() != JsonValueKind.String || !v.TryGetValue<string>(out var text))
+        {
+            problems.Add($"'{PasteHotkeyKey}' must be a shortcut such as \"{HotkeySpec.DefaultText}\", or \"\" for none{PasteHotkeyOffSuffix}");
+            return null;
+        }
+        var (spec, problem) = HotkeySpec.Parse(text);
+        if (problem is not null)
+        {
+            problems.Add($"'{PasteHotkeyKey}' {problem}{PasteHotkeyOffSuffix}");
+        }
+        return spec;
     }
 
     private static ExtraArgs ReadExtraArgs(JsonObject root, List<string> problems)

@@ -84,6 +84,25 @@ real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
 
 Design deviations (decided, not yet measured against Explorer):
 
+- **Robo-Paste hotkey (Ctrl+Shift+V by default).** An addition: Explorer has no second paste
+  key. It is taken only in a folder's file list and on the desktop, where Explorer itself is
+  expected to do nothing with Ctrl+Shift+V (not yet measured, docs/decisions/0001-paste-hotkey.md
+  release gate 1); in text fields it passes, so Explorer's paste-as-plain-text keeps working.
+- **The hotkey refuses libraries.** Explorer's Ctrl+V in a library pastes into the library's
+  default save location. The hotkey refuses every library, as the right-click Robo-Paste
+  does (a library has no file-system path), with the "Can't Robo-Paste here" toast. Inside a
+  library, a real folder opened from it works.
+- **The hotkey passes in the navigation pane.** Explorer's Ctrl+V with focus on a folder in
+  the navigation pane pastes into that folder. The hotkey is taken only in the file list,
+  so there it passes and nothing happens; click in the file list first.
+- **A paste right after Ctrl+C or Ctrl+X can wait or be refused.** The hook sees the hotkey
+  before Explorer has necessarily written a copy or cut made just before it. Robo-Paste then
+  waits up to 1 s for the clipboard to change and otherwise refuses ("Clipboard not ready")
+  rather than paste the previous clipboard. Explorer's own Ctrl+V has no such race.
+- **The hotkey refuses zip folders.** A zip opened as a folder is a file, not a file-system
+  folder. Explorer can paste into it; the hotkey refuses it up front ("Can't Robo-Paste
+  here") rather than start a job that would fail.
+
 - **Overlapping pastes run one after another.** Explorer runs every paste at once and asks
   about each conflict as it writes. Robo-Paste asks once, after its scan, so a second paste
   whose files overlap where another running paste writes waits until that one finishes;

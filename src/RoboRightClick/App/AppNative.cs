@@ -86,4 +86,18 @@ internal static partial class AppNative
     /// <summary>The face name of the font GDI actually selected, which differs from the one asked for when it substituted.</summary>
     [LibraryImport("gdi32.dll", EntryPoint = "GetTextFaceW")]
     public static unsafe partial int GetTextFace(nint hdc, int c, char* lpName);
+
+    public const uint MOD_CONTROL = 0x0002;
+    public const uint MOD_SHIFT = 0x0004;
+    public const uint MOD_NOREPEAT = 0x4000;
+    public const int ERROR_HOTKEY_ALREADY_REGISTERED = 1409;
+
+    /// <summary>Only the Settings window's probe uses this: the hotkey itself is a keyboard hook, not a registration.</summary>
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool RegisterHotKey(nint hWnd, int id, uint fsModifiers, uint vk);
+
+    [LibraryImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool UnregisterHotKey(nint hWnd, int id);
 }

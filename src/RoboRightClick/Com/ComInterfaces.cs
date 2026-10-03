@@ -235,3 +235,240 @@ internal partial interface IDataObject
     [PreserveSig]
     int EnumDAdvise(out nint ppenumAdvise);
 }
+
+// ---------------------------------------------------------------------------
+// The Robo-Paste hotkey's folder lookup (Verbs/ExplorerFolderLocator). Client side only:
+// the tray calls these on File Explorer's objects from its locator thread (MTA).
+// Slots checked against Wine's exdisp.idl (IShellWindows), servprov.idl
+// (IServiceProvider), oleidl.idl (IOleWindow) and shobjidl.idl (IShellBrowser,
+// IFolderView), 2026-10-02.
+// ---------------------------------------------------------------------------
+
+/// <summary>
+/// oaidl.h VARIANT holding a VT_I4, laid out for win-x64 (24 bytes: vt, three reserved
+/// words, then a 16-byte union whose first four bytes are lVal). A plain blittable struct,
+/// because the COM source generator passes ComVariant by value only with runtime
+/// marshalling disabled for the whole assembly.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+internal readonly struct VariantInt32
+{
+    private const ushort VT_I4 = 3;
+
+    private readonly ushort _vt;
+    private readonly ushort _reserved1;
+    private readonly ushort _reserved2;
+    private readonly ushort _reserved3;
+    private readonly long _value;
+    private readonly nint _record;
+
+    public VariantInt32(int value)
+    {
+        _vt = VT_I4;
+        // lVal is the low half of the union's first eight bytes (little-endian).
+        _value = (uint)value;
+    }
+}
+
+internal static class ShellWindowsConstants
+{
+    /// <summary>exdisp.idl coclass ShellWindows: File Explorer's collection of open folder windows (one entry per tab).</summary>
+    public static readonly Guid CLSID_ShellWindows = new("9BA05972-F6A8-11CF-A442-00A0C90A8F39");
+
+    public static readonly Guid IID_IShellWindows = new("85CB6900-4D95-11CF-960C-0080C7F4EE85");
+    public static readonly Guid IID_IServiceProvider = new("6D5140C1-7436-11CE-8034-00AA006009FA");
+    public static readonly Guid IID_IShellBrowser = new("000214E2-0000-0000-C000-000000000046");
+    public static readonly Guid IID_IFolderView = new("CDE725B0-CCC9-4519-917E-325D72FAB4CE");
+    public static readonly Guid IID_IShellItem = new("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+
+    /// <summary>shlguid.h SID_STopLevelBrowser: the browser that owns a ShellWindows entry.</summary>
+    public static readonly Guid SID_STopLevelBrowser = new("4C96BE40-915C-11CF-99D3-00AA004AE837");
+
+    /// <summary>knownfolders.h FOLDERID_Desktop.</summary>
+    public static readonly Guid FOLDERID_Desktop = new("B4BFCC3A-DB2C-424C-B029-7FE99A87C641");
+
+    /// <summary>KF_FLAG_DONT_VERIFY: the path as configured, without touching the disk (or a redirected share).</summary>
+    public const uint KF_FLAG_DONT_VERIFY = 0x00004000;
+
+    /// <summary>CLSCTX_INPROC_SERVER | CLSCTX_LOCAL_SERVER: File Explorer registers ShellWindows as a running class object.</summary>
+    public const uint CLSCTX_SERVER = 0x1 | 0x4;
+}
+
+/// <summary>
+/// exdisp.idl, a dual interface: IDispatch's four slots come first and are declared as
+/// placeholders. Only GetCount and Item are called.
+/// </summary>
+[GeneratedComInterface]
+[Guid("85CB6900-4D95-11CF-960C-0080C7F4EE85")]
+internal partial interface IShellWindows
+{
+    // IDispatch
+    [PreserveSig]
+    int GetTypeInfoCount(out uint pctinfo);
+
+    [PreserveSig]
+    int GetTypeInfo(uint iTInfo, uint lcid, out nint ppTInfo);
+
+    [PreserveSig]
+    int GetIDsOfNames(in Guid riid, nint rgszNames, uint cNames, uint lcid, nint rgDispId);
+
+    [PreserveSig]
+    int Invoke(int dispIdMember, in Guid riid, uint lcid, ushort wFlags, nint pDispParams, nint pVarResult, nint pExcepInfo, nint puArgErr);
+
+    // IShellWindows
+    /// <summary>[propget] Count.</summary>
+    [PreserveSig]
+    int GetCount(out int count);
+
+    /// <summary>The entry's IDispatch, or S_FALSE with null past the end. The index is a VARIANT passed by value.</summary>
+    [PreserveSig]
+    int Item(VariantInt32 index, out nint folder);
+
+    [PreserveSig]
+    int NewEnum(out nint ppunk);
+
+    [PreserveSig]
+    int Register(nint pid, int hwnd, int swClass, out int plCookie);
+
+    [PreserveSig]
+    int RegisterPending(int lThreadId, nint pvarloc, nint pvarlocRoot, int swClass, out int plCookie);
+
+    [PreserveSig]
+    int Revoke(int lCookie);
+
+    [PreserveSig]
+    int OnNavigate(int lCookie, nint pvarLoc);
+
+    [PreserveSig]
+    int OnActivated(int lCookie, short fActive);
+
+    [PreserveSig]
+    int FindWindowSW(nint pvarLoc, nint pvarLocRoot, int swClass, out int phwnd, int swfwOptions, out nint ppdispOut);
+
+    [PreserveSig]
+    int OnCreated(int lCookie, nint punk);
+
+    [PreserveSig]
+    int ProcessAttachDetach(short fAttach);
+}
+
+/// <summary>
+/// servprov.idl IServiceProvider (named apart from System.IServiceProvider). One slot:
+/// the IDL's RemoteQueryService is the [call_as] wire form of QueryService, not a second slot.
+/// </summary>
+[GeneratedComInterface]
+[Guid("6D5140C1-7436-11CE-8034-00AA006009FA")]
+internal partial interface IOleServiceProvider
+{
+    [PreserveSig]
+    int QueryService(in Guid guidService, in Guid riid, out nint ppvObject);
+}
+
+/// <summary>
+/// shobjidl.idl IShellBrowser, with its base IOleWindow (oleidl.idl) flattened in front.
+/// Slots after IUnknown: GetWindow 3, ContextSensitiveHelp 4, InsertMenusSB 5 ...
+/// SendControlMsg 14 ([local], still a slot), QueryActiveShellView 15, OnViewWindowActive 16,
+/// SetToolbarItems 17. Only GetWindow and QueryActiveShellView are called.
+/// </summary>
+[GeneratedComInterface]
+[Guid("000214E2-0000-0000-C000-000000000046")]
+internal partial interface IShellBrowser
+{
+    // IOleWindow
+    /// <summary>For File Explorer this is expected to be the tab's ShellTabWindowClass window (release gate).</summary>
+    [PreserveSig]
+    int GetWindow(out nint phwnd);
+
+    [PreserveSig]
+    int ContextSensitiveHelp(int fEnterMode);
+
+    // IShellBrowser
+    [PreserveSig]
+    int InsertMenusSB(nint hmenuShared, nint lpMenuWidths);
+
+    [PreserveSig]
+    int SetMenuSB(nint hmenuShared, nint holemenuReserved, nint hwndActiveObject);
+
+    [PreserveSig]
+    int RemoveMenusSB(nint hmenuShared);
+
+    [PreserveSig]
+    int SetStatusTextSB(nint pszStatusText);
+
+    [PreserveSig]
+    int EnableModelessSB(int fEnable);
+
+    [PreserveSig]
+    int TranslateAcceleratorSB(nint pmsg, ushort wID);
+
+    [PreserveSig]
+    int BrowseObject(nint pidl, uint wFlags);
+
+    [PreserveSig]
+    int GetViewStateStream(uint grfMode, out nint ppStrm);
+
+    [PreserveSig]
+    int GetControlWindow(uint id, out nint phwnd);
+
+    [PreserveSig]
+    int SendControlMsg(uint id, uint uMsg, nint wParam, nint lParam, nint pret);
+
+    /// <summary>The tab's IShellView, with a reference the caller releases.</summary>
+    [PreserveSig]
+    int QueryActiveShellView(out nint ppshv);
+
+    [PreserveSig]
+    int OnViewWindowActive(nint pshv);
+
+    [PreserveSig]
+    int SetToolbarItems(nint lpButtons, uint nButtons, uint uFlags);
+}
+
+/// <summary>shobjidl.idl IFolderView (Vista+). Slots after IUnknown: GetCurrentViewMode 3, SetCurrentViewMode 4, GetFolder 5. Only GetFolder is called.</summary>
+[GeneratedComInterface]
+[Guid("CDE725B0-CCC9-4519-917E-325D72FAB4CE")]
+internal partial interface IFolderView
+{
+    [PreserveSig]
+    int GetCurrentViewMode(out uint mode);
+
+    [PreserveSig]
+    int SetCurrentViewMode(uint mode);
+
+    /// <summary>The folder the view shows, as riid (IShellItem here).</summary>
+    [PreserveSig]
+    int GetFolder(in Guid riid, out nint ppv);
+
+    [PreserveSig]
+    int Item(int index, out nint ppidl);
+
+    [PreserveSig]
+    int ItemCount(uint flags, out int items);
+
+    [PreserveSig]
+    int Items(uint flags, in Guid riid, out nint ppv);
+
+    [PreserveSig]
+    int GetSelectionMarkedItem(out int item);
+
+    [PreserveSig]
+    int GetFocusedItem(out int item);
+
+    [PreserveSig]
+    int GetItemPosition(nint pidl, out NativePoint ppt);
+
+    [PreserveSig]
+    int GetSpacing(nint pt);
+
+    [PreserveSig]
+    int GetDefaultSpacing(out NativePoint pt);
+
+    [PreserveSig]
+    int GetAutoArrange();
+
+    [PreserveSig]
+    int SelectItem(int item, uint flags);
+
+    [PreserveSig]
+    int SelectAndPositionItems(uint cidl, nint apidl, nint apt, uint flags);
+}
