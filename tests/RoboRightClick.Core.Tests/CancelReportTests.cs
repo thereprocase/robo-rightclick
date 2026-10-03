@@ -39,14 +39,14 @@ public class CancelReportTests
     [Fact]
     public void A_cancel_after_files_failed_shows_the_summary_and_needs_attention()
     {
-        var job = Canceled() with { MayBeIncomplete = 1 };
+        var job = Canceled() with { MayBeIncomplete = 1, RetryCount = 1 };
 
         Assert.True(job.OutcomeNeedsUser);
         Assert.True(job.NeedsAttention);
         Assert.Equal(ProgressWindowAction.ShowSummary, ProgressWindowPolicy.OnTerminal(job));
         Assert.Equal(StateTone.Attention, JobStateText.Tone(job));
         Assert.Equal("Canceled; 1 file may be incomplete", JobStateText.For(job));
-        Assert.Equal("Try again", JobStateText.TryAgainLabel(job));
+        Assert.Equal("Try again (1)", JobStateText.TryAgainLabel(job));
         Assert.EndsWith("Files at the destination may be incomplete.", JobStateText.SummaryHeading(job));
         Assert.StartsWith("1 file was not finished", JobStateText.MayBeIncompleteText(job));
 

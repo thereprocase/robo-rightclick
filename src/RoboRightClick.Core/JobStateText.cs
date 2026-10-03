@@ -152,10 +152,12 @@ public static class JobStateText
     }
 
     /// <summary>
-    /// The error summary's primary button: "Try again (N)", "Try again" for a Failed job,
-    /// "Finish copying/moving them" after a cancel that left files possibly incomplete, or null
-    /// when there is nothing to try again, including once "Try again" has been used
-    /// (<see cref="JobSnapshot.RetriedBy"/>).
+    /// The error summary's primary button: "Try again (N)" with N =
+    /// <see cref="JobSnapshot.RetryCount"/>, "Try again" for a Failed job or a whole re-run
+    /// (<see cref="JobSnapshot.RetriesWholePaste"/>), "Finish copying/moving them" after a cancel
+    /// that left files possibly incomplete, or null when there is nothing to try again (errors
+    /// no retry can repeat, such as a link folder that could not be created), including once
+    /// "Try again" has been used (<see cref="JobSnapshot.RetriedBy"/>).
     /// </summary>
     public static string? TryAgainLabel(JobSnapshot job)
     {
@@ -167,8 +169,9 @@ public static class JobStateText
         {
             JobState.Failed => "Try again",
             JobState.Canceled when job.DamagedOnCancel > 0 => FinishLabel(job),
-            JobState.Canceled when job.MayBeIncomplete > 0 || job.ErrorCount > 0 => "Try again",
-            JobState.DoneWithErrors when job.ErrorCount > 0 => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.ErrorCount:N0})"),
+            JobState.DoneWithErrors or JobState.Canceled when job.RetriesWholePaste => "Try again",
+            JobState.DoneWithErrors or JobState.Canceled when job.RetryCount > 0 =>
+                string.Create(CultureInfo.InvariantCulture, $"Try again ({job.RetryCount:N0})"),
             _ => null,
         };
     }

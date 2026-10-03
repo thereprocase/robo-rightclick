@@ -70,6 +70,42 @@ public class RetryEvidenceTests
     }
 
     [Fact]
+    public void With_retries_on_a_folder_error_whose_files_all_completed_no_longer_stands()
+    {
+        // Retries are 3: "ERROR 64 ... Creating Destination Directory D:\dst\T\sub", a retry,
+        // then both files under it copied. The paste fully succeeded.
+        var ledger = new StepLedger(TreePlan(), robocopyRetries: true);
+        var folderError = Error(@"D:\dst\T\sub", code: 64, operation: "Creating Destination Directory");
+
+        ledger.Apply(0, folderError);
+        ledger.Apply(0, new FileReported(100, A.SourcePath));
+        ledger.Apply(0, new FileReported(20, B.SourcePath));
+        ledger.Apply(0, new FileReported(3, C.SourcePath));
+        ledger.StepFinished(0, new RobocopyExitCode(1), killedByCancel: false);
+
+        Assert.Empty(ledger.Retryable);
+        Assert.Empty(ledger.StandingErrors(0, [folderError]));
+        Assert.Equal([folderError], ledger.RecoveredFolderErrors(0, [folderError]));
+    }
+
+    [Fact]
+    public void A_folder_error_stands_while_a_file_under_it_did_not_complete_or_when_nothing_is_under_it()
+    {
+        var ledger = new StepLedger(TreePlan(), robocopyRetries: true);
+        var folderError = Error(@"D:\dst\T\sub", code: 64, operation: "Creating Destination Directory");
+        var emptyFolderError = Error(@"D:\dst\T\empty", code: 5, operation: "Creating Destination Directory");
+
+        ledger.Apply(0, folderError);
+        ledger.Apply(0, emptyFolderError);
+        ledger.Apply(0, new FileReported(100, A.SourcePath));
+        ledger.Apply(0, new FileReported(20, B.SourcePath));
+        ledger.StepFinished(0, new RobocopyExitCode(9), killedByCancel: false);
+
+        Assert.Equal([folderError, emptyFolderError], ledger.StandingErrors(0, [folderError, emptyFolderError]));
+        Assert.Empty(ledger.RecoveredFolderErrors(0, [folderError, emptyFolderError]));
+    }
+
+    [Fact]
     public void A_retry_that_fails_again_counts_one_error_per_file()
     {
         var ledger = new StepLedger(TreePlan(), robocopyRetries: true);
@@ -255,6 +291,22 @@ public class RetryEvidenceTests
         Assert.Empty(rescan.Rest.Conflicts);
     }
 
+    [Fact]
+    public void The_retry_count_is_files_of_robocopy_steps_plus_whole_in_process_steps()
+    {
+        var original = new ExecutionPlan(
+            [
+                new ExecutionStep(new RobocopyStep(@"C:\src\T", @"D:\dst\T", [], true, false), ConflictPolicy.Ask, [A, B, C]),
+                new ExecutionStep(new RenameStep(@"C:\src\Folder", @"C:\dst\Folder"), ConflictPolicy.Ask, [File(@"C:\src\Folder\x", @"C:\dst\Folder\x"), File(@"C:\src\Folder\y", @"C:\dst\Folder\y")]),
+            ],
+            [], [], [], []);
+
+        var retry = RetryPlanner.ForFailures(original, [new RetryCandidate(0, A, true), new RetryCandidate(0, C, false)], [1]);
+
+        Assert.Equal(3, RetryPlanner.CountOf(retry));
+        Assert.Equal(0, RetryPlanner.CountOf(null));
+    }
+
     // ---------------------------------------------------------------- may be incomplete
 
     [Fact]
@@ -289,7 +341,7 @@ public class RetrySummaryTextTests
     [InlineData(JobState.Canceled)]
     public void Try_again_is_offered_once(JobState state)
     {
-        var job = Job(state) with { DamagedOnCancel = state == JobState.Canceled ? 1 : 0 };
+        var job = Job(state) with { DamagedOnCancel = state == JobState.Canceled ? 1 : 0, RetryCount = 2 };
         Assert.NotNull(JobStateText.TryAgainLabel(job));
 
         var retried = job with { RetriedBy = Guid.NewGuid() };
@@ -302,13 +354,25 @@ public class RetrySummaryTextTests
     }
 
     [Fact]
-    public void Try_again_labels_count_retryable_items()
+    public void Try_again_labels_count_what_the_retry_would_repeat()
     {
-        Assert.Equal("Try again (2)", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors)));
+        Assert.Equal("Try again (5)", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { RetryCount = 5 }));
         Assert.Equal("Try again", JobStateText.TryAgainLabel(Job(JobState.Failed)));
         Assert.Equal("Finish copying them", JobStateText.TryAgainLabel(Job(JobState.Canceled) with { DamagedOnCancel = 3 }));
-        Assert.Null(JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { ErrorCount = 0 }));
+        Assert.Equal("Try again (1)", JobStateText.TryAgainLabel(Job(JobState.Canceled) with { MayBeIncomplete = 1, RetryCount = 1 }));
+        Assert.Equal("Try again", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { RetriesWholePaste = true }));
         Assert.Null(JobStateText.TryAgainLabel(Job(JobState.Done)));
+    }
+
+    [Fact]
+    public void Errors_no_retry_can_repeat_offer_no_try_again()
+    {
+        // A link folder that could not be created: one error, nothing a retry plan would run.
+        var job = Job(JobState.DoneWithErrors) with { ErrorCount = 1, RetryCount = 0 };
+
+        Assert.Null(JobStateText.TryAgainLabel(job));
+        Assert.Contains("Open Jobs for details.", ToastText.ForFinished(job, notifyOnComplete: false)!.Body);
+        Assert.Contains("Open Jobs to try again.", ToastText.ForFinished(job with { RetryCount = 1 }, notifyOnComplete: false)!.Body);
     }
 
     [Fact]

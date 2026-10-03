@@ -439,9 +439,12 @@ public sealed class StepLedger
     }
 
     /// <summary>
-    /// <paramref name="errors"/> without those that name a file of the step robocopy then
-    /// copied after all (its own retry), so a recovered file does not make the step count as
-    /// failed. Nothing is dropped with retries off: a failed file is never completed then.
+    /// <paramref name="errors"/> without those robocopy's own retry overcame, so a recovered
+    /// file does not make the step count as failed: an error naming a file of the step that
+    /// robocopy then copied after all, and a folder-level error (creating or scanning a
+    /// folder) once every planned file of the step under that folder completed
+    /// (<see cref="RecoveredFolderErrors"/>). Nothing is dropped with retries off: a failed
+    /// file is never completed then.
     /// </summary>
     public IReadOnlyList<ErrorReported> StandingErrors(int stepIndex, IReadOnlyList<ErrorReported> errors)
     {
@@ -450,8 +453,39 @@ public sealed class StepLedger
         {
             var path = WinPath.NormalizeForMatch(error.Path);
             var found = state.BySource.TryGetValue(path, out var index) || state.ByDestination.TryGetValue(path, out index);
-            return !found || state.Status[index] != FileStatus.Completed;
+            return found ? state.Status[index] != FileStatus.Completed : !FolderRecovered(state, path);
         }).ToList();
+    }
+
+    /// <summary>
+    /// The folder-level errors of <paramref name="errors"/> that robocopy's own retry overcame:
+    /// every planned file of the step under the folder completed. A folder with no planned
+    /// file under it (an empty folder robocopy could not create) is not recovered: nothing
+    /// shows the folder was made. The job takes these off its error list; file errors it
+    /// already took off when their file's line arrived (<see cref="LedgerUpdate.Recovered"/>).
+    /// </summary>
+    public IReadOnlyList<ErrorReported> RecoveredFolderErrors(int stepIndex, IReadOnlyList<ErrorReported> errors)
+    {
+        var state = StateOf(stepIndex);
+        return errors.Where(error =>
+        {
+            var path = WinPath.NormalizeForMatch(error.Path);
+            return !state.BySource.ContainsKey(path) && !state.ByDestination.ContainsKey(path) && FolderRecovered(state, path);
+        }).ToList();
+    }
+
+    private static bool FolderRecovered(StepState state, string folder)
+    {
+        var any = false;
+        foreach (var index in state.FilesUnder(folder))
+        {
+            if (state.Status[index] != FileStatus.Completed)
+            {
+                return false;
+            }
+            any = true;
+        }
+        return any;
     }
 
     private void Complete(StepState state, int index)

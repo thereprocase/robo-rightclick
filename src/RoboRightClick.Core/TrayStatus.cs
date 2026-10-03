@@ -7,7 +7,11 @@ namespace RoboRightClick.Core;
 /// </summary>
 /// <param name="Sources">The top-level items pasted, as they came from the clipboard.</param>
 /// <param name="Logging">The mode the job was created under; a later toggle does not change it.</param>
-/// <param name="ErrorCount">Retryable per-file errors (robocopy and in-process); see <see cref="RefusedCount"/> for the rest.</param>
+/// <param name="ErrorCount">
+/// Errors the job reported (robocopy and in-process, link folders it could not create); see
+/// <see cref="RefusedCount"/> for refusals. Not every error can be retried:
+/// <see cref="RetryCount"/> is what "Try again" would repeat.
+/// </param>
 /// <param name="Acknowledged">
 /// The user dealt with a DoneWithErrors/Failed/damaged-Canceled outcome: chose Skip, or
 /// started Try again. Opening the summary and closing it without a choice does not count,
@@ -79,6 +83,21 @@ public sealed record JobSnapshot(
     /// complete while holding only part of the data.
     /// </summary>
     public int MayBeIncomplete { get; init; }
+
+    /// <summary>
+    /// What "Try again" would repeat, counted from the plan it would build
+    /// (<see cref="RetryPlanner.CountOf"/>): files of robocopy steps, plus whole in-process steps.
+    /// Fixed when the job ends; 0 before. One rule for the button's number and for whether there
+    /// is a button at all, so an error nothing can repeat never offers "Try again".
+    /// </summary>
+    public int RetryCount { get; init; }
+
+    /// <summary>
+    /// "Try again" re-runs the whole paste with a new scan instead of repeating files: the
+    /// ledger lost track of robocopy's paths (<see cref="StepLedger.PathsUnreliable"/>), so it
+    /// cannot say which files failed. Set only when the job has something to try again.
+    /// </summary>
+    public bool RetriesWholePaste { get; init; }
 
     /// <summary>
     /// The job "Try again" started for this one. "Try again" is offered once: a second child

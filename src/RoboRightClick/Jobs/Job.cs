@@ -163,6 +163,13 @@ internal sealed class Job
     private bool _retryStarted;
     private Guid? _retriedBy;
 
+    // What "Try again" offers, fixed when the job ends (JobSnapshot.RetryCount, RetriesWholePaste).
+    private int _retryCount;
+    private bool _retriesWholePaste;
+
+    // A ledger part could not match robocopy's paths; kept past the release of the parts.
+    private bool _pathsUnreliable;
+
     // Ended Failed by an exception rather than by its outcome: the ledger is not complete.
     private bool _failedUnexpectedly;
 
@@ -242,7 +249,7 @@ internal sealed class Job
         {
             lock (_lock)
             {
-                return _parts.Any(p => p.Ledger.PathsUnreliable);
+                return _pathsUnreliable || _parts.Any(p => p.Ledger.PathsUnreliable);
             }
         }
     }
@@ -280,27 +287,32 @@ internal sealed class Job
     {
         lock (_lock)
         {
-            var state = _lifecycle.State;
-            if (state is not (JobState.DoneWithErrors or JobState.Canceled or JobState.Failed))
-            {
-                return null;
-            }
-
-            ExecutionPlan? result = null;
-            foreach (var part in _parts)
-            {
-                var files = state == JobState.Canceled
-                    ? MergeCandidates(part.Damaged, part.RetryCandidates ?? [])
-                    : part.RetryCandidates ?? [];
-                var failedInProcess = part.Ledger.FailedInProcessSteps;
-                if (files.Count == 0 && failedInProcess.Count == 0)
-                {
-                    continue;
-                }
-                result = Merge(result, RetryPlanner.ForFailures(part.Plan, files, failedInProcess));
-            }
-            return result;
+            return RetryPlanLocked();
         }
+    }
+
+    private ExecutionPlan? RetryPlanLocked()
+    {
+        var state = _lifecycle.State;
+        if (state is not (JobState.DoneWithErrors or JobState.Canceled or JobState.Failed))
+        {
+            return null;
+        }
+
+        ExecutionPlan? result = null;
+        foreach (var part in _parts)
+        {
+            var files = state == JobState.Canceled
+                ? MergeCandidates(part.Damaged, part.RetryCandidates ?? [])
+                : part.RetryCandidates ?? [];
+            var failedInProcess = part.Ledger.FailedInProcessSteps;
+            if (files.Count == 0 && failedInProcess.Count == 0)
+            {
+                continue;
+            }
+            result = Merge(result, RetryPlanner.ForFailures(part.Plan, files, failedInProcess));
+        }
+        return result;
     }
 
     /// <summary>Items refused at planning or while running, each with its fixed, path-free reason.</summary>
@@ -591,6 +603,8 @@ internal sealed class Job
                 PauseRequested = !terminal && _gate.IsPaused,
                 SkippedAppeared = _skippedAppeared,
                 MayBeIncomplete = _mayBeIncomplete,
+                RetryCount = _retryCount,
+                RetriesWholePaste = _retriesWholePaste,
                 RetriedBy = _retriedBy,
             };
         }
@@ -868,7 +882,13 @@ internal sealed class Job
             if (step.Step is RobocopyStep)
             {
                 part.Ledger.StepFinished(index, outcome.ExitCode, killedByCancel);
-                // An error robocopy's own retry overcame does not make the step a failure.
+                // An error robocopy's own retry overcame does not make the step a failure. A
+                // file's error was taken back when its line arrived; a folder's only now, once
+                // every file under it is known to have completed.
+                foreach (var recovered in part.Ledger.RecoveredFolderErrors(index, outcome.Errors))
+                {
+                    WithdrawErrorLocked(recovered);
+                }
                 outcome = outcome with { Errors = part.Ledger.StandingErrors(index, outcome.Errors) };
                 unreported = part.Ledger.Unreported(index);
             }
@@ -1101,6 +1121,7 @@ internal sealed class Job
             }
             MoveLocked(final, SummaryLocked(final));
             ReleaseLocked();
+            FixRetryOfferLocked();
         }
         DeliverNotices();
     }
@@ -1170,6 +1191,7 @@ internal sealed class Job
             RecordSkippedAppearedLocked();
             MoveLocked(JobState.Canceled, SummaryLocked(JobState.Canceled));
             ReleaseLocked();
+            FixRetryOfferLocked();
         }
         DeliverNotices();
     }
@@ -1655,6 +1677,17 @@ internal sealed class Job
         }
     }
 
+    /// <summary>Takes back one recorded error robocopy's own retry overcame (a folder's, see <see cref="StepLedger.RecoveredFolderErrors"/>).</summary>
+    private void WithdrawErrorLocked(ErrorReported error)
+    {
+        _totalErrors = Math.Max(0, _totalErrors - 1);
+        var listed = _errors.IndexOf(error);
+        if (listed >= 0)
+        {
+            _errors.RemoveAt(listed);
+        }
+    }
+
     private void RecordErrorLocked(ErrorReported error)
     {
         _totalErrors++;
@@ -1668,9 +1701,12 @@ internal sealed class Job
         new(Id, final, _doneFiles, _doneFileBytes, _errors.ToArray()) { TotalErrors = _totalErrors };
 
     /// <summary>
-    /// "Try again (N)" counts retryable items, and the toast says how many items failed, so
-    /// a DoneWithErrors job never shows 0: a step that could not run at all reported no
-    /// per-file error but still failed.
+    /// How many items failed, for the Jobs window's count, the summary and the toast, so a
+    /// DoneWithErrors job never shows 0: a step that could not run at all reported no
+    /// per-file error but still failed. Not what "Try again (N)" counts: that is
+    /// <see cref="JobSnapshot.RetryCount"/>, from the plan a retry would run
+    /// (<see cref="FixRetryOfferLocked"/>), since some errors (a link folder that could not be
+    /// created) no retry repeats.
     /// </summary>
     private int ErrorCountLocked(List<StepOutcome> outcomes)
     {
@@ -1710,6 +1746,7 @@ internal sealed class Job
     private void ReleaseLocked()
     {
         var state = _lifecycle.State;
+        _pathsUnreliable |= _parts.Any(p => p.Ledger.PathsUnreliable);
         // A Failed job keeps its ledger when its outcome (not an exception) failed it: its
         // files may be partial, so "Try again" repeats them file by file like DoneWithErrors.
         // A Canceled one keeps it for the files the cancel left and those that failed before it.
@@ -1737,6 +1774,22 @@ internal sealed class Job
         _presence = null;
         _atKill.Clear();
         _claims.Clear();
+    }
+
+    /// <summary>
+    /// What "Try again" offers once the job has ended, from the one plan it would build
+    /// (<see cref="RetryPlanner.CountOf"/>), so the button, its number and the plan never
+    /// disagree. A ledger that lost track of robocopy's paths offers a whole re-run instead,
+    /// but only when there is something to try again. Call after <see cref="ReleaseLocked"/>.
+    /// </summary>
+    private void FixRetryOfferLocked()
+    {
+        _retryCount = RetryPlanner.CountOf(RetryPlanLocked());
+        var state = _lifecycle.State;
+        _retriesWholePaste = _pathsUnreliable
+            && (state == JobState.DoneWithErrors
+                || (state == JobState.Canceled && (_damagedOnCancel > 0 || _mayBeIncomplete > 0 || _totalErrors > 0)));
+        Touch();
     }
 
     private void Touch() => Interlocked.Increment(ref _version);

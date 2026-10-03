@@ -21,10 +21,12 @@ internal enum ErrorSummaryChoice
 /// code; the first <see cref="JobRecords.MaxRecordedErrors"/>, then "and N more, see the
 /// log"); refused items with their reason (not retryable); files damaged by a cancel; files
 /// skipped because their name appeared during the copy; a Failed or Canceled job's files that
-/// may be incomplete (<see cref="JobStateText.MayBeIncompleteText"/>). Buttons: "Try again (N)" where N counts only retryable items (absent when N is
-/// 0, except for a Failed job, and absent once "Try again" was used, see
-/// <see cref="JobSnapshot.RetriedBy"/>) and "Skip". Shown from the Jobs window, the progress window or
-/// a toast click, never by the job itself, so a failed job never blocks anything.
+/// may be incomplete (<see cref="JobStateText.MayBeIncompleteText"/>). Buttons: the label from
+/// <see cref="JobStateText.TryAgainLabel"/>, "Try again (N)" where N is what the retry would
+/// repeat (<see cref="JobSnapshot.RetryCount"/>; absent when there is nothing to repeat, except
+/// for a Failed job, and absent once "Try again" was used, see
+/// <see cref="JobSnapshot.RetriedBy"/>) and "Skip". Shown from the Jobs window, the progress
+/// window or a toast click, never by the job itself, so a failed job never blocks anything.
 /// </summary>
 /// <remarks>
 /// The content lives in <see cref="ErrorSummaryView"/> so the progress window can turn into

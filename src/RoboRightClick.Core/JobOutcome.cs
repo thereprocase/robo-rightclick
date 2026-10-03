@@ -265,6 +265,15 @@ public static class RetryPlanner
     }
 
     /// <summary>
+    /// How many items <paramref name="plan"/> (a <see cref="ForFailures"/> result) repeats:
+    /// each file of a robocopy step, and each in-process step as one item (a failed rename of
+    /// a folder is one thing that failed, however many files it holds). 0 for no plan. This is
+    /// the N of "Try again (N)" (<see cref="JobSnapshot.RetryCount"/>).
+    /// </summary>
+    public static int CountOf(ExecutionPlan? plan) =>
+        plan is null ? 0 : plan.Steps.Sum(s => s.Step is RobocopyStep ? s.Files.Count : 1);
+
+    /// <summary>
     /// A retry child's Scanning. Steps under Replace and in-process steps stay as the parent
     /// planned them, with the sources' current sizes (a source that cannot be read keeps its
     /// old facts; robocopy reports it). Every other robocopy step is scanned again exactly like
