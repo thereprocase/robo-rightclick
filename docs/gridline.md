@@ -104,7 +104,9 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
   attention tone, not green or neutral. Messages and questions, including the
   install, update and repair offer and the install and uninstall results, use `MessageDialog`: one pane,
   an optional heading, fact rows and caution strip, sized to its text. Problems the tray reports
-  use `MessageDialog.Notice`. A plain message box appears only as a fallback when a Gridline
+  and the install and uninstall results use `MessageDialog.Notice`: the app's name in the title
+  strip and the result sentence as the heading, which wraps and keeps its case. A title strip is
+  one line of short label text, so a sentence with a version or a path never goes there. A plain message box appears only as a fallback when a Gridline
   window cannot be built, and for an unhandled exception (`CrashPolicy`), where building
   windows is not safe.
 - **Window size:** sizes are logical pixels, so a window can outgrow a small screen at 150% or

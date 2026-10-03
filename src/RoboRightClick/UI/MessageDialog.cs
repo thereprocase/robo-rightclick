@@ -168,16 +168,21 @@ internal sealed class MessageDialog : Gridline.Window
     }
 
     /// <summary>
-    /// A result or problem the user must see: the app's name as the window title,
-    /// <paramref name="heading"/> in the title strip, the text plain or in a caution strip, one
-    /// OK button. If the Gridline window cannot be built (the failure being reported may be
-    /// why), a plain message box says the same, so the message is never lost.
+    /// A result or problem the user must see: the app's name as the window title and in the
+    /// title strip, <paramref name="heading"/> as the wrapped heading line, the text plain or in
+    /// a caution strip, one OK button. If the Gridline window cannot be built (the failure being
+    /// reported may be why), a plain message box says the same, so the message is never lost.
     /// </summary>
+    /// <remarks>
+    /// The heading is a sentence such as "RoboRightClick was updated from 1.0.0-beta.0 to
+    /// 1.0.0-beta.1." The title strip is one line in capitals: there it was cut off before the
+    /// new version and its version strings were upper-cased (docs/testlog.md 2026-10-03).
+    /// </remarks>
     public static void Notice(IWin32Window? owner, string heading, string text, MessageTone tone)
     {
         try
         {
-            Show(owner, new MessageContent(AppInfo.Name, text) { PaneTitle = heading.TrimEnd('.'), Tone = tone },
+            Show(owner, new MessageContent(AppInfo.Name, text) { Heading = heading, Tone = tone },
                 [new DialogButton("OK", "OK", DialogResult.OK, IsDefault: true, IsCancel: true)]);
         }
         catch (Exception ex) when (ex is System.Runtime.InteropServices.ExternalException or InvalidOperationException or ArgumentException or OutOfMemoryException)
