@@ -54,6 +54,32 @@ public class ExecutionPlannerTests
     }
 
     [Fact]
+    public void A_cut_whose_every_conflict_is_skipped_plans_no_step()
+    {
+        // The job then goes from AwaitingDecision straight to Finalizing, which the state
+        // table must allow (a skipped conflict is the most common answer).
+        var disk = new FakeDisk().File(@"C:\src\a.txt").File(@"D:\dst\a.txt");
+        var scan = Scan(disk, Batch(@"C:\src", @"D:\dst", true, "a.txt"));
+        Assert.Single(scan.Conflicts);
+
+        foreach (var choice in new ConflictChoice[]
+                 {
+                     new ConflictChoice.SkipAll(),
+                     Decide((@"D:\dst\a.txt", FileDecision.Skip)),
+                     Decide(),
+                     // Keep both is not allowed across drives for a cut, so it is a Skip.
+                     Decide((@"D:\dst\a.txt", FileDecision.KeepBoth)),
+                 })
+        {
+            var plan = ExecutionPlanner.Apply(scan, ConflictPolicy.Ask, choice, NothingTaken);
+
+            Assert.Empty(plan.Steps);
+            Assert.Equal(@"D:\dst\a.txt", Assert.Single(plan.Kept).DestinationPath);
+            Assert.True(JobStates.CanTransition(JobState.AwaitingDecision, JobState.Finalizing));
+        }
+    }
+
+    [Fact]
     public void Ask_with_conflicts_needs_a_choice()
     {
         var disk = new FakeDisk().File(@"C:\src\a.txt").File(@"D:\dst\a.txt");

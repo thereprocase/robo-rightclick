@@ -59,7 +59,8 @@ internal sealed record JobStart(
 /// <para>AwaitingDecision when there are conflicts and the policy is Ask (IJobPrompts);
 /// null = Canceled. Then ExecutionPlanner.Apply. An <see cref="ExecutionPlan.IsNoOp"/> plan
 /// goes Scanning → Finalizing and ends Done with <see cref="JobSnapshot.NoOp"/> (no toast,
-/// no clipboard clear). Everything refused also goes Scanning → Finalizing.</para>
+/// no clipboard clear). Everything refused also goes Scanning → Finalizing, and an answer
+/// that leaves no step (every conflict of a cut skipped) goes AwaitingDecision → Finalizing.</para>
 /// <para>Running: steps in order. Before each step, re-check which of its destinations
 /// exist (one listing per destination folder) and add them to the presence set that cancel
 /// cleanup reads. RenameStep and move-mode KeepBothStep by InProcessCopier.Rename (a

@@ -28,7 +28,9 @@ public enum JobState
 /// Every non-terminal state can end Failed, so an unexpected exception anywhere ends the
 /// job instead of stranding it. Scanning goes straight to Finalizing when nothing is left
 /// to run (everything refused or already in place), so the outcome is still computed in
-/// one place. Paused never goes to Finalizing: the job waits for resume first. Pause
+/// one place. AwaitingDecision does the same when the answer leaves nothing to run: Skip
+/// for every conflict of a cut (the skipped files leave every robocopy step), or "keep both"
+/// on a cut across drives, which becomes Skip. Paused never goes to Finalizing: the job waits for resume first. Pause
 /// requested before Running is latched by the host and applied on entering Running.
 /// Cancel during Finalizing is ignored: the copy is over and its cleanup must finish.
 /// </remarks>
@@ -38,7 +40,7 @@ public static class JobStates
     {
         [JobState.Queued] = [JobState.Scanning, JobState.Failed, JobState.Canceled],
         [JobState.Scanning] = [JobState.AwaitingDecision, JobState.Running, JobState.Finalizing, JobState.Failed, JobState.Canceled],
-        [JobState.AwaitingDecision] = [JobState.Running, JobState.Failed, JobState.Canceled],
+        [JobState.AwaitingDecision] = [JobState.Running, JobState.Finalizing, JobState.Failed, JobState.Canceled],
         [JobState.Running] = [JobState.Paused, JobState.Finalizing, JobState.Failed, JobState.Canceled],
         [JobState.Paused] = [JobState.Running, JobState.Failed, JobState.Canceled],
         [JobState.Finalizing] = [JobState.Done, JobState.DoneWithErrors, JobState.Failed],

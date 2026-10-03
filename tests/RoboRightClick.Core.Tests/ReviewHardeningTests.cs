@@ -226,6 +226,20 @@ public class StateTableTests
     }
 
     [Fact]
+    public void An_answer_that_leaves_nothing_to_run_goes_from_awaiting_decision_to_finalizing()
+    {
+        // Skip for every conflict of a cut plans no step at all; the job must still reach
+        // its outcome rather than fail on the transition.
+        var job = new JobLifecycle(DateTimeOffset.UnixEpoch);
+        job.MoveTo(JobState.Scanning, DateTimeOffset.UnixEpoch);
+        job.MoveTo(JobState.AwaitingDecision, DateTimeOffset.UnixEpoch);
+
+        Assert.True(job.TryMoveTo(JobState.Finalizing, DateTimeOffset.UnixEpoch));
+        job.MoveTo(JobState.Done, DateTimeOffset.UnixEpoch);
+        Assert.False(JobStates.CanTransition(JobState.AwaitingDecision, JobState.Done));
+    }
+
+    [Fact]
     public void Paused_must_resume_before_finalizing()
     {
         Assert.False(JobStates.CanTransition(JobState.Paused, JobState.Finalizing));
