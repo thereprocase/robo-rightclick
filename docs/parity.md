@@ -72,12 +72,16 @@ real classic menu and Explorer's own Ctrl+C, Ctrl+X and Ctrl+V.
   (measured). Since commit e13fa37 each Robo item's registry key has an `Icon` value, so the
   items stand out from Explorer's own Cut, Copy and Paste beside them. Whether Explorer
   displays them is not yet verified on Windows.
-- **A loose file whose name starts with `-` is refused when it would go through robocopy** (a
-  copy, or a cut between drives); the rest of the selection runs, and the job lists it under
-  Refused with the reason. Robocopy reads such an argument as a switch even when quoted
-  (measured: a file called `-E` given as a file filter switched on `/E`), so a file called
-  `-MOV` or `-S` would change what the run does. Folders with such names, and cuts within one
-  drive (a rename), are not affected. Explorer pastes these files; use it for them.
+- **A file whose name starts with `-` is refused wherever robocopy would have to name it**;
+  the rest of the selection runs, and the job lists the file under Refused with the reason.
+  Robocopy reads such an argument as a switch even when quoted (measured: a file called `-E`
+  given as a file filter switched on `/E`), so a file called `-MOV` or `-S` would change what
+  the run does. That covers a selected file (a copy, or a cut between drives), a file inside a
+  folder that is copied file by file because a conflict in that folder was skipped or kept both
+  ways, "Try again" for such a file, and a cut within one drive whose rename turned out to cross
+  volumes (a mount point, or two shares of one NAS) and falls back to robocopy. A folder whose
+  name starts with `-`, a file inside a folder robocopy copies whole, and a cut within one drive
+  that renames are not affected. Explorer pastes these files; use it for them.
 - **No Robo-Paste on a selection of several folders.** Explorer offers Paste there and pastes
   into the folder that was right-clicked. The shell does not tell a DelegateExecute verb which
   item was clicked, so the item is hidden (`MultiSelectModel=Single`) rather than guessing.

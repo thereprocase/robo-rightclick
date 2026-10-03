@@ -106,14 +106,6 @@ internal sealed class Job
     /// <summary>Path-free on purpose: an exception message can contain a path.</summary>
     public const string UnexpectedFailureReason = "An unexpected error stopped this job.";
 
-    /// <summary>
-    /// A same-volume rename turned out to cross volumes (<see cref="StepOutcome.ReplanAsMove"/>)
-    /// for an item robocopy cannot move: robocopy cannot rename, so a keep-both name cannot be
-    /// kept, and an OS move would be an app-initiated source deletion (invariant 1).
-    /// </summary>
-    public const string CannotMoveUnderNewNameReason =
-        "This item could not be moved under a new name, because the destination turned out to be on a different drive.";
-
     /// <summary>Robocopy's own operation name, so FailureText and the error summary treat these like its errors.</summary>
     private const string CreateFolderOperation = "Creating Destination Directory";
 
@@ -612,7 +604,8 @@ internal sealed class Job
             var completed = await RunPartAsync(main, 0, outcomes, token).ConfigureAwait(false);
             if (completed && main.Replans.Count > 0)
             {
-                var appendix = await RunBlockingAsync(() => PlanReplacementMoves(main.Replans, token)).ConfigureAwait(false);
+                var appendix = await RunBlockingAsync(
+                    () => ReplacementMovePlanner.Plan(main.Replans, Services.FileSystem, Services.FileSystem, Services.FileSystem.Exists, token)).ConfigureAwait(false);
                 LedgerPart second;
                 lock (_lock)
                 {
@@ -839,7 +832,7 @@ internal sealed class Job
                 else if (refused)
                 {
                     part.Ledger.InProcessRefused(index);
-                    _issues.Add(new PlanIssue(SourceOf(step.Step), CannotMoveUnderNewNameReason));
+                    _issues.Add(new PlanIssue(SourceOf(step.Step), ReplacementMovePlanner.CannotMoveUnderNewNameReason));
                 }
                 else if (outcome.ReplanAsMove)
                 {
@@ -881,7 +874,12 @@ internal sealed class Job
         var threads = await RunBlockingAsync(
             () => DriveMedia.ThreadsFor(Start.Settings, step.SourceDirectory, step.DestinationDirectory)).ConfigureAwait(false);
         var pipeName = PipeNames.ForStep(Id, pipeIndex, NewPipeNonce());
-        var arguments = RobocopyArgs.Build(step, threads.ApplyTo(Start.Settings), policy, pipeName);
+        if (RobocopyArgs.TryBuild(step, threads.ApplyTo(Start.Settings), policy, pipeName) is not { } arguments)
+        {
+            // This step's files fail (the ledger lists them for "Try again", which refuses the
+            // names it cannot pass); the steps after it still run.
+            return new StepOutcome([], [], null, RobocopyArgs.UnsafeStepFailure);
+        }
         BestEffort(sink => sink.CommandStarted(Id, arguments));
         // Before the run starts, so it cannot interleave with robocopy's own lines.
         BestEffort(sink => sink.OutputLine(Id, threads.LogLine));
@@ -909,47 +907,6 @@ internal sealed class Job
             token);
         // The copy completes on its dedicated thread; carry on from the pool, not that thread.
         return await OnThreadPool(copy).ConfigureAwait(false);
-    }
-
-    /// <summary>
-    /// The second ledger part: each re-planned rename scanned again on its own and run as a
-    /// robocopy move. Ask with SkipAll is the documented way to get Skip semantics both with
-    /// and without conflicts: kept names are left out by construction (so a /MOV run never
-    /// sees them), and anything that appears later is skipped by Ask's flags.
-    /// </summary>
-    private ExecutionPlan PlanReplacementMoves(IReadOnlyList<RenameStep> renames, CancellationToken token)
-    {
-        var fileSystem = Services.FileSystem;
-        var steps = new List<PlanStep>();
-        var refused = new List<PlanIssue>();
-        foreach (var rename in renames)
-        {
-            var name = WinPath.GetFileName(rename.Source);
-            if (!WinPath.Comparer.Equals(name, WinPath.GetFileName(rename.Destination)))
-            {
-                refused.Add(new PlanIssue(rename.Source, CannotMoveUnderNewNameReason));
-                continue;
-            }
-            switch (fileSystem.KindOf(rename.Source))
-            {
-                case ItemKind.File:
-                    steps.Add(new RobocopyStep(
-                        WinPath.GetParent(rename.Source), WinPath.GetParent(rename.Destination), [name], Recursive: false, Move: true));
-                    break;
-                case ItemKind.Directory:
-                    steps.Add(new RobocopyStep(rename.Source, rename.Destination, [], Recursive: true, Move: true));
-                    break;
-                case ItemKind.DirectoryLink:
-                    // Robocopy follows a link given as its source root; /MOVE would empty the target.
-                    refused.Add(new PlanIssue(rename.Source, PastePlanner.LinkReason));
-                    break;
-                default:
-                    refused.Add(new PlanIssue(rename.Source, PastePlanner.MissingReason));
-                    break;
-            }
-        }
-        var scan = JobScanner.Scan(new PastePlan(steps, refused, []), fileSystem, fileSystem, null, token);
-        return ExecutionPlanner.Apply(scan, ConflictPolicy.Ask, new ConflictChoice.SkipAll(), fileSystem.Exists);
     }
 
     /// <summary>Waits while paused. False when canceled.</summary>

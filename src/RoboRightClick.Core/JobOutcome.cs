@@ -175,7 +175,10 @@ public static class RetryPlanner
     /// nothing to repeat: <paramref name="retryable"/> and <paramref name="failedInProcessSteps"/>
     /// both empty. (A job whose only failure was a keep-both copy still offers "Try again".)
     /// Robocopy steps come first, then the in-process steps in their original order, as
-    /// keep-both steps ran last originally.
+    /// keep-both steps ran last originally. A file whose name robocopy would read as a switch
+    /// (it failed inside a whole-tree run, where it was never named) cannot be repeated by
+    /// name: it is listed under <see cref="ExecutionPlan.Issues"/> with
+    /// <see cref="PastePlanner.SwitchLikeNameReason"/> instead.
     /// </summary>
     /// <exception cref="ArgumentException">
     /// A retryable entry that is not a file of a robocopy step of <paramref name="original"/>
@@ -194,6 +197,7 @@ public static class RetryPlanner
         // Grouped by source folder, destination folder and verb, in first-failure order.
         var groups = new Dictionary<string, (string Source, string Destination, bool Move, List<PlannedFile> Files)>(WinPath.Comparer);
         var order = new List<string>();
+        var refused = new List<PlanIssue>();
         foreach (var (stepIndex, file) in retryable)
         {
             if ((uint)stepIndex >= (uint)original.Steps.Count || original.Steps[stepIndex].Step is not RobocopyStep step)
@@ -203,6 +207,11 @@ public static class RetryPlanner
             if (!WinPath.Comparer.Equals(WinPath.GetFileName(file.SourcePath), WinPath.GetFileName(file.DestinationPath)))
             {
                 throw new ArgumentException("A robocopy retry cannot write a file under a different name.", nameof(retryable));
+            }
+            if (ExecutionPlanner.WithoutSwitchLikeNames([file], refused).Count == 0)
+            {
+                // A file a whole-tree run failed on: the retry would have to name it.
+                continue;
             }
             var source = WinPath.GetParent(file.SourcePath);
             var destination = WinPath.GetParent(file.DestinationPath);
@@ -239,6 +248,6 @@ public static class RetryPlanner
             steps.Add(original.Steps[index]);
         }
 
-        return new ExecutionPlan(steps, original.PresentBeforeRun, [], [], []);
+        return new ExecutionPlan(steps, original.PresentBeforeRun, [], [], refused);
     }
 }

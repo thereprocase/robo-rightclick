@@ -104,6 +104,10 @@ public static class ExecutionPlanner
     /// if it held a kept file, so robocopy never reaches what the scan said leaves the plan.
     /// A batch whose names are all gone produces no step at all: a robocopy step without
     /// names would copy the whole folder.</para>
+    /// <para>A file whose name robocopy would read as a switch never becomes a file filter: a
+    /// batch drops it and the plan lists it under <see cref="ExecutionPlan.Issues"/> with
+    /// <see cref="PastePlanner.SwitchLikeNameReason"/>. A tree that is not split names no file
+    /// and copies it as usual.</para>
     /// <para>With no conflicts every step runs with policy Ask, whatever the configured
     /// default: there was nothing to decide, and Ask's flags skip a file that appears at the
     /// destination after the scan instead of overwriting it unseen.</para>
@@ -153,7 +157,32 @@ public static class ExecutionPlanner
             Distinct(scan.Conflicts.Select(c => c.DestinationPath)),
             Distinct(scan.Steps.SelectMany(s => s.LinkFolders)),
             kept,
-            scan.Issues);
+            [.. scan.Issues, .. builder.Issues]);
+    }
+
+    /// <summary>
+    /// Splits off the files robocopy would read as a switch (<see cref="RobocopyArgs.IsSwitchLikeName"/>)
+    /// if their names were passed as file filters, and records each one as a refusal with
+    /// <see cref="PastePlanner.SwitchLikeNameReason"/>. Every planner that turns file names
+    /// into a robocopy step calls this first; <see cref="RobocopyArgs.Build"/> throwing is only
+    /// the last gate. A refused file stays where it is: its folder runs as named batches, so
+    /// robocopy never reaches it.
+    /// </summary>
+    internal static List<PlannedFile> WithoutSwitchLikeNames(IEnumerable<PlannedFile> files, List<PlanIssue> refused)
+    {
+        var kept = new List<PlannedFile>();
+        foreach (var file in files)
+        {
+            if (RobocopyArgs.IsSwitchLikeName(WinPath.GetFileName(file.SourcePath)))
+            {
+                refused.Add(new PlanIssue(file.SourcePath, PastePlanner.SwitchLikeNameReason));
+            }
+            else
+            {
+                kept.Add(file);
+            }
+        }
+        return kept;
     }
 
     /// <summary>The decision for each conflict, index for index.</summary>
@@ -334,6 +363,9 @@ public static class ExecutionPlanner
 
         public List<ExecutionStep> Steps { get; } = [];
 
+        /// <summary>Files refused while building steps: names robocopy would read as a switch.</summary>
+        public List<PlanIssue> Issues { get; } = [];
+
         private FileDecision? DecisionOf(PlannedFile file) =>
             decisionByFile.TryGetValue(FileKey(file.SourcePath, file.DestinationPath), out var decision) ? decision : null;
 
@@ -349,15 +381,18 @@ public static class ExecutionPlanner
             {
                 case RobocopyStep { FileNames.Count: > 0 } batch:
                     var step = batch;
-                    if (stepScan.Files.Count != batch.FileNames.Count)
+                    var named = WithoutSwitchLikeNames(stepScan.Files, Issues);
+                    if (named.Count != batch.FileNames.Count)
                     {
-                        // The scan dropped names (missing, or a folder in the way). Robocopy must
-                        // not be handed them, and an emptied list would mean "the whole folder".
-                        if (stepScan.Files.Count == 0)
+                        // The scan dropped names (missing, or a folder in the way), or a name
+                        // would read as a switch. Robocopy must not be handed them, and an
+                        // emptied list would mean "the whole folder".
+                        if (named.Count == 0)
                         {
                             return;
                         }
-                        step = batch with { FileNames = stepScan.Files.Select(f => WinPath.GetFileName(f.SourcePath)).ToList() };
+                        step = batch with { FileNames = named.Select(f => WinPath.GetFileName(f.SourcePath)).ToList() };
+                        files = files.Where(f => !RobocopyArgs.IsSwitchLikeName(WinPath.GetFileName(f.SourcePath))).ToList();
                     }
                     Steps.Add(new ExecutionStep(step, policy, files));
                     break;
@@ -430,7 +465,7 @@ public static class ExecutionPlanner
             }
             foreach (var (group, policy) in new[] { (replace, ConflictPolicy.Replace), (ask, ConflictPolicy.Ask) })
             {
-                foreach (var chunk in ChunkByNameLength(group, budget))
+                foreach (var chunk in ChunkByNameLength(WithoutSwitchLikeNames(group, Issues), budget))
                 {
                     var names = chunk.Select(f => WinPath.GetFileName(f.SourcePath)).ToList();
                     Steps.Add(new ExecutionStep(

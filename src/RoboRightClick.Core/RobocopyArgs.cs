@@ -196,6 +196,31 @@ public static class RobocopyArgs
     }
 
     /// <summary>
+    /// The step's failure when <see cref="TryBuild"/> refuses it. Path-free on purpose, like
+    /// every <see cref="StepOutcome.Failure"/>.
+    /// </summary>
+    public const string UnsafeStepFailure = "A name in this step cannot be passed to robocopy safely.";
+
+    /// <summary>
+    /// <see cref="Build"/>, or null where Build would throw (a name robocopy would read as a
+    /// switch, a quote or control character). The job turns null into that step's
+    /// <see cref="StepOutcome.Failure"/> (<see cref="UnsafeStepFailure"/>), so one bad name fails
+    /// one step and the files the planners let through, rather than the whole job partway
+    /// through its run. The planners keep such names out; this is the gate behind them.
+    /// </summary>
+    public static string? TryBuild(RobocopyStep step, Settings settings, ConflictPolicy resolvedPolicy, string logPipeName)
+    {
+        try
+        {
+            return Build(step, settings, resolvedPolicy, logPipeName);
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Robocopy reads an argument that starts with '-' as a switch exactly like one that starts
     /// with '/', quoted or not (verified on Windows build 26200: a file called "-E" given as a
     /// file filter turned on /E). Names are passed as file filters, so a file called "-MOV" or
