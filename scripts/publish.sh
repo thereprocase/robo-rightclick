@@ -9,12 +9,22 @@ project=src/RoboRightClick/RoboRightClick.csproj
 publish_dir=artifacts/publish
 font_license=Fonts/LICENSE-IBM-Plex-OFL.txt
 
-# Directory.Build.props is the only place the version is written.
+# Directory.Build.props is the only place the version is written. Any semantic version the
+# app itself orders (AppVersion.TryParse) may be packaged: 1.0.0-beta.2, 1.0.0-rc.1, 1.0.0.
+# Build metadata ("+...") is not allowed in a package name. A Core test reads the next line
+# and checks it against AppVersion.TryParse; keep it on one line.
+version_pattern='^[0-9]+\.[0-9]+\.[0-9]+(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$'
 version="$(dotnet msbuild "$project" -getProperty:Version | tr -d '[:space:]')"
-if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
-  echo "publish: version '$version' is not 1.0.0-beta.1-shaped" >&2
+if ! [[ "$version" =~ $version_pattern ]]; then
+  echo "publish: version '$version' is not a semantic version such as 1.0.0-beta.1 or 1.0.0" >&2
   exit 1
 fi
+
+# The single-file exe bundles the runtime pack of the SDK that builds it, so the SDK is pinned
+# exactly (global.json, rollForward disable); both versions are printed with the hashes.
+sdk_version="$(dotnet --version)"
+runtime_version="$(dotnet msbuild "$project" -getProperty:BundledNETCoreAppPackageVersion | tr -d '[:space:]')"
+command -v python3 >/dev/null 2>&1 || { echo "publish: python3 is needed to write the zip" >&2; exit 1; }
 
 # A stale file from an earlier run must never end up in the package.
 rm -rf "$publish_dir"
@@ -46,42 +56,52 @@ fi
 name="RoboRightClick-${version}-win-x64"
 zip_path="artifacts/${name}.zip"
 staging="artifacts/staging"
-rm -rf "$staging" "$zip_path" "$zip_path.sha256"
+rm -rf "$staging" "$zip_path" "$zip_path.sha256" "artifacts/${name}.exe.sha256"
 mkdir -p "$staging/Fonts"
 cp "$publish_dir/RoboRightClick.exe" "$staging/RoboRightClick.exe"
 cp "$publish_dir/$font_license" "$staging/$font_license"
 cp LICENSE README.md "$staging/"
 
 # The exe is deterministic (ContinuousIntegrationBuild), but a zip records each file's
-# modified time. Pinning those times to the commit makes the zip, and so the published
-# SHA256, reproducible: anyone can rebuild the same commit and compare hashes.
-# SOURCE_DATE_EPOCH (the reproducible-builds convention) overrides the commit time.
+# modified time. The entries take the commit's time instead, so rebuilding the same commit
+# gives the same zip. SOURCE_DATE_EPOCH (the reproducible-builds convention) overrides it.
 stamp="${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct)}"
-find "$staging" -exec touch -h -d "@${stamp}" {} +
-# Zip entries store local time; a fixed zone keeps the bytes the same on every builder.
-export TZ=UTC
 
-# Entry names are relative to the staging folder so the zip has no leading directories.
+# One zip writer for every builder, with every entry's metadata fixed: the builder's umask,
+# owner, clock and zip tool used to end up in the entry headers. Entries are written in
+# sorted order, files as 0644 regular files, times from the stamp above (UTC). Entry names
+# are relative to the staging folder so the zip has no leading directories.
+# The compressed bytes still depend on the zlib build (zlib and zlib-ng deflate differently),
+# so the exe's own SHA256 is published too: it is the reproducibility check that holds on
+# any builder with the pinned SDK.
 entries=(RoboRightClick.exe LICENSE README.md "$font_license")
-if command -v zip >/dev/null 2>&1; then
-  (cd "$staging" && zip -X -q "../${name}.zip" "${entries[@]}")
-else
-  # "python3 -m zipfile -c" keeps only each file's base name, which would flatten Fonts/.
-  (cd "$staging" && python3 - "../${name}.zip" "${entries[@]}" <<'PY'
+(cd "$staging" && python3 - "../${name}.zip" "$stamp" "${entries[@]}" <<'PY'
 import sys
+import time
 import zipfile
 
-with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as archive:
-    for entry in sys.argv[2:]:
-        archive.write(entry, entry)
+zip_path, stamp, entries = sys.argv[1], int(sys.argv[2]), sorted(sys.argv[3:])
+date_time = time.gmtime(stamp)[:6]
+with zipfile.ZipFile(zip_path, "w") as archive:
+    for entry in entries:
+        info = zipfile.ZipInfo(entry, date_time=date_time)
+        info.compress_type = zipfile.ZIP_DEFLATED
+        info.create_system = 3
+        info.external_attr = (0o100644 & 0xFFFF) << 16
+        with open(entry, "rb") as source:
+            archive.writestr(info, source.read(), compress_type=zipfile.ZIP_DEFLATED, compresslevel=6)
 PY
-  )
-fi
+)
 rm -rf "$staging"
 
 # sha256sum records the name it is given, so run it from the zip's folder.
 (cd artifacts && sha256sum "${name}.zip" > "${name}.zip.sha256")
+exe_hash="$(sha256sum "$publish_dir/RoboRightClick.exe" | cut -d' ' -f1)"
+printf '%s  RoboRightClick.exe\n' "$exe_hash" > "artifacts/${name}.exe.sha256"
 
-echo "zip:    $zip_path"
-echo "sha256: $zip_path.sha256"
+echo "sdk:     $sdk_version (runtime pack $runtime_version)"
+echo "zip:     $zip_path"
+echo "sha256:  $zip_path.sha256"
 cat "$zip_path.sha256"
+echo "exe:     artifacts/${name}.exe.sha256"
+cat "artifacts/${name}.exe.sha256"

@@ -16,6 +16,8 @@
     <None Include="Fixtures/**" CopyToOutputDirectory="PreserveNewest" />
     <!-- The fonts the app embeds, so the family names the UI asks for are checked against them. -->
     <None Include="../../src/RoboRightClick/Fonts/*.ttf" Link="Fonts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The release script's version gate, checked against AppVersion.TryParse. -->
+    <None Include="../../scripts/publish.sh" Link="Scripts/publish.sh" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

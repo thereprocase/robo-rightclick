@@ -21,10 +21,11 @@ builds, Windows 10, ARM64 machines and physical machines are untested.
 
 ## Download and verify
 
-Each release has a zip and a `.sha256` file:
+Each release has a zip and two `.sha256` files:
 
 - `RoboRightClick-<version>-win-x64.zip`
 - `RoboRightClick-<version>-win-x64.zip.sha256`
+- `RoboRightClick-<version>-win-x64.exe.sha256` (the exe inside the zip, for rebuilds)
 
 The zip holds `RoboRightClick.exe` (self-contained, no .NET install needed), `LICENSE`,
 `README.md` and `Fonts\LICENSE-IBM-Plex-OFL.txt`. Check the download in PowerShell, in the
@@ -34,8 +35,14 @@ folder holding both files. It prints `True` when the zip matches its `.sha256` f
     (Get-FileHash $zip -Algorithm SHA256).Hash -eq (Get-Content "$zip.sha256").Split(' ')[0]
 
 `False` means the download is damaged or not the published file: download it again, and do
-not run it. The zip is reproducible: `./scripts/publish.sh` on the release's commit produces the
-same SHA256.
+not run it.
+
+The build is reproducible. `./scripts/publish.sh` on the release's commit, with the .NET SDK
+that `global.json` pins (exactly; it does not roll forward, because the exe bundles that SDK's
+runtime), produces an exe with the published `.exe.sha256`. The zip's SHA256 also matches when
+the builder's zlib is the same one: zlib and zlib-ng compress the same bytes differently.
+`./scripts/publish.sh` prints the SDK and runtime versions it used, and
+`./scripts/check-reproducible.sh` publishes twice and compares.
 
 ### The exe is not signed
 
@@ -365,7 +372,8 @@ config.json to start again from the defaults.
 
 ## Building
 
-On Linux or Windows with the .NET 10 SDK:
+On Linux or Windows with the .NET SDK version in `global.json` (10.0.111; no other version
+builds, see above):
 
     ./scripts/build.sh    # builds everything (the Windows app cross-compiles)
     ./scripts/test.sh     # runs the Core test suite
@@ -378,7 +386,12 @@ text ships in the zip as `Fonts\LICENSE-IBM-Plex-OFL.txt` and in `src/RoboRightC
 
 ## Releasing
 
-    ./scripts/publish.sh  # writes artifacts/RoboRightClick-<version>-win-x64.zip and .sha256
+    ./scripts/publish.sh             # writes the zip, its .sha256 and the exe's .exe.sha256 to artifacts/
+    ./scripts/check-reproducible.sh  # publishes twice and compares the hashes
+
+`publish.sh` packages any semantic version `Directory.Build.props` sets (`1.0.0-beta.2`,
+`1.0.0-rc.1`, `1.0.0`); a Core test keeps its pattern in step with the app's own version
+parser.
 
 End-to-end checks for a Windows machine are in [scripts/e2e/](scripts/e2e/README.md). The
 manual beta checklist is [docs/beta-test-plan.md](docs/beta-test-plan.md). Results go in
