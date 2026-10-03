@@ -1,0 +1,14 @@
+# Line endings are fixed in the repository whatever core.autocrlf says on a checkout. The
+# release zip holds README.md and LICENSE byte for byte, the exe embeds text-sourced inputs,
+# and the scripts run under bash (Git Bash on Windows), which fails on a CR at a line end.
+* text=auto eol=lf
+
+# Never converted.
+*.png binary
+*.ico binary
+*.ttf binary
+*.bin binary
+*.utf16 binary
+
+# Captured robocopy and Explorer output: the bytes Windows produced, CRLF included, as committed.
+spikes/m0/results/** -text

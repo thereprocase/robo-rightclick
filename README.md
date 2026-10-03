@@ -41,8 +41,11 @@ The build is reproducible. `./scripts/publish.sh` on the release's commit, with 
 that `global.json` pins (exactly; it does not roll forward, because the exe bundles that SDK's
 runtime), produces an exe with the published `.exe.sha256`. The zip's SHA256 also matches when
 the builder's zlib is the same one: zlib and zlib-ng compress the same bytes differently.
-`./scripts/publish.sh` prints the SDK and runtime versions it used, and
-`./scripts/check-reproducible.sh` publishes twice and compares.
+`./scripts/publish.sh` prints the commit and the SDK and runtime versions it used, and refuses
+a working tree with uncommitted changes. `./scripts/check-reproducible.sh` publishes the commit
+twice, each time from a fresh clone at a different path and under a different umask, and
+compares. `.gitattributes` fixes line endings, so a Windows checkout with `core.autocrlf`
+builds the same bytes.
 
 ### The exe is not signed
 
@@ -398,7 +401,7 @@ text ships in the zip as `Fonts\LICENSE-IBM-Plex-OFL.txt` and in `src/RoboRightC
 ## Releasing
 
     ./scripts/publish.sh             # writes the zip, its .sha256 and the exe's .exe.sha256 to artifacts/
-    ./scripts/check-reproducible.sh  # publishes twice and compares the hashes
+    ./scripts/check-reproducible.sh  # publishes twice from fresh clones and compares the hashes
 
 `publish.sh` packages any semantic version `Directory.Build.props` sets (`1.0.0-beta.2`,
 `1.0.0-rc.1`, `1.0.0`); a Core test keeps its pattern in step with the app's own version

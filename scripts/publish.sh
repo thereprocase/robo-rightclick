@@ -26,6 +26,19 @@ sdk_version="$(dotnet --version)"
 runtime_version="$(dotnet msbuild "$project" -getProperty:BundledNETCoreAppPackageVersion | tr -d '[:space:]')"
 command -v python3 >/dev/null 2>&1 || { echo "publish: python3 is needed to write the zip" >&2; exit 1; }
 
+# A package must be rebuildable from its commit, so uncommitted changes are refused: nobody
+# else could reproduce them. PUBLISH_ALLOW_DIRTY=1 builds anyway for a local experiment; the
+# commit line then says "-dirty".
+commit="$(git rev-parse HEAD)"
+if [[ -n "$(git status --porcelain)" ]]; then
+  if [[ "${PUBLISH_ALLOW_DIRTY:-}" != 1 ]]; then
+    echo "publish: the working tree has uncommitted changes; commit them, or set PUBLISH_ALLOW_DIRTY=1 for a local build" >&2
+    git status --short >&2
+    exit 1
+  fi
+  commit="${commit}-dirty"
+fi
+
 # A stale file from an earlier run must never end up in the package.
 rm -rf "$publish_dir"
 mkdir -p artifacts
@@ -99,6 +112,7 @@ rm -rf "$staging"
 exe_hash="$(sha256sum "$publish_dir/RoboRightClick.exe" | cut -d' ' -f1)"
 printf '%s  RoboRightClick.exe\n' "$exe_hash" > "artifacts/${name}.exe.sha256"
 
+echo "commit:  $commit"
 echo "sdk:     $sdk_version (runtime pack $runtime_version)"
 echo "zip:     $zip_path"
 echo "sha256:  $zip_path.sha256"
