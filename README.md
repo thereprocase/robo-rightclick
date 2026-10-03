@@ -8,7 +8,7 @@ prompts, `- Copy` naming, pause and cancel. The bulk data moves through
 A tray icon shows queued and running jobs. Each job's log is kept on disk, unless
 **ephemeral mode** is on, in which case the app writes nothing about any job to disk.
 
-> **Status: beta (1.0.0-beta.1).** Built on Linux and cross-compiled for Windows. Install,
+> **Status: beta (1.0.0-beta.2).** Built on Linux and cross-compiled for Windows. Install,
 > the three menu items, the clipboard and uninstall have run on one Windows 11 virtual machine
 > ([docs/testlog.md](docs/testlog.md), 2026-10-02). Everything else is unverified on Windows
 > until the test log says otherwise. The plan is in [docs/design.md](docs/design.md).
@@ -99,6 +99,10 @@ the entry is corrected. A version that cannot be read counts as older.
 | newer | explains, offers Open, changes nothing | exit code 1, changes nothing |
 
 `--quiet` never shows a window; the exit code (0 ok, 1 failed) is the result.
+
+The first test build, published as a draft release labelled `1.0.0-beta.1`, predates this check:
+run over a newer install it replaces it without asking. Installing 1.0.0-beta.2 or later over
+it is an update.
 
 1. Download the new release, check its hash, unblock the zip and extract it, as above.
 2. Let running pastes finish, or cancel them, and deal with finished ones that need attention

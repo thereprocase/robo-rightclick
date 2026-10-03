@@ -13,10 +13,10 @@
   <!-- One version for every assembly. Windows file versions must be numeric, so the
        pre-release label lives only in Version/InformationalVersion. -->
   <PropertyGroup>
-    <Version>1.0.0-beta.1</Version>
+    <Version>1.0.0-beta.2</Version>
     <AssemblyVersion>1.0.0.0</AssemblyVersion>
     <FileVersion>1.0.0.0</FileVersion>
-    <InformationalVersion>1.0.0-beta.1</InformationalVersion>
+    <InformationalVersion>1.0.0-beta.2</InformationalVersion>
     <!-- Keep the displayed version exactly as above, without a "+commit" suffix. -->
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
