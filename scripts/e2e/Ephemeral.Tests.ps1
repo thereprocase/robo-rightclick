@@ -235,12 +235,16 @@ try {
         extraArgs = @{ copy = '/IORATE:8M'; move = '/IORATE:8M' }
     }
 
+    # The destination folders carry the marker, so a toast or record that names one, even by
+    # its folder name alone, is caught by the marker search. Not the hotkey's: File Explorer
+    # opens a window on it and records the folder name in HKCU itself (shell bags), which the
+    # marker search there would report.
     $srcDir = Join-Path $work 'src'
-    $destCopy = Join-Path $work 'dest-copy'
-    $destCut = if ($SecondVolume) { Join-Path $SecondVolume "$marker-cut-dest" } else { Join-Path $work 'dest-cut' }
-    $destBig = Join-Path $work 'dest-big'
-    $destConflict = Join-Path $work 'dest-conflict'
-    $destFail = Join-Path $work 'dest-fail'
+    $destCopy = Join-Path $work "$marker-dest-copy"
+    $destCut = if ($SecondVolume) { Join-Path $SecondVolume "$marker-cut-dest" } else { Join-Path $work "$marker-dest-cut" }
+    $destBig = Join-Path $work "$marker-dest-big"
+    $destConflict = Join-Path $work "$marker-dest-conflict"
+    $destFail = Join-Path $work "$marker-dest-fail"
     $destHotkey = Join-Path $work 'dest-hotkey'
     New-Item -ItemType Directory -Path $srcDir, $destCopy, $destCut, $destBig, $destConflict, $destFail, $destHotkey | Out-Null
 
@@ -268,6 +272,17 @@ try {
 
     $before = Get-Snapshot
     Write-Step "snapshot before: $($before.Count) files"
+    # Windows' notification database keeps earlier toasts, and rewrites old pages into its
+    # write-ahead log whenever a new toast arrives. A normal-mode toast from an earlier test run
+    # that named a folder under -Root would then match the test path here although no job of
+    # this run wrote it (docs/testlog.md 2026-10-03, second gate entry). The page may come from
+    # the database into a log that did not hold it before, so this is kept per folder: for a
+    # file in a folder where any file held the test path before these jobs, only the marker,
+    # unique to this run, can tell.
+    $heldTestPathBefore = @{}
+    foreach ($path in $before.Keys) {
+        if ((Test-SearchedOnly $path) -and (Test-FileContainsText $path $testPathText) -eq $true) { $heldTestPathBefore[(Split-Path -Parent $path)] = $true }
+    }
 
     # 1. copy
     Assert-That ((Invoke-Robo -Verb copy -Paths $copyFile) -eq 0) 'job 1 (copy): Robo-Copy accepted'
@@ -343,6 +358,10 @@ try {
         if ([IO.Path]::GetFileName($path).IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $problems.Add("marker in name: $path") }
         elseif (($isNew -or $isChanged) -and -not $isConfig) {
             foreach ($needle in $marker, $testPathText) {
+                if ($needle -eq $testPathText -and $heldTestPathBefore.ContainsKey((Split-Path -Parent $path))) {
+                    Write-Step "unverified: held the test path before the jobs, so only the marker was searched: $path"
+                    break
+                }
                 $found = Test-FileContainsText $path $needle
                 if ($found -eq $true) { $problems.Add("'$needle' in content: $path"); break }
                 # Explorer deletes its toast images within seconds; one that is gone left nothing behind.
