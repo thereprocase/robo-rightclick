@@ -39,6 +39,17 @@ public sealed record AppPaths(
     /// <summary>Added to the installed exe's name for the copy kept while an update replaces it, so a failed update can restore it.</summary>
     public const string BackupExeSuffix = ".old";
 
+    /// <summary>
+    /// The one temp name used beside <paramref name="path"/> while it is written: install's
+    /// exe, icons and config.json, and the app's config.json and job.json. Fixed rather than
+    /// unique, so uninstall can list every file an interrupted write may leave
+    /// (<see cref="UninstallPlan.For"/>); a writer deletes a stale one before reusing it.
+    /// </summary>
+    public static string TempOf(string path) => path + TempSuffix;
+
+    /// <summary>The installed exe's temp name during an install or update (<see cref="TempOf"/>).</summary>
+    public string InstalledExeTemp => TempOf(InstalledExe);
+
     public static AppPaths From(string localAppData, string roamingAppData)
     {
         var install = WinPath.Combine(WinPath.Combine(localAppData, "Programs"), AppInfo.Name);

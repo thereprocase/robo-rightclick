@@ -62,6 +62,16 @@ public static class InstallText
         $"{AppInfo.Name} {refuse.Installed} is installed, which is newer than this {refuse.This}. "
             + "Nothing was changed. Run --install --force to replace it with this older version.";
 
+    /// <summary>
+    /// Added to the result message when everything was installed but the app could not be
+    /// started afterwards (security software or a policy can block a new exe). The install
+    /// stands and is not rolled back: the files and registry entries are complete.
+    /// </summary>
+    public const string TrayNotStarted =
+        "It could not be started just now; security software or a policy may have blocked it. "
+            + "The menu items work once it runs: run RoboRightClick.exe from %LOCALAPPDATA%\\Programs\\RoboRightClick, "
+            + "or sign out and back in if it starts with Windows.";
+
     /// <summary>The heading of the result message after a successful install.</summary>
     public static string Done(InstallDecision decision) => decision switch
     {

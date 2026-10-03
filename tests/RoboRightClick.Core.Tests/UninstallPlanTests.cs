@@ -57,6 +57,25 @@ public class UninstallPlanTests
         Assert.Contains(WinPath.Combine(WinPath.Combine(Paths.JobsDirectory, JobA), "job.json.tmp"), plan.Files);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Lists_every_temp_file_an_interrupted_install_can_leave(bool runningFromInstallDir)
+    {
+        // Install writes the exe, each icon and config.json to these fixed names first. A
+        // per-attempt unique name could never be listed, and the install folder would survive.
+        var plan = UninstallPlan.For(Paths, [], runningFromInstallDir);
+
+        Assert.Equal(WinPath.Combine(Paths.InstallDirectory, "RoboRightClick.exe.tmp"), Paths.InstalledExeTemp);
+        Assert.Contains(Paths.InstalledExeTemp, plan.Files);
+        Assert.Contains(AppPaths.TempOf(Paths.ConfigFile), plan.Files);
+        foreach (var verb in ShellVerbs.All)
+        {
+            Assert.Contains(AppPaths.TempOf(WinPath.Combine(Paths.InstallDirectory, ShellVerbs.IconFileName(verb))), plan.Files);
+        }
+        Assert.Contains(Paths.InstalledExe + ".old", plan.Files);
+    }
+
     [Fact]
     public void Never_lists_a_drive_root_or_a_shared_parent()
     {

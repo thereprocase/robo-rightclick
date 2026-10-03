@@ -86,11 +86,15 @@ public sealed record UninstallPlan(
         // in both cases; leaving them would make the install folder's removal fail.
         foreach (var verb in ShellVerbs.All)
         {
-            files.Add(WinPath.Combine(paths.InstallDirectory, ShellVerbs.IconFileName(verb)));
+            var icon = WinPath.Combine(paths.InstallDirectory, ShellVerbs.IconFileName(verb));
+            files.Add(icon);
+            files.Add(AppPaths.TempOf(icon));
         }
 
-        // A copy left by an update that was interrupted before it could delete it.
+        // A copy left by an update that was interrupted before it could delete it, and the
+        // temp copy of the new exe an install interrupted mid-write leaves.
         files.Add(paths.InstalledExe + AppPaths.BackupExeSuffix);
+        files.Add(paths.InstalledExeTemp);
 
         if (!runningFromInstallDir)
         {

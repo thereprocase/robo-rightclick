@@ -45,8 +45,9 @@ internal static class Installer
     /// changed) unless --force. 2. If a tray is running, SingleInstance.RequestExitAndWait
     /// (fails with a message if it will not exit because jobs are active; a running copy is
     /// never killed). 3. Replace the installed exe with this one unless it already runs from
-    /// there: a copy to a temp name in the same folder, then File.Replace, which keeps the old
-    /// exe as a .old copy; the result is compared with the source. 4. Rewrite the menu icons.
+    /// there: a copy to its fixed temp name in the same folder (<see cref="AppPaths.InstalledExeTemp"/>,
+    /// which uninstall lists), then File.Replace, which keeps the old exe as a .old copy; the
+    /// result is compared with the source. 4. Rewrite the menu icons.
     /// 5. Read an existing config.json, if any. 6.
     /// RegistryWriter.Write(Registration.InstallValues(new InstallTarget(installedExe,
     /// Registration.ResolveStartWithWindows(command.StartWithWindows, existing), userSid,
@@ -55,13 +56,16 @@ internal static class Installer
     /// version wrote it (then it is left as it is, and the message says so). An update adds
     /// nothing to config.json: a field this version knows and the file lacks reads as its
     /// default (<see cref="SettingsSerializer"/>), so the user's file is never rewritten. 8.
-    /// Success deletes the .old copy; any failure from step 3 on restores it, puts the old
-    /// version back in DisplayVersion, restarts the old tray and reports the failure, so the
-    /// previous install stays as it was. 9. After an update or repair, SHChangeNotify
-    /// (SHCNE_ASSOCCHANGED) so Explorer reloads the cached menu icons. 10. Start the installed
-    /// exe (tray), with <see cref="CommandLine.AfterInstallSwitch"/> only for a fresh install,
-    /// so the first-run hint shows once. 11. Message: <see cref="InstallText.Done"/> and
-    /// <see cref="InstallText.Installed"/> (none with --quiet; the exit code is the result).
+    /// Any failure from step 3 to 7 restores the .old copy, puts the old version back in
+    /// DisplayVersion, restarts the old tray and reports the failure, so the previous install
+    /// stays as it was. After step 7 the install is complete and nothing rolls it back: delete
+    /// the .old copy. 9. After an update or repair, SHChangeNotify (SHCNE_ASSOCCHANGED) so
+    /// Explorer reloads the cached menu icons. 10. Start the installed exe (tray), with
+    /// <see cref="CommandLine.AfterInstallSwitch"/> only for a fresh install, so the first-run
+    /// hint shows once; a start that antivirus or a policy blocks adds
+    /// <see cref="InstallText.TrayNotStarted"/> to the message, and the exit code stays 0.
+    /// 11. Message: <see cref="InstallText.Done"/> and <see cref="InstallText.Installed"/> (none
+    /// with --quiet; the exit code is the result).
     /// </summary>
     public static int Install(CliInstall command, AppPaths paths)
     {
@@ -89,6 +93,8 @@ internal static class Installer
             }
 
             string? backup = null;
+            bool configKept;
+            HotkeySpec? pasteHotkey;
             try
             {
                 backup = CopyExecutable(HostEnvironment.ExecutablePath, paths);
@@ -106,22 +112,10 @@ internal static class Installer
                     RegistryWriter.SetStartWithWindows(false, paths.InstalledExe);
                 }
 
-                var configKept = !WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
+                configKept = !WriteConfig(paths, command.StartWithWindows, startWithWindows, existing, existingText, existingHadProblems);
 
                 // The hotkey the tray will load: a missing file was just written with the defaults.
-                var pasteHotkey = existing is null ? Settings.Default.PasteHotkey : existing.PasteHotkey;
-
-                DeleteBackup(backup);
-                if (decision is not InstallDecision.FreshInstall)
-                {
-                    ShellNotify.AssociationsChanged();
-                }
-                StartTray(paths, afterInstall: decision is InstallDecision.FreshInstall);
-                return Succeed(
-                    InstallText.Done(decision),
-                    InstallText.Installed(pasteHotkey)
-                        + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty),
-                    quiet);
+                pasteHotkey = existing is null ? Settings.Default.PasteHotkey : existing.PasteHotkey;
             }
             catch
             {
@@ -131,6 +125,21 @@ internal static class Installer
                 }
                 throw;
             }
+
+            // The install is complete from here on: nothing below may roll it back. A rollback
+            // after the .old copy is gone would write the old version label over the new exe.
+            DeleteBackup(backup);
+            if (decision is not InstallDecision.FreshInstall)
+            {
+                ShellNotify.AssociationsChanged();
+            }
+            var trayStarted = TryStartTray(paths, afterInstall: decision is InstallDecision.FreshInstall);
+            return Succeed(
+                InstallText.Done(decision),
+                InstallText.Installed(pasteHotkey)
+                    + (configKept ? "\n\n" + NewerConfigKeptMessage : string.Empty)
+                    + (trayStarted ? string.Empty : "\n\n" + InstallText.TrayNotStarted),
+                quiet);
         }
         catch (Exception ex)
         {
@@ -310,8 +319,10 @@ internal static class Installer
         Directory.CreateDirectory(paths.InstallDirectory);
 
         // A temp name in the same folder, then a replace: a failed copy never leaves a
-        // truncated exe at the path the registry points to.
-        var temp = WinPath.Combine(paths.InstallDirectory, AppInfo.ExeName + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        // truncated exe at the path the registry points to. The name is fixed so uninstall can
+        // list it (AppPaths.TempOf); a stale one from an interrupted install is removed first.
+        var temp = paths.InstalledExeTemp;
+        DeleteIfPresent(temp);
         var backup = paths.InstalledExe + AppPaths.BackupExeSuffix;
         var replaced = false;
         try
@@ -348,10 +359,7 @@ internal static class Installer
         }
         finally
         {
-            if (File.Exists(temp))
-            {
-                File.Delete(temp);
-            }
+            DeleteTempQuietly(temp);
         }
     }
 
@@ -369,7 +377,8 @@ internal static class Installer
             using var source = assembly.GetManifestResourceStream("RoboRightClick.Icons." + name)
                 ?? throw new InvalidOperationException($"The {verb.Label} menu icon is missing from this build.");
             var target = WinPath.Combine(paths.InstallDirectory, name);
-            var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var temp = AppPaths.TempOf(target);
+            DeleteIfPresent(temp);
             try
             {
                 using (var file = File.Create(temp))
@@ -380,10 +389,7 @@ internal static class Installer
             }
             finally
             {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
+                DeleteTempQuietly(temp);
             }
         }
     }
@@ -442,7 +448,8 @@ internal static class Installer
 
     private static void WriteAtomically(string path, string contents)
     {
-        var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var temp = AppPaths.TempOf(path);
+        DeleteIfPresent(temp);
         try
         {
             File.WriteAllText(temp, contents);
@@ -450,10 +457,35 @@ internal static class Installer
         }
         finally
         {
-            if (File.Exists(temp))
+            DeleteTempQuietly(temp);
+        }
+    }
+
+    /// <summary>A stale temp file from an interrupted install: removed before reuse, and a failure to remove it fails this step.</summary>
+    private static void DeleteIfPresent(string path)
+    {
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// Cleans up a temp file in a finally block. A failure here (antivirus still scanning a
+    /// freshly written exe) must not replace the exception that is already on its way out;
+    /// the next install removes the file before reuse, and uninstall lists it.
+    /// </summary>
+    private static void DeleteTempQuietly(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
             {
-                File.Delete(temp);
+                File.Delete(path);
             }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -582,6 +614,23 @@ internal static class Installer
             start.ArgumentList.Add(CommandLine.AfterInstallSwitch);
         }
         Process.Start(start)?.Dispose();
+    }
+
+    /// <summary>
+    /// <see cref="StartTray"/> after a completed install: a launch that antivirus, SmartScreen or
+    /// a policy blocks is reported in the result message, and the install stands.
+    /// </summary>
+    private static bool TryStartTray(AppPaths paths, bool afterInstall)
+    {
+        try
+        {
+            StartTray(paths, afterInstall);
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static IReadOnlyList<string> ListJobFolderNames(AppPaths paths)
