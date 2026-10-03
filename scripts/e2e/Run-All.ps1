@@ -3,9 +3,11 @@ Runs every end-to-end script in order, each in its own process (clean state, and
 thread for the clipboard), and prints a summary to stdout. Writes no files.
 If Install fails the rest are not run, because they need the app installed (run
 Uninstall.Tests.ps1 by hand if Install left anything behind). After that every test runs even
-when an earlier one fails, and Uninstall runs next to last, then Footprint (which installs and removes the app once more), so the machine is left clean.
+when an earlier one fails, and Uninstall runs after the scripts that need the app, then Update
+(which needs two builds, -OlderExe and -Exe, and skips without -OlderExe) and Footprint, each of
+which installs and removes the app again, so the machine is left clean.
 
-  .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe [-Root D:\rrc-e2e] [-SecondVolume E:\scratch] [-SmallVolume F:\scratch]
+  .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe [-OlderExe C:\path\to\older\RoboRightClick.exe] [-Root D:\rrc-e2e] [-SecondVolume E:\scratch] [-SmallVolume F:\scratch]
 
 Results are recorded in docs/testlog.md by hand.
 #>
@@ -13,6 +15,8 @@ param(
     [Parameter(Mandatory)][string]$Exe,
     [string]$Root = (Join-Path $env:TEMP 'rrc-e2e'),
     [string]$SecondVolume,
+    # A build with a lower version than -Exe, for Update.Tests.ps1; without it Update reports SKIP.
+    [string]$OlderExe,
     # A folder on a nearly full volume, for CutSafety's full-destination scenario.
     [string]$SmallVolume,
     # Passed to Ephemeral.Tests.ps1: path substrings a person has judged to be unrelated noise.
@@ -23,6 +27,7 @@ $ErrorActionPreference = 'Stop'
 
 $hostExe = (Get-Process -Id $PID).Path
 $exeFull = (Resolve-Path -LiteralPath $Exe).ProviderPath
+$olderFull = if ($OlderExe) { (Resolve-Path -LiteralPath $OlderExe).ProviderPath } else { $null }
 
 $plan = @(
     @{ Name = 'Install';    Args = @('-Exe', $exeFull, '-Root', $Root) },
@@ -33,6 +38,8 @@ $plan = @(
     @{ Name = 'Ephemeral';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($AllowPath) { @('-AllowPath', ($AllowPath -join '|')) } else { @() }) },
     @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
     @{ Name = 'Uninstall';  Args = @('-Root', $Root) },
+    # Needs the app absent and leaves it absent: install older, update, repair, refuse, force, roll back, uninstall.
+    @{ Name = 'Update';     Args = @('-Exe', $exeFull, '-Root', $Root) + $(if ($olderFull) { @('-OlderExe', $olderFull) } else { @() }) },
     # Installs and uninstalls once more and diffs HKCU and the folders around it; needs the app absent.
     @{ Name = 'Footprint';  Args = @('-Exe', $exeFull, '-Root', $Root) }
 )

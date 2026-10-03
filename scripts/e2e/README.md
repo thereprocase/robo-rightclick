@@ -9,8 +9,8 @@ on success; there is no test framework.
 `-SecondVolume` and `-SmallVolume` (docs/testlog.md, 2026-10-02 security entry): Install, Verbs,
 CutSafety, Cancel, Ephemeral, Security, Uninstall and Footprint passed. A script that has not run
 against a given build is as likely to fail on a script defect as on an app defect.
-`Hotkey.Tests.ps1`, and the hotkey paste added to `Ephemeral.Tests.ps1` as job 6, came later
-and have not run on Windows yet.
+`Hotkey.Tests.ps1`, the hotkey paste added to `Ephemeral.Tests.ps1` as job 6, and
+`Update.Tests.ps1` came later and have not run on Windows yet.
 
 ## Prerequisites
 
@@ -20,6 +20,10 @@ and have not run on Windows yet.
 - `RoboRightClick.exe`: the one from the release zip, or `artifacts/publish` after
   `./scripts/publish.sh`.
 - Not already installed: `Install.Tests.ps1` refuses to overwrite an install.
+- For `Update.Tests.ps1`, a second build with a lower version, passed as `-OlderExe`: for
+  example the previous release's exe, or a publish of a scratch checkout whose
+  `Directory.Build.props` sets a lower `Version` and `InformationalVersion`. Without it the
+  script reports SKIP.
 - Use a disposable machine or VM. The scripts install and uninstall the app, restart the tray,
   write and restore `config.json`, and create files under `-Root`. `Cancel.Tests.ps1` writes about
   2 GB, `Ephemeral.Tests.ps1` hashes your profile folders.
@@ -48,6 +52,7 @@ stdout. It writes no files. Exit code 0 means no test failed (a skipped test is 
 | `Ephemeral.Tests.ps1` | five ephemeral jobs plus a sixth through the hotkey (copy, cut, cancel, conflict answered Skip, failure on a locked file) leave no new, changed or removed file in `%APPDATA%` (Recent items, jump lists), `%LOCALAPPDATA%` (WER, CrashDumps), `%TEMP%` or the machine-wide WER folders except `config.json` and `%TEMP%\.net`, no file name or content with the test marker or the test folder's path, no marker in HKCU or the Application and System event logs, and the clipboard carries the three opt-out formats. Windows' notification database and a short list of Windows' own background files (web cache, token cache) may change; they are searched for the marker. Then normal mode with `logRetentionJobs` 3: six jobs, `job.json`, `robocopy.log` and `history.jsonl` as designed, the oldest folders pruned, a folder not named like a job kept, no opt-out formats |
 | `Security.Tests.ps1` | six sections, runnable alone with `-Sections`: (1) a low-integrity copy of the exe cannot run a verb (exit 1; any other code is a test failure); (2) a low-integrity COM client is refused at `CoCreateInstance`, also with both AppID descriptors removed (restored in a `finally`); (3) the robocopy output pipe, with robocopy held at its start: DACL, a second server on the name, a same-user client dropped by the PID check, a later client refused; (4) 21 hostile `extraArgs` values never reach robocopy's command line; (5) hostile clipboard contents (25 path forms, malformed and oversized blocks, 100,000 missing paths, device-path destinations) are refused with a canary untouched; (6) file names such as `-MOV` and `-E` are refused and the rest of the selection copies (cross-volume cut with `-SecondVolume`) |
 | `Uninstall.Tests.ps1` | `--uninstall` removes every key, the Run value, the folders and the tray, and keeps the shared parent keys |
+| `Update.Tests.ps1` | needs the app absent and two builds; installs the older, then with the tray running: the newer one updates it (exe hash, DisplayVersion, tray restarted, config.json byte for byte unchanged, no `.old` or `.tmp` left), the same version repairs, the older one is refused with exit 1 (and puts back a stale DisplayVersion) and installs with `--force`, a failure injected after the exe swap (a read-only config.json with `--autostart`) rolls back to the older exe and version, and uninstall removes a planted `.old` and the install temp files with the folder |
 | `Footprint.Tests.ps1` | needs the app absent; installs, runs three jobs, uninstalls, and diffs HKCU, the profile and machine folders, scheduled tasks, services and the machine-wide registry around each step: only the design's keys and folders appear, and all of them go. Windows' own noise is classified in the script and reported; `-AllowKey` and `-AllowPath` add judged noise |
 
 A script can also be run alone, for example
@@ -62,7 +67,8 @@ names a machine, an address or a user.
 
 | Parameter | Used by | Meaning |
 |---|---|---|
-| `-Exe` | Run-All, Install, Security, Footprint | Path to `RoboRightClick.exe` |
+| `-Exe` | Run-All, Install, Security, Update, Footprint | Path to `RoboRightClick.exe` |
+| `-OlderExe` | Run-All, Update | A build with a lower version than `-Exe` |
 | `-Root` | all | Scratch folder for test trees (default `$env:TEMP\rrc-e2e`) |
 | `-SecondVolume` | Run-All, CutSafety, Cancel, Ephemeral, Security | Writable folder on another volume |
 | `-LargeMB` | Verbs | Size of the large file in the test tree (default 64) |
