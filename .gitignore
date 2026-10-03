@@ -5,3 +5,4 @@ artifacts/
 .vs/
 # Machine-local wrappers around the private test VM. Never commit VM paths or keys.
 scripts/local/
+__pycache__/
