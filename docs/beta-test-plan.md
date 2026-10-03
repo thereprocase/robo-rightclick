@@ -7,8 +7,10 @@ step, with what to write in docs/testlog.md.
 What has a testlog entry so far: the e2e scripts Install, Verbs, CutSafety, Cancel, Ephemeral
 (jobs 1 to 5), Security, Uninstall and Footprint passed through `Run-All.ps1` on build 26200 in
 a VM (docs/testlog.md 2026-10-02, "security and ephemeral audit", "Run-All on the final exe"),
-on that entry's exe. Not run on Windows yet: `Hotkey.Tests.ps1`, Ephemeral job 6 (the hotkey
-paste), `Update.Tests.ps1`, and every manual step below unless a testlog entry names it. A
+on that entry's exe. The 2026-10-03 entry ran all ten scripts on the frozen 1.0.0-beta.1 build
+(Hotkey and Ephemeral job 6 pass only with the hotkey fix, on a scratch build) and covers steps
+0, 4 and 8b and parts of 1, 5, 7 and 8c; every other manual step below is still to do unless a
+testlog entry names it. A
 script that passed on an earlier exe is evidence for that exe only; a row stays "unverified" for
 a new build until an entry covers it.
 

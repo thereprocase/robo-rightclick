@@ -547,3 +547,273 @@ and its cause unknown (the deploy check catches it); 125% and 175% display scale
 Footprint.Tests), both virtual disks detached and deleted, the scratch folder, all scheduled
 tasks of this session removed. The pre-existing `RrcParityExplorer` task was left alone. The
 Windows-written `RunNotification` value above remains.
+
+## 2026-10-03 · build 26200 (robocopy 10.0.26100.1) · VM · frozen 1.0.0-beta.1 gate: install, update, Run-All, threads, icons, hotkey, foreground
+
+Same disposable Windows 11 Enterprise evaluation VM (build 26200), no network egress, test
+account signed in to the desktop; the desktop work ran through one-shot scheduled tasks and
+injected mouse and keyboard input. Test volumes for this entry: a 3 GB and a 48 MB NTFS virtual
+disk. Builds (exe SHA256, first 8 hex digits unless stated):
+
+- **frozen**: commit b9cd02d, zip `c8b61abab7bf6bb9930d28980019568ec4c93b43ece0ad0e795e4ebc9fb7b7bc`
+  (checked with `Get-FileHash` on the VM before anything ran), exe `d11d3ad8`, version 1.0.0-beta.1.
+  Every result below is for this exe unless it names another.
+- **draft**: the draft release's test build (asset zip `8147aa9b`, exe `3dd7d70e`), built from
+  commit b41a554, also labelled 1.0.0-beta.1.
+- **previous-b0**: commit b41a554 rebuilt with its version set to 1.0.0-beta.0 (exe `b5bf8ffc`);
+  **frozen-b0**: commit b9cd02d rebuilt the same way (exe `0a4efe41`), the older build with the
+  downgrade check for `Update.Tests.ps1 -OlderExe`.
+- **fix**: scratch builds of the fixes listed below, the uncommitted tree at the time, version
+  1.0.0-beta.2: `dbecdb80` (hotkey, notice, version, scripts) and `ce3389ba` (plus the progress
+  window). They are not release builds; the gate re-freezes from main.
+- An instrumented build of b9cd02d (exe `982597c6`, version 1.0.0-beta.9, file logging in the
+  hotkey and locator code) was used only to find the hotkey defect and is not kept.
+
+### Download simulation (Mark of the Web)
+
+The zip was copied to Downloads with a `Zone.Identifier` stream (ZoneId=3, github.com referrer).
+- `Expand-Archive` (Windows PowerShell 5.1) does **not** carry the mark: none of the extracted
+  files had a `Zone.Identifier` stream. Double-clicking that exe showed no SmartScreen prompt.
+- To match Explorer's own extraction, a second copy had the stream added to every file.
+  Double-clicking that exe showed "SmartScreen can't be reached right now", Unknown Publisher,
+  Run / Don't Run (`01-smartscreen-motw-exe.png`; the VM is offline, so this is the offline
+  variant). After Run, the install offer appeared about 25 s after the double-click (about 12 s
+  without the mark). The same exe started with `cmd /c start` from a scheduled task showed no prompt.
+- Whether the installed exe keeps the mark depends on the path: a **fresh install** from the
+  marked exe left `Zone.Identifier` on `%LOCALAPPDATA%\Programs\RoboRightClick\RoboRightClick.exe`
+  (`File.Copy` copies the stream); an **update or repair** keeps whatever the installed file had
+  (`File.Replace` keeps the replaced file's streams): over an unmarked install the result was
+  unmarked, over a marked one it stayed marked.
+- With the marked exe installed: a COM cold start (tray stopped, right-click, Robo-Copy) started
+  the tray with no prompt and the verb ran; sign-out and sign-in started the tray from the Run
+  value with no prompt (twice, at 150% and 175%). Neither path showed a SmartScreen or
+  "Open File - Security Warning" dialog.
+
+### Installer and updater (step 0)
+
+Clean profile first (no install folder, no keys, no Run value).
+- **draft installed with `--install --quiet`**, then config.json edited (retries 2, retry wait 7,
+  log retention 40, notify off). Double-clicking the frozen exe offered **"RoboRightClick
+  1.0.0-beta.1 is installed. Repair it?"**, not an update (`02-repair-offer-same-version-as-draft.png`):
+  both builds carry the same version. Repair replaced the exe (hash `d11d3ad8`), wrote the three
+  menu icons and the Icon values, kept config.json byte for byte, restarted the tray. **Defect**
+  (fixed, d8c6ab1): two different builds under one version; see "Found and fixed".
+- **previous-b0 installed**, same config edits. Double-click of the frozen exe: **"Update
+  RoboRightClick 1.0.0-beta.0 → 1.0.0-beta.1?"** (`06-update-offer-beta0-to-beta1.png`). Update:
+  exe `d11d3ad8`, DisplayVersion 1.0.0-beta.1, Icon values set, config.json unchanged
+  (SHA256 before and after equal), tray restarted. The classic menu in the Explorer window that
+  was open during the update showed no icons before (`05-...`) and the icons after
+  (`08-classic-menu-after-update-icons.png`), without a sign-out. The result dialog read
+  "ROBORIGHTCLICK WAS UPDATED FROM 1.0.0-BETA.0 TO 1.0.0..." with the new version cut off
+  (`07-updated-result-heading-truncated.png`). **Defect** (fixed, 0d01f51).
+- Double-click again: Repair offer, Repair ran, tray restarted, config unchanged.
+- **Downgrade**: double-click of frozen-b0 over the frozen install: "A newer RoboRightClick is
+  installed", Open and Close only (`09-downgrade-refused-offer.png`). `frozen-b0 --install
+  --quiet`: exit 1, exe and DisplayVersion unchanged. With `--force`: exit 0, beta.0 installed,
+  config unchanged; frozen `--install --quiet` updated back. **The draft over the frozen
+  install** with `--install --quiet`: exit 0 and the frozen exe was replaced by the draft's,
+  with no question: the draft predates the downgrade check and the labels are equal anyway.
+  The frozen build's icon files and Icon values stayed (the draft does not know them).
+- **Update during a long paste**: 4 x 256 MB throttled with `/IORATE` through `extraArgs`. Frozen
+  `--install --quiet` while robocopy ran: exit 1 after 10 s, the same robocopy process kept
+  running, the tray kept its PID, all four files arrived with matching hashes. The same through
+  the double-click Repair button: "RoboRightClick did not close" with the reasons and the ways out
+  (`10-repair-refused-while-paste-runs.png`); the copy went on and finished intact.
+
+### Run-All (step 1), frozen exe, `-OlderExe` frozen-b0, `-SecondVolume`, `-SmallVolume`
+
+First run, scripts as committed in b9cd02d:
+
+```
+Test      Result   Seconds
+----      ------   -------
+Install   PASS          17
+Verbs     PASS          34
+CutSafety PASS         141
+Cancel    PASS          62
+Hotkey    FAIL (1)       5
+Ephemeral FAIL (1)       6
+Security  PASS         856
+Uninstall PASS           2
+Update    FAIL (1)      20
+Footprint FAIL (1)       1
+```
+
+Hotkey and Ephemeral: `Exception calling "SetFocus" with "0" argument(s): "Target element cannot
+receive focus."` (script). Update: scenarios A to E passed, G stopped at `The property 'Count'
+cannot be found on this object` (script). Footprint: "Already installed", because Update stopped
+before its uninstall. Second run after the two script fixes:
+
+```
+Test      Result   Seconds
+----      ------   -------
+Install   PASS          12
+Verbs     PASS          34
+CutSafety PASS         140
+Cancel    PASS          61
+Hotkey    FAIL (1)      36
+Ephemeral FAIL (1)       7
+Security  PASS         856
+Uninstall PASS           1
+Update    PASS          21
+Footprint PASS         770
+```
+
+Hotkey: `Timed out after 30 s waiting for ...\hotkey\a\rrchotkey....txt to appear` (the app
+defect below). Ephemeral: `Could not bring the File Explorer window to the front.` (a late
+balloon toast held the foreground; see "Observed, not changed"). Update A logged
+`# threads /MT:32 (auto: source unknown, destination unknown, same disk)` for a format-1
+config.json with `"threads": 32`; G (tray start blocked by a deny-execute entry) exited 0 with
+the newer build in place; F removed the planted `.old` and temp files. Footprint: install 19
+app-owned registry differences, 10 judged noise, 0 other; after uninstall HKCU matched "before"
+apart from shared parents and noise; Windows' UFH\ARP copy 1 match while installed, 0 after.
+
+With the fixed scripts and the **fix** build: `Hotkey.Tests.ps1` PASS, A to H (16 checks), and
+`Ephemeral.Tests.ps1 -SecondVolume` PASS (six ephemeral jobs including the hotkey paste, then
+the normal-mode phase); its two `unverified` lines are the web cache files of earlier entries.
+The first Ephemeral run on the fix build listed two changed files, Explorer's
+`iconcache_32.db` and a OneDrive sync engine log; both were searched for the marker and the test
+path and held neither; they now sit in the script's judged-noise list. **The same Hotkey script
+against the frozen exe fails A** (`Timed out after 30 s ...`), so the test catches the defect.
+
+### Upgrade in place and the install loop (step 2)
+
+previous-b0 installed with the tray running, config.json edited (retries 3, conflict skip),
+frozen `--install --quiet`: exit 0, exe hash equal to the package's, DisplayVersion
+1.0.0-beta.1, Icon value `...\robo-copy.ico`, config.json unchanged, no `.old` or `.tmp`, new tray
+PID. Then 40 installs with the tray running, alternating frozen-b0 `--force` and frozen so a
+skipped replace would show in the hash, the tray killed and restarted 3 s before every fourth:
+**40 of 40 exit 0, installed hash as expected, a new tray each time, no leftovers**, config.json
+unchanged after all 40, 1.2 to 1.6 s each. Sixteen more installs from freshly copied exes (twelve
+started with `Start-Process` or `cmd /c start /wait`, four copied in and moved into place seconds
+before, as below): all replaced.
+
+The earlier anomaly (exit 0, exe not replaced) was **seen once more** this session, and not with
+the frozen exe: an instrumented exe, copied to the VM and moved into a new folder seconds
+before, run with `start /wait <exe> --install --quiet` from a scheduled task, returned 0, and
+afterwards the installed exe, DisplayVersion and the **tray process (same PID and start time)**
+were all unchanged. The tray was not even asked to exit, so the installer's own content check
+(it compares the installed file with the source after the swap) never ran. The Application and
+Defender event logs held nothing for that minute. Repeating the same sequence (copy, move, start
+at once) four times did not reproduce it. Cause unknown; the next process to look at is the
+one `start` launched, which nothing recorded. The deploy wrapper's hash check still catches it.
+
+### threads auto (step 3)
+
+Five 512 MB copies (4 x 128 MB, `/IORATE:4M`), Pause and Resume through the progress window's
+buttons, robocopy's written bytes from `Win32_Process.WriteTransferCount`:
+
+| Case | `/MT` on robocopy's command line | job log | written while paused (5 s) | written after Resume (4 s) | copy |
+|---|---|---|---|---|---|
+| auto, C: to C: | 32 | `# threads /MT:32 (auto: source unknown, destination unknown, same disk)` | 0 | 77 MB | intact |
+| auto, C: to virtual disk | 32 | `... (auto: source unknown, destination unknown)` | 0 | 80 MB | intact |
+| auto, virtual disk to C: | 32 | `... (auto: source unknown, destination unknown)` | 0 | 76 MB | intact |
+| `"threads": 4`, C: to virtual disk | 4 | `# threads /MT:4 (fixed in settings)` | 0 | 75 MB | intact |
+| `"threads": 8`, C: to virtual disk | 8 | `# threads /MT:8 (fixed in settings)` | 0 | 76 MB | intact |
+
+The VM's system disk is QEMU's emulated SATA disk; Windows itself reports its MediaType as
+`Unspecified` (`Get-PhysicalDisk`), and the virtual disks as `Unspecified`, `File Backed
+Virtual`. "unknown" is what the design says for both; the solid-state and rotational branches
+were **not** exercised here. Progress shown while running, paused and resumed:
+`11-progress-paused-mt4.png`, `12-progress-resumed-mt8.png`, `13-progress-running-auto.png`.
+
+### Menu icons and scaling (step 4)
+
+Classic menu (Show more options) on a file and on a folder background: Robo-Copy and Robo-Cut
+icons at 100% (`04-...`, `08-...`), 150% (`16-classic-menu-icons-150pct.png`, Robo-Paste on the
+background `17-...`) and 175% (`18-classic-menu-icons-175pct.png`), each scale set through
+`LogPixels` and a sign-out and sign-in. Magnified 3x to 4x the glyphs have sharp one-pixel
+edges at all three scales, no blur. At 175% the progress window (`20-progress-window-175pct.png`),
+the conflict dialog (`21-...`) and Settings (`26-settings-hotkey-175pct.png`) laid out without
+clipping. Restored to 100% (96) and signed in again at the end.
+
+### Hotkey (step 5b) and access keys
+
+- **Defect (fixed, 0d8697d)**: with the frozen exe, Ctrl+Shift+V in a folder window never
+  pasted. A second program holding Ctrl+Shift+V through `RegisterHotKey` received nothing while
+  Explorer was in front (the hook took the key) and received the press in Notepad. The
+  instrumented build showed every ShellWindows entry unreadable (`entry browser=0 top=0`) and the
+  press ending in "Can't tell which folder is open". The same calls from a PowerShell probe:
+  `IShellBrowser::GetWindow` returned the tab window (`ShellTabWindowClass`, so the open gate-2
+  question is answered: the tab, not the frame) from an STA, and `0x8001010D`
+  (`RPC_E_CANTCALLOUT_ININPUTSYNCCALL`) from an MTA. The locator ran in the MTA.
+- With the **fix** build: the folder window paste (real keyboard input through the VM, and the
+  script's SendKeys), the active tab of a two-tab window (Hotkey E), the address bar and search
+  box (D, passed through), the desktop (pasted to Desktop, toast "Copy finished 1 item to
+  Desktop"), the desktop rename box (the second program received the press: passed through),
+  Notepad (received by the second program), This PC and the Recycle Bin (toast "Can't
+  Robo-Paste here", `24-...`, `25-...`), Documents library and a zip (Hotkey F). Turning the
+  hotkey off in Settings saved `"pasteHotkey": ""`, and the second program then received the
+  press in an Explorer item view: the combination is free.
+- Typing stayed responsive during a paste: 20 key presses into Explorer's search box while a
+  throttled 512 MB copy ran all arrived in order.
+- Access keys in the classic menu (frozen exe, then fix build): Y put the file on the clipboard
+  with effect 1 (copy), U with effect 2 (move), B on a folder background moved it (toast "Move
+  finished").
+- Once, with the fix build, presses in a This PC window and then in R:\ in the same window
+  passed through (the second program received them) after the Jobs window had been opened by a
+  click on a toast and closed again; after the next switch of windows the hotkey worked. Not
+  reproduced in two attempts with the instrumented build; recorded, cause unknown.
+
+### 50,000 items (step 5c)
+
+50,000 files of 26 bytes in one folder, Ctrl+A, right-click, Show more options. Time from the
+classic menu closing to the clipboard holding all 50,000 paths: **1.97 s** (two runs: 1.958 and
+1.967 s). The first run's responsiveness probe pinged no window (a mistake in the probe) and is
+discarded; in the second run Explorer's window answered `WM_NULL` with one stall of **1.44 s**
+and every other reply under 250 ms. Explorer's own Copy from the same menu on the same
+selection: 3.03 s to the clipboard, one stall of 2.90 s.
+
+### Foreground (step 5d)
+
+- Right-click Robo-Paste on a folder background (frozen exe, 175%): the conflict dialog came to
+  the front with focus on Skip (`21-conflict-dialog-in-front-175pct.png`), but the **progress
+  window opened behind the Explorer window**, visible only as a taskbar button
+  (`19-progress-window-behind-explorer-175pct.png`). **Defect** (fixed, 66abbad): with the fix
+  build the window opens on top, its title bar inactive, Explorer keeping the focus
+  (`22-fix-progress-window-on-top-not-activated-175pct.png`).
+- A hotkey paste on the desktop that asked a conflict question: once the dialog came to the front,
+  once it only flashed its taskbar button (`23-...`, instrumented build without the progress
+  fix). The hotkey path has no `AllowSetForegroundWindow` from Explorer; the flashing button is
+  what the design says then.
+
+### Crash log (step 5)
+
+No test hook exists, so not triggered. By reading the code: `CrashPolicy` appends to crash.log
+only when `CrashLog.MayWrite(logging, ephemeralJobsThisSession)` holds (normal mode and no
+ephemeral job in this tray session), and only in the tray; Core tests cover `MayWrite` and
+`ModeFromConfig`. **Unverified on Windows.** No crash.log existed at the end of this session's
+normal-mode use, and Ephemeral.Tests checked that none was written during its ephemeral jobs.
+
+### Found and fixed on main
+
+- 0d8697d `fix(hotkey)`: the folder locator runs in an STA; every folder-window press was refused.
+- 0d01f51 `fix(ui)`: result notices show the whole sentence as the heading (`15-fix-update-result-heading-whole.png`).
+- d8c6ab1 `build(release)`: version 1.0.0-beta.2, so the draft's test build is older than the
+  next freeze (`14-fix-update-offer-beta1-to-beta2.png`: "Update RoboRightClick 1.0.0-beta.1 → 1.0.0-beta.2?").
+- bdda428 `test(e2e)`: the focus, window-selection, tab-navigation, strict-mode and noise fixes above.
+- 66abbad `fix(progress)`: the progress window opens on top without taking the focus.
+- 0194066 `fix(settings)`: config.json was written with `"Ctrl\u002BShift\u002BV"`; Core test,
+  seen failing with the encoder line removed. Not run on Windows.
+
+### Observed, not changed
+
+- Balloon toasts queue while the session is idle and appear late, all at once, when input
+  resumes; one such late toast held the foreground and made the second Run-All's Ephemeral fail
+  to bring Explorer to the front. Windows' behaviour for tray balloons.
+- After uninstall, Windows-written HKCU records naming the install path remain:
+  `Control Panel\NotifyIconSettings\<id>` (the tray icon), `Explorer\FeatureUsage\AppSwitched`,
+  the known `RunNotification` value, and Program Compatibility Assistant entries for the
+  downloaded exes. None was written by the app.
+
+### Not verified, or still open
+
+The solid-state and rotational thread choices; crash.log on Windows; 125%; a second monitor; the
+hotkey in an elevated Explorer and with a second keyboard layout; the progress and conflict
+windows when the paste starts while another program has the focus; the one-off install no-op
+and hotkey pass-through above.
+
+**VM housekeeping:** app uninstalled with `Uninstall.Tests.ps1` (PASS: folders, keys and Run
+value gone, shared parents kept, no process), both virtual disks detached and deleted, the
+scratch folders and downloads of this session and every scheduled task of this session removed,
+display scale back to 100%. The pre-existing `RrcParityExplorer` task was left alone.

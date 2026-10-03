@@ -9,8 +9,9 @@ on success; there is no test framework.
 `-SecondVolume` and `-SmallVolume` (docs/testlog.md, 2026-10-02 security entry): Install, Verbs,
 CutSafety, Cancel, Ephemeral, Security, Uninstall and Footprint passed. A script that has not run
 against a given build is as likely to fail on a script defect as on an app defect.
-`Hotkey.Tests.ps1`, the hotkey paste added to `Ephemeral.Tests.ps1` as job 6, and
-`Update.Tests.ps1` came later and have not run on Windows yet.
+On 2026-10-03 (docs/testlog.md) all ten ran on the frozen 1.0.0-beta.1 build: Update and
+Footprint passed after a script fix; Hotkey failed on an app defect fixed since (0d8697d), and with
+that fix Hotkey and Ephemeral (job 6 included) passed on a scratch build.
 
 ## Prerequisites
 
