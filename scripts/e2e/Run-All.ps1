@@ -3,7 +3,7 @@ Runs every end-to-end script in order, each in its own process (clean state, and
 thread for the clipboard), and prints a summary to stdout. Writes no files.
 If Install fails the rest are not run, because they need the app installed (run
 Uninstall.Tests.ps1 by hand if Install left anything behind). After that every test runs even
-when an earlier one fails, and Uninstall runs last so the machine is left clean.
+when an earlier one fails, and Uninstall runs next to last, then Footprint (which installs and removes the app once more), so the machine is left clean.
 
   .\Run-All.ps1 -Exe C:\path\to\RoboRightClick.exe [-Root D:\rrc-e2e] [-SecondVolume E:\scratch] [-SmallVolume F:\scratch]
 
@@ -29,9 +29,11 @@ $plan = @(
     @{ Name = 'Verbs';      Args = @('-Root', $Root) },
     @{ Name = 'CutSafety';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($SmallVolume) { @('-SmallVolume', $SmallVolume) } else { @() }) },
     @{ Name = 'Cancel';     Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
-    @{ Name = 'Ephemeral';  Args = @('-Root', $Root) + $(if ($AllowPath) { @('-AllowPath', ($AllowPath -join '|')) } else { @() }) },
-    @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) },
-    @{ Name = 'Uninstall';  Args = @('-Root', $Root) }
+    @{ Name = 'Ephemeral';  Args = @('-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) + $(if ($AllowPath) { @('-AllowPath', ($AllowPath -join '|')) } else { @() }) },
+    @{ Name = 'Security';   Args = @('-Exe', $exeFull, '-Root', $Root) + $(if ($SecondVolume) { @('-SecondVolume', $SecondVolume) } else { @() }) },
+    @{ Name = 'Uninstall';  Args = @('-Root', $Root) },
+    # Installs and uninstalls once more and diffs HKCU and the folders around it; needs the app absent.
+    @{ Name = 'Footprint';  Args = @('-Exe', $exeFull, '-Root', $Root) }
 )
 
 $results = @()
