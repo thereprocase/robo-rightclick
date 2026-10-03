@@ -33,6 +33,9 @@ internal enum ToastTarget
 /// staying silent would look like the click did nothing. A click raises
 /// <see cref="Clicked"/> with the target of the last toast shown, rather than one
 /// remembered job, because clicks from the notification center may arrive for older toasts.
+/// The one older toast that must stay reachable, the interrupted-paste notice, is covered by
+/// the tray: a tray menu item until its log is opened, and a Jobs-bound click with nothing to
+/// show opens that log (<see cref="StartupRules.JobsClickOpensInterrupted"/>).
 /// </remarks>
 internal sealed class Notifier : IDisposable
 {

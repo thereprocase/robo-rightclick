@@ -517,7 +517,10 @@ Step execution:
 - **Tray** (`TrayApplication`): icon and tooltip from `TrayStatus.Derive(snapshots, mode)`
   (attention > running > paused > idle; tooltip ≤ 127 chars). Left click and double click open
   Jobs. Menu: Jobs…, Pause all (checked while on), Resume all, Ephemeral mode (check),
-  Settings…, Open logs (hidden in ephemeral), Exit (confirms when jobs are active, with the
+  Settings…, Open logs (hidden in ephemeral), "Interrupted paste: show log" (only after the
+  interrupted-paste notice, until its log is opened; a balloon click goes to the latest toast's
+  target, so a Jobs-bound click with nothing needing attention opens that log too), Exit
+  (confirms when jobs are active, with the
   Gridline confirmation). Between Ephemeral mode and Settings… a hotkey line
   (`ToastText.HotkeyTrayLine`: the combination, "off", "off (setting invalid)" or "not
   active") opens Settings at the Hotkey field. The installer starts the tray with

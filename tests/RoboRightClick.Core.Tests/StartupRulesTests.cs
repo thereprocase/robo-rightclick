@@ -23,6 +23,28 @@ public class StartupRulesTests
     }
 
     [Fact]
+    public void The_interrupted_paste_log_stays_in_the_menu_until_opened()
+    {
+        Assert.True(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, jobs: [], interruptedPending: true).InterruptedLogVisible);
+        Assert.False(TrayMenu.For(LoggingMode.Normal, pauseAllActive: false, jobs: [], interruptedPending: false).InterruptedLogVisible);
+        Assert.False(TrayMenu.For(LoggingMode.Ephemeral, pauseAllActive: false, jobs: [], interruptedPending: true).InterruptedLogVisible);
+    }
+
+    [Fact]
+    public void A_jobs_click_with_nothing_to_show_opens_the_pending_interrupted_log()
+    {
+        // The interrupted notice went to the notification center; a "Copy finished" toast came
+        // later. A click on the old notice arrives with the latest toast's target, Jobs.
+        var clean = DisplayAndTrayTests.Job(JobState.Done);
+        var failed = DisplayAndTrayTests.Job(JobState.DoneWithErrors);
+
+        Assert.True(StartupRules.JobsClickOpensInterrupted([clean], interruptedPending: true));
+        Assert.True(StartupRules.JobsClickOpensInterrupted([], interruptedPending: true));
+        Assert.False(StartupRules.JobsClickOpensInterrupted([clean, failed], interruptedPending: true));
+        Assert.False(StartupRules.JobsClickOpensInterrupted([clean], interruptedPending: false));
+    }
+
+    [Fact]
     public void Open_logs_is_hidden_in_ephemeral_mode()
     {
         Assert.False(TrayMenu.For(LoggingMode.Ephemeral, pauseAllActive: false).OpenLogsVisible);

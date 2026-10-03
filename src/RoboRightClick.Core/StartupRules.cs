@@ -36,20 +36,34 @@ public enum ExitAction
 }
 
 /// <summary>Visibility, check and enabled states of the tray menu items that depend on app state.</summary>
-public sealed record TrayMenu(bool OpenLogsVisible, bool PauseAllChecked, bool EphemeralChecked, bool ResumeAllEnabled = false)
+public sealed record TrayMenu(
+    bool OpenLogsVisible,
+    bool PauseAllChecked,
+    bool EphemeralChecked,
+    bool ResumeAllEnabled = false,
+    bool InterruptedLogVisible = false)
 {
+    /// <summary>The menu item that opens the interrupted paste's job.json (<see cref="InterruptedLogVisible"/>).</summary>
+    public const string InterruptedLogItem = "Interrupted paste: show log";
+
     /// <summary>
     /// "Open logs" is hidden in ephemeral mode: the mode promises nothing about jobs is on
     /// disk, and a menu item leading to a logs folder would say otherwise. "Resume all" is
     /// enabled only when it would resume something: with Pause all on, or a job that is paused
     /// or will pause when it starts. Otherwise a click on it would visibly do nothing.
+    /// "Interrupted paste: show log" stays while the startup notice about an interrupted paste
+    /// has been shown and its log not yet opened (<paramref name="interruptedPending"/>): the
+    /// notice is shown once per crash, and a later toast takes over what a click on a balloon
+    /// opens, so without the item the only pointer to the possibly half-written files could be
+    /// gone. Hidden in ephemeral mode, like "Open logs".
     /// </summary>
-    public static TrayMenu For(LoggingMode mode, bool pauseAllActive, IReadOnlyList<JobSnapshot>? jobs = null) => new(
+    public static TrayMenu For(LoggingMode mode, bool pauseAllActive, IReadOnlyList<JobSnapshot>? jobs = null, bool interruptedPending = false) => new(
         OpenLogsVisible: mode == LoggingMode.Normal,
         PauseAllChecked: pauseAllActive,
         EphemeralChecked: mode == LoggingMode.Ephemeral,
         ResumeAllEnabled: pauseAllActive || (jobs ?? []).Any(j =>
-            !JobStates.IsTerminal(j.State) && !j.CancelRequested && (j.State == JobState.Paused || j.PauseRequested)));
+            !JobStates.IsTerminal(j.State) && !j.CancelRequested && (j.State == JobState.Paused || j.PauseRequested)),
+        InterruptedLogVisible: interruptedPending && mode == LoggingMode.Normal);
 }
 
 /// <summary>
@@ -125,6 +139,16 @@ public static class StartupRules
         interruptedJobs > 0 ? StartupToast.Interrupted
         : afterInstall && !settingsToastShown ? StartupToast.TrayHint
         : StartupToast.None;
+
+    /// <summary>
+    /// A click on a balloon goes to the target of the latest toast, which may not be the one
+    /// clicked: the notification center keeps older ones. A click meant for the interrupted-paste
+    /// notice after a "Copy finished" toast would open Jobs with nothing to show. So while that
+    /// notice's log has not been opened, a Jobs-bound click that would find nothing needing
+    /// attention opens the interrupted paste's log instead.
+    /// </summary>
+    public static bool JobsClickOpensInterrupted(IReadOnlyList<JobSnapshot> jobs, bool interruptedPending) =>
+        interruptedPending && !jobs.Any(j => j.NeedsAttention);
 
     /// <summary>
     /// A tray click while a conflict question waits brings that dialog forward instead of

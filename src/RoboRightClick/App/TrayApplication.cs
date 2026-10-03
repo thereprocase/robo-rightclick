@@ -103,6 +103,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ToolStripMenuItem _openLogsItem;
     private readonly ToolStripMenuItem _resumeAllItem;
     private readonly ToolStripMenuItem _hotkeyItem;
+    private readonly ToolStripMenuItem _interruptedItem;
     private readonly PasteHotkey _pasteHotkey;
     private readonly ExplorerFolderLocator _hotkeyLocator;
 
@@ -129,6 +130,10 @@ internal sealed class TrayApplication : ApplicationContext
 
     // The latest interrupted job's job.json, for the startup notice's click (UI thread only).
     private string? _interruptedRecord;
+
+    // The interrupted-paste notice was shown and its log has not been opened since: the menu
+    // item stays, and a Jobs-bound click with nothing to show opens the log (StartupRules).
+    private bool _interruptedPending;
     private bool _inSessionEnd;
     private bool _finished;
     private bool _tornDown;
@@ -188,6 +193,7 @@ internal sealed class TrayApplication : ApplicationContext
             _openLogsItem = new ToolStripMenuItem("Open logs", null, (_, _) => OpenLogs());
             _resumeAllItem = new ToolStripMenuItem("Resume all", null, (_, _) => ResumeAll());
             _hotkeyItem = new ToolStripMenuItem(string.Empty, null, (_, _) => ShowSettings(SettingsSerializer.PasteHotkeyKey));
+            _interruptedItem = new ToolStripMenuItem(TrayMenu.InterruptedLogItem, null, (_, _) => OpenInterruptedLog()) { Visible = false };
             _menu = Own(BuildMenu());
             _icon.ContextMenuStrip = _menu;
             _jobsWindow = Own(new JobsWindow(_jobs, _logStore) { Prompts = _prompts });
@@ -287,6 +293,7 @@ internal sealed class TrayApplication : ApplicationContext
             _hotkeyItem,
             new ToolStripMenuItem("Settings…", null, (_, _) => ShowSettings()),
             _openLogsItem,
+            _interruptedItem,
             new ToolStripSeparator(),
             new ToolStripMenuItem("Exit", null, (_, _) => RequestExit(requestedByOtherProcess: false)),
         ]);
@@ -370,6 +377,7 @@ internal sealed class TrayApplication : ApplicationContext
         {
             case StartupToast.Interrupted:
                 _interruptedRecord = interrupted.LatestRecord;
+                _interruptedPending = true;
                 _notifier.Show(ToastText.ForInterrupted(interrupted.Count, interrupted.LatestDestination), ToastTarget.Logs);
                 break;
             case StartupToast.TrayHint:
@@ -467,10 +475,11 @@ internal sealed class TrayApplication : ApplicationContext
         _hotkeyItem.Text = ToastText.HotkeyTrayLine(
             HotkeyStatusRules.Derive(hotkey, _settings.LoadProblems, _pasteHotkey.HookFailed || _hotkeyStartFailed), hotkey);
 
-        var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive, _jobs.Snapshots());
+        var state = TrayMenu.For(_settings.Current.Logging, _jobs.PauseAllActive, _jobs.Snapshots(), _interruptedPending);
         _pauseAllItem.Checked = state.PauseAllChecked;
         _ephemeralItem.Checked = state.EphemeralChecked;
         _openLogsItem.Visible = state.OpenLogsVisible;
+        _interruptedItem.Visible = state.InterruptedLogVisible;
         foreach (ToolStripItem item in _menu.Items)
         {
             item.Enabled = !_shuttingDown;
@@ -499,6 +508,9 @@ internal sealed class TrayApplication : ApplicationContext
         }
         switch (target)
         {
+            case ToastTarget.Jobs when StartupRules.JobsClickOpensInterrupted(_jobs.Snapshots(), _interruptedPending):
+                OpenInterruptedLog();
+                break;
             case ToastTarget.Jobs:
                 _jobsWindow.ShowJobs(attentionOnly: true);
                 break;
@@ -674,6 +686,8 @@ internal sealed class TrayApplication : ApplicationContext
     /// </summary>
     private void OpenInterruptedLog()
     {
+        // Opened (or its folder, when the file is gone): the notice has done its job.
+        _interruptedPending = false;
         var record = _interruptedRecord;
         if (record is null || !File.Exists(record))
         {

@@ -220,7 +220,8 @@ through.
 A paste that was still running when the app ended (a crash, a power cut) is reported at the
 next start, with a tray notice that names the folder the latest such paste was going into and
 says some files there may be incomplete. Clicking it opens the jobs folder with that job's
-`job.json` selected. Its `job.json` is then marked `interrupted` (the last entry of its
+`job.json` selected; until you have opened it, the tray menu also offers **Interrupted paste:
+show log**, since a later notice replaces what a click on the old one opens. Its `job.json` is then marked `interrupted` (the last entry of its
 `"states"` list), so the notice does not repeat. In normal mode a finished job's `job.json`
 also lists, under `"summary"`, the files a cancel left possibly incomplete (`"damaged"`),
 those a failed, canceled or retried paste may have left incomplete (`"mayBeIncomplete"`) and those
