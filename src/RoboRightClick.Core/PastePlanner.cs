@@ -144,6 +144,39 @@ public static class PastePlanner
         return plan with { Rejected = [.. rejected, .. plan.Rejected] };
     }
 
+    /// <summary>The note on an item a whole re-run of a cut finds already at the destination (<see cref="WithoutAlreadyMoved"/>).</summary>
+    public const string AlreadyMovedReason = "Already moved by the earlier paste.";
+
+    /// <summary>
+    /// For a whole re-run of a cut (a job derived from an earlier paste): a source that is
+    /// missing because the earlier paste already moved it is not a refusal. Robocopy /MOVE
+    /// removes a source folder it emptied, and a rename or /MOV leaves no source file, so the
+    /// re-run's planning finds those items gone and would report "This item could not be
+    /// found. It may have been moved or deleted", in red, sending the user to look for an item
+    /// that is sitting at the destination. Each missing source whose name exists in the
+    /// destination folder moves from <see cref="PastePlan.Rejected"/> to
+    /// <see cref="PastePlan.NoOps"/> with <see cref="AlreadyMovedReason"/>; it counts as no error.
+    /// </summary>
+    public static PastePlan WithoutAlreadyMoved(PastePlan plan, string destination, IPlanningFacts facts)
+    {
+        var folder = WinPath.TrimTrailingSeparators(destination);
+        var rejected = new List<PlanIssue>(plan.Rejected.Count);
+        var moved = new List<PlanIssue>();
+        foreach (var issue in plan.Rejected)
+        {
+            var name = WinPath.GetFileName(WinPath.TrimTrailingSeparators(issue.Path));
+            if (issue.Reason == MissingReason && name.Length > 0 && facts.Exists(WinPath.Combine(folder, name)))
+            {
+                moved.Add(issue with { Reason = AlreadyMovedReason });
+            }
+            else
+            {
+                rejected.Add(issue);
+            }
+        }
+        return moved.Count == 0 ? plan : plan with { Rejected = rejected, NoOps = [.. plan.NoOps, .. moved] };
+    }
+
     /// <summary>
     /// Room left for file names on one robocopy command line. CreateProcess
     /// caps the whole line at 32,767 characters; the remainder covers the exe

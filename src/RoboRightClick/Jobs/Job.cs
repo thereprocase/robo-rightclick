@@ -179,6 +179,9 @@ internal sealed class Job
     private readonly List<string> _mayBeIncompletePaths = [];
     private int _mayBeIncomplete;
 
+    // How many of _mayBeIncomplete are suspected files the user chose to keep.
+    private int _keptIncomplete;
+
     // "Try again" ran for this job: it is offered once (the child is the job to look at).
     private bool _retryStarted;
     private Guid? _retriedBy;
@@ -186,9 +189,8 @@ internal sealed class Job
     // A child that gave the retry back before EndRetry recorded it (it ended that fast).
     private Guid? _retryGivenBackBy;
 
-    // What "Try again" offers, fixed when the job ends (JobSnapshot.RetryCount, RetriesWholePaste).
+    // What "Try again" would repeat, fixed when the job ends (JobSnapshot.RetryCount).
     private int _retryCount;
-    private bool _retriesWholePaste;
 
     // A ledger part could not match robocopy's paths; kept past the release of the parts.
     private bool _pathsUnreliable;
@@ -682,7 +684,8 @@ internal sealed class Job
                 SkippedAppeared = _skippedAppeared,
                 MayBeIncomplete = _mayBeIncomplete,
                 RetryCount = _retryCount,
-                RetriesWholePaste = _retriesWholePaste,
+                PathsUnreliable = _pathsUnreliable || _parts.Any(p => p.Ledger.PathsUnreliable),
+                KeptIncomplete = _keptIncomplete,
                 RetriedBy = _retriedBy,
             };
         }
@@ -820,6 +823,11 @@ internal sealed class Job
             scan = await RunBlockingAsync(() =>
             {
                 var pastePlan = PastePlanner.Plan(Start.Order, fileSystem);
+                if (Start.ParentId is not null && Start.Order.Verb == TransferVerb.Move)
+                {
+                    // A whole re-run of a cut: what the earlier paste moved is not "could not be found".
+                    pastePlan = PastePlanner.WithoutAlreadyMoved(pastePlan, Start.Order.Destination, fileSystem);
+                }
                 return JobScanner.Scan(pastePlan, fileSystem, fileSystem, new ScanProgressReporter(this), token);
             }).ConfigureAwait(false);
         }
@@ -1793,6 +1801,7 @@ internal sealed class Job
         foreach (var path in _keptSuspected)
         {
             _mayBeIncomplete++;
+            _keptIncomplete++;
             if (_mayBeIncompletePaths.Count < JobRecords.MaxRecordedErrors)
             {
                 _mayBeIncompletePaths.Add(path);
@@ -1967,18 +1976,14 @@ internal sealed class Job
     }
 
     /// <summary>
-    /// What "Try again" offers once the job has ended, from the one plan it would build
+    /// What "Try again" would repeat once the job has ended, from the one plan it would build
     /// (<see cref="RetryPlanner.CountOf"/>), so the button, its number and the plan never
-    /// disagree. A ledger that lost track of robocopy's paths offers a whole re-run instead,
-    /// but only when there is something to try again. Call after <see cref="ReleaseLocked"/>.
+    /// disagree. Whether it repeats that plan or re-runs the whole paste is
+    /// <see cref="RetryRules.ActionFor"/>, from the snapshot. Call after <see cref="ReleaseLocked"/>.
     /// </summary>
     private void FixRetryOfferLocked()
     {
         _retryCount = RetryPlanner.CountOf(RetryPlanLocked());
-        var state = _lifecycle.State;
-        _retriesWholePaste = _pathsUnreliable
-            && (state == JobState.DoneWithErrors
-                || (state == JobState.Canceled && (_damagedOnCancel > 0 || _mayBeIncomplete > 0 || _totalErrors > 0)));
         Touch();
     }
 

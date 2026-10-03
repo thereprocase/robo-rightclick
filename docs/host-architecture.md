@@ -477,8 +477,19 @@ Step execution:
   the source name over the file the user kept); failed in-process steps repeat whole. A
   `Failed` job with a ledger gets the same per-file plan; one without (it failed before anything
   ran, or by an exception) falls back to `JobManager.Rerun` (the original order, full re-scan).
-  So does a job whose ledger found robocopy's paths unreliable (`RetriesWholePaste`): re-running
-  a recursive `/MOVE` step under Replace is not safe, so the whole paste is scanned again.
+  So does a finished job whose ledger found robocopy's paths unreliable (`RetriesWholePaste`):
+  re-running a recursive `/MOVE` step under Replace is not safe, so the whole paste is scanned
+  again. A canceled one is different: the files its cancel left are known by their own paths, so
+  "Finish copying/moving them" repeats those alone, and a whole re-run of a canceled paste is
+  offered only when there is nothing per file to repeat, labeled "Paste everything again" with a
+  heading that says it includes what was canceled. What the button does and what it says come
+  from one rule, `RetryRules.ActionFor(snapshot)`, which `JobManager.Retry` acts on and
+  `JobStateText.TryAgainLabel` names. A whole re-run of a cut moves a missing source whose name
+  is already at the destination to the plan's no-ops (`PastePlanner.WithoutAlreadyMoved`,
+  "Already moved by the earlier paste") instead of refusing it as "could not be found".
+  A retry child's "may be incomplete" text tells files robocopy left from files the user chose
+  to keep (`JobSnapshot.KeptIncomplete`): "Try again" never repeats a kept file, so the text
+  says how to replace it instead.
   Refusals are not retryable and are counted separately (`RefusedCount`). "Try again" is
   offered once per job (`RetriedBy`), but a child that ends Canceled having done nothing (no
   file done, none possibly incomplete, no error: its question closed, its scan canceled, the

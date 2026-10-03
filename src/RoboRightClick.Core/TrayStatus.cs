@@ -98,11 +98,26 @@ public sealed record JobSnapshot(
     public int RetryCount { get; init; }
 
     /// <summary>
-    /// "Try again" re-runs the whole paste with a new scan instead of repeating files: the
-    /// ledger lost track of robocopy's paths (<see cref="StepLedger.PathsUnreliable"/>), so it
-    /// cannot say which files failed. Set only when the job has something to try again.
+    /// The job's ledger lost track of robocopy's paths (<see cref="StepLedger.PathsUnreliable"/>):
+    /// it cannot say which files failed. One of the facts <see cref="RetryRules.ActionFor"/>
+    /// decides from.
     /// </summary>
-    public bool RetriesWholePaste { get; init; }
+    public bool PathsUnreliable { get; init; }
+
+    /// <summary>
+    /// "Try again" re-runs the whole paste with a new scan instead of repeating files
+    /// (<see cref="RetryRules.ActionFor"/>). Derived, never set: the button's label and what the
+    /// button does come from the same rule.
+    /// </summary>
+    public bool RetriesWholePaste => RetryRules.ActionFor(this) == RetryAction.WholePaste;
+
+    /// <summary>
+    /// How many of <see cref="MayBeIncomplete"/> are files the earlier paste may have left half
+    /// written that the user chose to keep in this "Try again" child
+    /// (<see cref="FileConflict.SuspectedPartial"/>). Nothing this job does repeats them, so the
+    /// summary says how to replace them rather than pointing at "Try again".
+    /// </summary>
+    public int KeptIncomplete { get; init; }
 
     /// <summary>
     /// The job "Try again" started for this one. "Try again" is offered once: a second child

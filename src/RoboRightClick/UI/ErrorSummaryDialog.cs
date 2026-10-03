@@ -182,9 +182,8 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
 
         if (job.DamagedOnCancel > 0)
         {
-            var files = job.DamagedOnCancel == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.DamagedOnCancel:N0} files were");
             var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.DamagedOnCancel:N0})");
-            var text = $"{files} being written when you canceled. They can look complete but hold only part of the data. {JobStateText.FinishLabel(job)}, or check them before you use them.";
+            var text = JobStateText.DamagedText(job);
             var damaged = jobs?.DamagedOf(job.Id) ?? [];
             if (damaged.Count > 0)
             {

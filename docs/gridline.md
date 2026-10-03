@@ -92,7 +92,11 @@ Plex Mono 600, 12–13 px, UPPERCASE, tracking 0.04 em.
 - **Dialogs** (conflict, error summary, settings, confirmations) follow the same pane, button and
   field rules. The error summary's sections are titled panes with a short explanation above a
   two-line path list (errors, refused, may be incomplete, skipped), each shown only when it has
-  rows. The primary action is the default button. In the conflict dialog of a "Try again"
+  rows. The primary action is the default button. Its label says what it does
+  (`RetryRules.ActionFor`): "Try again (N)" or "Finish copying/moving them" repeat files, "Try
+  again" on a Failed job or a whole re-run of a finished one, and "Paste everything again" for a
+  whole re-run of a canceled paste, whose heading then says it includes what was canceled. A
+  section's text names the button only when the button repeats that section's files. In the conflict dialog of a "Try again"
   job, files the earlier paste may have left half written get a caution strip above the three
   choices and an amber note on their rows, and focus starts on "Let me decide" rather than
   "Skip". The summary of a job whose "Try again" was used adds a plain "Show newer job" button

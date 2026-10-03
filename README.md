@@ -282,7 +282,10 @@ Windows and which are design decisions not yet measured. In plain words:
   in a new paste: the "When a file already exists" setting decides it, and it asks only when
   that setting is Ask. A file the earlier paste may have left half written is the exception:
   it is always asked about, marked as possibly incomplete, and if you keep it the retry says
-  so instead of reporting a clean finish.
+  so instead of reporting a clean finish. After a cancel, **Finish copying them** (or **Finish
+  moving them**) repeats only the files the cancel left possibly incomplete. When the job could
+  not tell which files robocopy had finished, its button reads **Paste everything again**
+  instead, and the summary says that it runs the whole paste again, including what you canceled.
 - Paths longer than 260 characters are copied; Explorer skipped them in the measured run.
 - Robo-Cut does not dim the cut items' icons the way Ctrl+X does. They are still moved.
 - A Robo-Cut pasted with Explorer's own Ctrl+V stays on the clipboard afterwards; pasting it

@@ -60,9 +60,68 @@ public static class JobOutcome
     }
 }
 
-/// <summary>When "Try again" may be offered again after it was used.</summary>
+/// <summary>What "Try again" does for a finished job.</summary>
+public enum RetryAction
+{
+    /// <summary>Nothing to try again: no button.</summary>
+    None,
+
+    /// <summary>The job's own retry plan: the files that failed, and after a cancel the files it left possibly incomplete.</summary>
+    RepeatFiles,
+
+    /// <summary>The whole original paste, scanned again (JobManager re-runs the order).</summary>
+    WholePaste,
+}
+
+/// <summary>What "Try again" does, and when it may be offered again after it was used.</summary>
 public static class RetryRules
 {
+    /// <summary>
+    /// The one rule for what "Try again" does: JobManager.Retry acts on it, and the button's
+    /// label (<see cref="JobStateText.TryAgainLabel"/>) and every sentence about the button are
+    /// built from it, so the label never promises one thing while the button does another.
+    /// <list type="bullet">
+    /// <item>Failed: the job's per-file plan when it has one and its paths are reliable,
+    /// otherwise the whole paste (it failed before anything ran, or by an exception).</item>
+    /// <item>DoneWithErrors: the whole paste when the ledger lost track of robocopy's paths
+    /// (it cannot tell finished files from partial ones), otherwise the files that failed.</item>
+    /// <item>Canceled: the files the cancel left possibly incomplete and what failed before it.
+    /// Those are known by their own paths whatever the ledger matched, so they are repeated
+    /// alone even when the paths are unreliable. A whole re-run of a canceled paste would redo
+    /// the very work the user stopped; it is offered only when there is nothing per file to
+    /// repeat and the cancel came after problems, and its label says so.</item>
+    /// </list>
+    /// </summary>
+    public static RetryAction ActionFor(JobSnapshot job)
+    {
+        if (job.RetriedBy is not null)
+        {
+            return RetryAction.None;
+        }
+        return job.State switch
+        {
+            JobState.Failed => job.RetryCount > 0 && !job.PathsUnreliable ? RetryAction.RepeatFiles : RetryAction.WholePaste,
+            JobState.DoneWithErrors when job.PathsUnreliable => RetryAction.WholePaste,
+            JobState.DoneWithErrors => job.RetryCount > 0 ? RetryAction.RepeatFiles : RetryAction.None,
+            JobState.Canceled when job.RetryCount > 0 => RetryAction.RepeatFiles,
+            JobState.Canceled when job.PathsUnreliable && job.OutcomeNeedsUser => RetryAction.WholePaste,
+            _ => RetryAction.None,
+        };
+    }
+
+    /// <summary>
+    /// Whether "Try again" repeats the files robocopy may have left half written (the ledger's
+    /// part of <see cref="JobSnapshot.MayBeIncomplete"/>): a whole re-run asks about each of
+    /// them, and a per-file plan includes them only when the ledger could match robocopy's
+    /// paths. A canceled job with unreliable paths repeats only the files the cancel left.
+    /// </summary>
+    public static bool RepeatsMayBeIncomplete(JobSnapshot job) => ActionFor(job) switch
+    {
+        RetryAction.WholePaste => true,
+        RetryAction.RepeatFiles => !job.PathsUnreliable,
+        _ => false,
+    };
+
     /// <summary>
     /// A "Try again" (or "Finish copying them", or whole re-run) child that ended Canceled
     /// having done nothing: no file completed, none left possibly incomplete, no error. The

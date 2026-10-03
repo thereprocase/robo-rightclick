@@ -124,18 +124,21 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     }
 
     /// <summary>
-    /// "Try again (N)": the parent's <see cref="Job.RetryPlan"/> as a child job with
-    /// ParentId set and logging mode <see cref="JobSinks.ForDerivedJob"/>(parent, current).
-    /// Returns null if there is nothing to retry, or when "Try again" was already used for
-    /// this parent (<see cref="Job.RetriedBy"/>): a second child would repeat the same files over
+    /// The error summary's primary button, doing what <see cref="RetryRules.ActionFor"/> says
+    /// for the parent's snapshot, the same rule its label comes from
+    /// (<see cref="JobStateText.TryAgainLabel"/>). <see cref="RetryAction.RepeatFiles"/>: the
+    /// parent's <see cref="Job.RetryPlan"/> as a child job with ParentId set and logging mode
+    /// <see cref="JobSinks.ForDerivedJob"/>(parent, current); after a cancel that is the files the
+    /// cancel left (known by their own paths even when the ledger lost track of robocopy's) and
+    /// what failed before it, never the work the cancel stopped. <see cref="RetryAction.WholePaste"/>:
+    /// the whole paste again (<see cref="Rerun"/>): it re-scans, and every file now present is a
+    /// conflict for the configured policy, rather than overwriting files whose state is unknown.
+    /// Returns null if there is nothing to retry, or when "Try again" was already used for this
+    /// parent (<see cref="Job.RetriedBy"/>): a second child would repeat the same files over
     /// whatever the first child, or the user, has put there since. The parent is acknowledged
-    /// either way. When the parent's robocopy paths could not be matched
-    /// (<see cref="Job.PathsUnreliable"/>), or a Failed parent kept no per-file record (it failed
-    /// before anything ran, or by an exception), this re-runs the whole paste instead
-    /// (<see cref="Rerun"/>): it re-scans, and every file now present is a conflict for the
-    /// configured policy, rather than overwriting files whose state is unknown. Either way the child gets the parent's
-    /// <see cref="Job.SuspectedPartials"/>: a file the parent may have left half written is asked
-    /// about whatever the configured policy, never kept silently.
+    /// either way. The child gets the parent's <see cref="Job.SuspectedPartials"/>: a file the
+    /// parent may have left half written is asked about whatever the configured policy, never
+    /// kept silently.
     /// </summary>
     public Guid? Retry(Guid parentId)
     {
@@ -147,17 +150,14 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
         Guid? child = null;
         try
         {
-            if (parent.PathsUnreliable)
+            switch (RetryRules.ActionFor(parent.Snapshot()))
             {
-                child = Derive(parent, retryPlan: null);
-            }
-            else if (parent.RetryPlan() is { } plan)
-            {
-                child = Derive(parent, plan);
-            }
-            else if (parent.State == JobState.Failed)
-            {
-                child = Derive(parent, retryPlan: null);
+                case RetryAction.WholePaste:
+                    child = Derive(parent, retryPlan: null);
+                    break;
+                case RetryAction.RepeatFiles when parent.RetryPlan() is { } plan:
+                    child = Derive(parent, plan);
+                    break;
             }
         }
         finally

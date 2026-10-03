@@ -157,29 +157,30 @@ public static class JobStateText
     }
 
     /// <summary>
-    /// The error summary's primary button: "Try again (N)" with N =
-    /// <see cref="JobSnapshot.RetryCount"/>, "Try again" for a Failed job or a whole re-run
-    /// (<see cref="JobSnapshot.RetriesWholePaste"/>), "Finish copying/moving them" after a cancel
-    /// that left files possibly incomplete, or null when there is nothing to try again (errors
-    /// no retry can repeat, such as a link folder that could not be created), including once
-    /// "Try again" has been used (<see cref="JobSnapshot.RetriedBy"/>).
+    /// The error summary's primary button, from what the button does
+    /// (<see cref="RetryRules.ActionFor"/>): "Try again (N)" with N =
+    /// <see cref="JobSnapshot.RetryCount"/> when it repeats files, "Finish copying/moving them"
+    /// when it repeats the files a cancel left possibly incomplete, "Try again" for a Failed job
+    /// and for a whole re-run of a finished one, "Paste everything again" for a whole re-run of
+    /// a canceled one (it redoes what the cancel stopped), or null when there is nothing to try
+    /// again (errors no retry can repeat, such as a link folder that could not be created),
+    /// including once "Try again" has been used (<see cref="JobSnapshot.RetriedBy"/>).
     /// </summary>
-    public static string? TryAgainLabel(JobSnapshot job)
+    public static string? TryAgainLabel(JobSnapshot job) => RetryRules.ActionFor(job) switch
     {
-        if (job.RetriedBy is not null)
-        {
-            return null;
-        }
-        return job.State switch
+        RetryAction.WholePaste when job.State == JobState.Canceled => WholePasteLabel,
+        RetryAction.WholePaste => "Try again",
+        RetryAction.RepeatFiles => job.State switch
         {
             JobState.Failed => "Try again",
             JobState.Canceled when job.DamagedOnCancel > 0 => FinishLabel(job),
-            JobState.DoneWithErrors or JobState.Canceled when job.RetriesWholePaste => "Try again",
-            JobState.DoneWithErrors or JobState.Canceled when job.RetryCount > 0 =>
-                string.Create(CultureInfo.InvariantCulture, $"Try again ({job.RetryCount:N0})"),
-            _ => null,
-        };
-    }
+            _ => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.RetryCount:N0})"),
+        },
+        _ => null,
+    };
+
+    /// <summary>The button of a whole re-run of a canceled paste; never "Finish ... them", which would promise a few files.</summary>
+    public const string WholePasteLabel = "Paste everything again";
 
     /// <summary>Repeats the files a cancel left possibly incomplete.</summary>
     public static string FinishLabel(JobSnapshot job) => job.Verb == TransferVerb.Move ? "Finish moving them" : "Finish copying them";
@@ -187,8 +188,9 @@ public static class JobStateText
     /// <summary>
     /// The error summary's heading. A Failed job whose robocopy run started says the paste
     /// stopped and that files may be incomplete, never "Nothing was copied": robocopy
-    /// allocates full length first, so a file it was writing can look whole. A job tried again
-    /// says so first.
+    /// allocates full length first, so a file it was writing can look whole. A finished or
+    /// canceled job whose "Try again" re-runs the whole paste says so. A job tried again says
+    /// so first.
     /// </summary>
     public static string SummaryHeading(JobSnapshot job)
     {
@@ -212,23 +214,76 @@ public static class JobStateText
                 var n => string.Create(CultureInfo.InvariantCulture, $"{n:N0} items could not be {done} to {into}. Everything else finished."),
             },
         };
-        return job.RetriedBy is null ? heading : heading + " Tried again: see the newer job in the Jobs window.";
+        if (job.RetriedBy is not null)
+        {
+            return heading + " Tried again: see the newer job in the Jobs window.";
+        }
+        return RetryRules.ActionFor(job) == RetryAction.WholePaste && job.State != JobState.Failed
+            ? heading + " " + WholePasteSentence(job)
+            : heading;
     }
 
     /// <summary>
+    /// Why the button repeats everything: the job could not tell which of robocopy's files
+    /// failed. After a cancel it says outright that the canceled work runs again.
+    /// </summary>
+    private static string WholePasteSentence(JobSnapshot job) => job.State == JobState.Canceled
+        ? $"{WholePasteLabel} runs the whole paste again with a new scan, including what you canceled: the job could not tell which files robocopy had finished."
+        : "Try again runs the whole paste again with a new scan: the job could not tell which files robocopy had finished.";
+
+    /// <summary>
     /// The explanation above the error summary's "May be incomplete" list
-    /// (<see cref="JobSnapshot.MayBeIncomplete"/>), for the way the job ended.
+    /// (<see cref="JobSnapshot.MayBeIncomplete"/>), from what was left and why, not from the end
+    /// state alone: files robocopy failed on or stopped inside, and files the earlier paste may
+    /// have left half written that the user chose to keep (<see cref="JobSnapshot.KeptIncomplete"/>).
+    /// The advice points at "Try again" only when that button repeats those files
+    /// (<see cref="RetryRules.RepeatsMayBeIncomplete"/>); kept files are never repeated by it.
     /// </summary>
     public static string MayBeIncompleteText(JobSnapshot job)
     {
-        var files = job.MayBeIncomplete == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.MayBeIncomplete:N0} files were");
-        var why = job.State switch
+        var kept = Math.Clamp(job.KeptIncomplete, 0, job.MayBeIncomplete);
+        var stopped = job.MayBeIncomplete - kept;
+        var sentences = new List<string>();
+        if (stopped > 0)
         {
-            JobState.Canceled => $"{files} not finished: robocopy reported an error on them, or stopped while writing them, before you canceled.",
-            JobState.Done => $"{files} left possibly incomplete by the earlier paste, and kept when you were asked.",
-            _ => $"{files} being written when the paste stopped.",
-        };
-        return why + " They can look complete but hold only part of the data. Try again, or check them before you use them.";
+            var files = stopped == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{stopped:N0} files were");
+            sentences.Add(job.State == JobState.Canceled
+                ? $"{files} not finished: robocopy reported an error on them, or stopped while writing them, before you canceled."
+                : $"{files} not finished: robocopy reported an error on them, or stopped while writing them.");
+        }
+        if (kept > 0)
+        {
+            sentences.Add(kept == 1
+                ? "1 file the earlier paste may have left incomplete was kept, as you chose."
+                : string.Create(CultureInfo.InvariantCulture, $"{kept:N0} files the earlier paste may have left incomplete were kept, as you chose."));
+        }
+        sentences.Add("They can look complete but hold only part of the data.");
+        if (stopped > 0)
+        {
+            sentences.Add(RetryRules.RepeatsMayBeIncomplete(job) && TryAgainLabel(job) is { } label
+                ? $"{label}, or check them before you use them."
+                : "Check them before you use them.");
+        }
+        if (kept > 0)
+        {
+            sentences.Add($"To replace the kept {(kept == 1 ? "file" : "files")}, {VerbName(job.Verb)} the source again and choose Replace.");
+        }
+        return string.Join(" ", sentences);
+    }
+
+    /// <summary>
+    /// The explanation above the error summary's list of files a cancel left possibly
+    /// incomplete (<see cref="JobSnapshot.DamagedOnCancel"/>). It names "Finish copying/moving
+    /// them" only when that is the button: a cut whose sources are already gone has nothing to
+    /// finish, and no button.
+    /// </summary>
+    public static string DamagedText(JobSnapshot job)
+    {
+        var files = job.DamagedOnCancel == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.DamagedOnCancel:N0} files were");
+        var advice = TryAgainLabel(job) == FinishLabel(job)
+            ? $"{FinishLabel(job)}, or check them before you use them."
+            : "Check them before you use them.";
+        return $"{files} being written when you canceled. They can look complete but hold only part of the data. {advice}";
     }
 
     /// <summary>The menu name of the verb the user started with: a cut pastes as a move.</summary>

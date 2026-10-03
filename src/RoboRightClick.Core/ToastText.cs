@@ -174,9 +174,11 @@ public static class ToastText
             return new Toast("Job canceled", EphemeralBody, ToastKind.Warning);
         }
         var files = job.DamagedOnCancel == 1 ? "1 file was" : $"{job.DamagedOnCancel:N0} files were";
+        // "Finish them" only when that is what the summary's button does (RetryRules.ActionFor).
+        var next = JobStateText.TryAgainLabel(job) == JobStateText.FinishLabel(job) ? "Open Jobs to finish them." : "Open Jobs to see which.";
         return new Toast(
             job.Verb == TransferVerb.Move ? "Move canceled" : "Copy canceled",
-            $"{files} being written when you canceled and may be incomplete. Open Jobs to finish them.",
+            $"{files} being written when you canceled and may be incomplete. {next}",
             ToastKind.Warning);
     }
 

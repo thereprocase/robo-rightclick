@@ -358,9 +358,9 @@ public class RetrySummaryTextTests
     {
         Assert.Equal("Try again (5)", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { RetryCount = 5 }));
         Assert.Equal("Try again", JobStateText.TryAgainLabel(Job(JobState.Failed)));
-        Assert.Equal("Finish copying them", JobStateText.TryAgainLabel(Job(JobState.Canceled) with { DamagedOnCancel = 3 }));
+        Assert.Equal("Finish copying them", JobStateText.TryAgainLabel(Job(JobState.Canceled) with { DamagedOnCancel = 3, RetryCount = 3 }));
         Assert.Equal("Try again (1)", JobStateText.TryAgainLabel(Job(JobState.Canceled) with { MayBeIncomplete = 1, RetryCount = 1 }));
-        Assert.Equal("Try again", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { RetriesWholePaste = true }));
+        Assert.Equal("Try again", JobStateText.TryAgainLabel(Job(JobState.DoneWithErrors) with { PathsUnreliable = true }));
         Assert.Null(JobStateText.TryAgainLabel(Job(JobState.Done)));
     }
 
