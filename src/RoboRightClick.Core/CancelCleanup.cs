@@ -30,6 +30,143 @@ public enum KillEvidence
 
 public readonly record struct KillObservation(KillEvidence Evidence, FileIdentity Identity);
 
+/// <summary>
+/// A 64-bit hash of a path, equal for paths <see cref="WinPath.Comparer"/> calls equal (FNV-1a
+/// over the upper-cased UTF-16 units). For sets that only ever answer "maybe" safely: a
+/// collision can only make a lookup say yes for a path that was never added.
+/// </summary>
+public static class PathHash
+{
+    public static ulong Of(string path)
+    {
+        var hash = 14695981039346656037UL;
+        foreach (var c in path)
+        {
+            hash = (hash ^ char.ToUpperInvariant(c)) * 1099511628211UL;
+        }
+        return hash;
+    }
+}
+
+/// <summary>
+/// What the host saw at a killed run's destinations while robocopy was suspended, by
+/// <see cref="WinPath.NormalizeForMatch"/> path. A cancel 5% into a million-file paste finds
+/// most of them absent, so absent paths are kept only as <see cref="PathHash"/> values: a
+/// collision reads a path as absent, which leads to doing nothing, never to a delete. Every
+/// other observation is kept whole (the identity is what a delete checks). A path never
+/// looked at is <see cref="KillEvidence.Unknown"/>. Not thread-safe; the job guards it.
+/// </summary>
+public sealed class KillObservations
+{
+    private readonly Dictionary<string, KillObservation> _seen = new(WinPath.Comparer);
+    private readonly HashSet<ulong> _absent = [];
+
+    /// <summary>How many paths were recorded as absent (exact unless two hashes collided).</summary>
+    public int AbsentCount => _absent.Count;
+
+    public int Count(KillEvidence evidence) => evidence == KillEvidence.Absent
+        ? _absent.Count
+        : _seen.Values.Count(o => o.Evidence == evidence);
+
+    public int Total => _seen.Count + _absent.Count;
+
+    /// <summary>The observation for <paramref name="path"/>; get and set take a raw path and normalize it.</summary>
+    public KillObservation this[string path]
+    {
+        get => Of(path);
+        set => Record(path, value);
+    }
+
+    public void Record(string path, KillObservation observation)
+    {
+        var key = WinPath.NormalizeForMatch(path);
+        if (observation.Evidence == KillEvidence.Absent)
+        {
+            _seen.Remove(key);
+            _absent.Add(PathHash.Of(key));
+        }
+        else
+        {
+            _seen[key] = observation;
+        }
+    }
+
+    public KillObservation Of(string path)
+    {
+        var key = WinPath.NormalizeForMatch(path);
+        if (_seen.TryGetValue(key, out var observation))
+        {
+            return observation;
+        }
+        return _absent.Contains(PathHash.Of(key)) ? new KillObservation(KillEvidence.Absent, default) : default;
+    }
+
+    public void Clear()
+    {
+        _seen.Clear();
+        _absent.Clear();
+        _seen.TrimExcess();
+        _absent.TrimExcess();
+    }
+}
+
+/// <summary>
+/// The destinations one job planned, for <see cref="CancelCleanup"/>'s "claimed by another
+/// job" check. Exact while the job runs; <see cref="Compact"/> keeps only
+/// <see cref="PathHash"/> values once it has ended, about 8 bytes a file instead of the path,
+/// since a finished job stays in history and its files still must not be deleted by a later
+/// cancel. A collision can only make a path look claimed, which keeps the file.
+/// Not thread-safe; the job guards it.
+/// </summary>
+public sealed class ClaimSet
+{
+    private HashSet<string>? _exact = new(WinPath.Comparer);
+    private HashSet<ulong>? _hashes;
+    private readonly List<string> _roots = [];
+
+    /// <summary>A file's destination (normalized here).</summary>
+    public void AddFile(string destinationPath)
+    {
+        var key = WinPath.NormalizeForMatch(destinationPath);
+        if (_exact is { } exact)
+        {
+            exact.Add(key);
+        }
+        else
+        {
+            _hashes!.Add(PathHash.Of(key));
+        }
+    }
+
+    /// <summary>An item moved whole by a rename: everything under it is claimed too.</summary>
+    public void AddRoot(string destinationPath) => _roots.Add(WinPath.NormalizeForMatch(destinationPath));
+
+    public bool Contains(string destinationPath)
+    {
+        var path = WinPath.NormalizeForMatch(destinationPath);
+        var file = _exact is { } exact ? exact.Contains(path) : _hashes!.Contains(PathHash.Of(path));
+        return file || _roots.Any(root => WinPath.AreSame(path, root) || WinPath.IsStrictlyUnder(path, root));
+    }
+
+    /// <summary>Drops the paths and keeps their hashes. Idempotent.</summary>
+    public void Compact()
+    {
+        if (_exact is not { } exact)
+        {
+            return;
+        }
+        _hashes = new HashSet<ulong>(exact.Count);
+        foreach (var path in exact)
+        {
+            _hashes.Add(PathHash.Of(path));
+        }
+        _exact = null;
+    }
+
+    /// <summary>True once <see cref="Compact"/> has run.</summary>
+    public bool IsCompact => _exact is null;
+}
+
 /// <summary>A planned file of a robocopy run the cancel killed, with that run's conflict policy.</summary>
 public sealed record KilledRunFile(PlannedFile File, ConflictPolicy Policy);
 
@@ -68,9 +205,9 @@ public static class CancelCleanup
     /// host's re-check just before the step.
     /// </param>
     /// <param name="atKill">
-    /// What the host saw at each destination while robocopy was suspended for the kill, keyed
-    /// by <see cref="WinPath.NormalizeForMatch"/> path. A path that is missing counts as
-    /// <see cref="KillEvidence.Unknown"/>.
+    /// What the host saw at each destination while robocopy was suspended for the kill, asked
+    /// with the <see cref="WinPath.NormalizeForMatch"/> path (<see cref="KillObservations.Of"/>).
+    /// A path never looked at is <see cref="KillEvidence.Unknown"/>.
     /// </param>
     /// <param name="move">True for a cut.</param>
     /// <param name="destinationExists">Live check by the host after robocopy has exited; asked only where the evidence is unknown.</param>
@@ -79,11 +216,18 @@ public static class CancelCleanup
     /// True when another job of this session plans to write, or wrote, this destination. Its
     /// file may be the only copy of a moved source, so this job must not touch it.
     /// </param>
+    /// <remarks>
+    /// The kill evidence is read before <paramref name="claimedByOtherJob"/> and
+    /// <paramref name="sourceStillExists"/>: absent and not-open evidence never delete or report
+    /// anything whatever those say, and a cancel early in a large paste has hundreds of
+    /// thousands of such files, each of which would otherwise cost a stat on the source volume
+    /// and a pass over every job in history.
+    /// </remarks>
     public static CleanupPlan Select(
         IEnumerable<KilledRunFile> killedRunFiles,
         IEnumerable<string> completedSources,
         IEnumerable<string> presentBeforeStep,
-        IReadOnlyDictionary<string, KillObservation> atKill,
+        Func<string, KillObservation> atKill,
         bool move,
         Func<string, bool> destinationExists,
         Func<string, bool> sourceStillExists,
@@ -112,6 +256,16 @@ public static class CancelCleanup
                 }
                 continue;
             }
+            var seen = atKill(destination);
+            if (seen.Evidence is KillEvidence.Absent or KillEvidence.NotOpenByRobocopy)
+            {
+                // Absent: robocopy had not created it yet; a file there now is someone else's.
+                // Not open: a file robocopy was not writing: a late arrival it skipped, a
+                // finished copy whose output line was never read, or what an earlier error
+                // left. None of these is a partial copy of this cancel, and the first is the
+                // user's data. Nothing below could change that, so nothing more is asked.
+                continue;
+            }
             if (claimedByOtherJob(file.DestinationPath))
             {
                 // Another paste wrote or is writing this name; it is not ours to judge.
@@ -125,20 +279,10 @@ public static class CancelCleanup
                 continue;
             }
 
-            var seen = atKill.TryGetValue(destination, out var observation) ? observation : default;
             switch (seen.Evidence)
             {
                 case KillEvidence.OpenByRobocopy when seen.Identity.IsKnown:
                     delete.Add(new CleanupTarget(file.DestinationPath, seen.Identity));
-                    break;
-                case KillEvidence.Absent:
-                    // Robocopy had not created it yet; a file there now is someone else's.
-                    break;
-                case KillEvidence.NotOpenByRobocopy:
-                    // A file robocopy was not writing: a late arrival it skipped, a finished
-                    // copy whose output line was never read, or what an earlier error left.
-                    // None of these is a partial copy of this cancel, and the first is the
-                    // user's data.
                     break;
                 default:
                     // Nothing proves who wrote it. Most likely a partial copy, so the user is

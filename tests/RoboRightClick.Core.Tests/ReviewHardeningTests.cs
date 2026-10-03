@@ -284,11 +284,11 @@ public class CancelClaimTests
             ],
             completedSources: [],
             presentBeforeStep: [],
-            atKill: new Dictionary<string, KillObservation>(WinPath.Comparer)
+            atKill: new KillObservations
             {
-                [@"D:\dst\f.bin"] = new(KillEvidence.OpenByRobocopy, held),
-                [@"D:\dst\g.bin"] = new(KillEvidence.OpenByRobocopy, held),
-            },
+                [@"D:\dst\f.bin"] = new KillObservation(KillEvidence.OpenByRobocopy, held),
+                [@"D:\dst\g.bin"] = new KillObservation(KillEvidence.OpenByRobocopy, held),
+            }.Of,
             move: false,
             destinationExists: _ => true,
             sourceStillExists: _ => true,
@@ -305,10 +305,10 @@ public class CancelClaimTests
             [new KilledRunFile(new PlannedFile(@"C:\f.bin", @"D:\dst\f.bin", Facts), ConflictPolicy.Ask)],
             completedSources: [@"C:\.\f.bin"],
             presentBeforeStep: [],
-            atKill: new Dictionary<string, KillObservation>(WinPath.Comparer)
+            atKill: new KillObservations
             {
-                [@"D:\dst\f.bin"] = new(KillEvidence.OpenByRobocopy, new FileIdentity(1, 0, 42, 7)),
-            },
+                [@"D:\dst\f.bin"] = new KillObservation(KillEvidence.OpenByRobocopy, new FileIdentity(1, 0, 42, 7)),
+            }.Of,
             move: false,
             destinationExists: _ => true,
             sourceStillExists: _ => true,

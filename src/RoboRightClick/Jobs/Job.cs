@@ -167,12 +167,13 @@ internal sealed class Job
     private HashSet<string>? _presence;
 
     // What was seen at the killed run's destinations while robocopy was suspended for the
-    // cancel, by normalized path. Cancel cleanup deletes only files robocopy held open then.
-    private readonly Dictionary<string, KillObservation> _atKill = new(WinPath.Comparer);
+    // cancel. Cancel cleanup deletes only files robocopy held open then. Handed to cleanup,
+    // then dropped.
+    private KillObservations _atKill = new();
 
-    // Claims: normalized destinations this job planned. Kept for the job's life in history.
-    private readonly HashSet<string> _claimedFiles = new(WinPath.Comparer);
-    private readonly List<string> _claimedRoots = [];
+    // Claims: destinations this job planned. Kept for the job's life in history, compacted to
+    // hashes once it ends (ClaimSet), so a finished million-file job does not keep every path.
+    private readonly ClaimSet _claims = new();
 
     // The run whose callbacks are current; 0 = none. Callbacks of any other run are ignored.
     private int _runSerial;
@@ -397,15 +398,10 @@ internal sealed class Job
     /// <summary>Destinations this job planned, for <see cref="IDestinationClaims"/>.</summary>
     public bool Claims(string destinationPath)
     {
-        var path = WinPath.NormalizeForMatch(destinationPath);
         lock (_lock)
         {
-            if (_claimedFiles.Contains(path))
-            {
-                return true;
-            }
             // A rename moves a whole item; everything under its destination is this job's.
-            return _claimedRoots.Any(root => WinPath.AreSame(path, root) || WinPath.IsStrictlyUnder(path, root));
+            return _claims.Contains(destinationPath);
         }
     }
 
@@ -1120,7 +1116,7 @@ internal sealed class Job
         bool unreliable;
         List<KilledRunFile> killed;
         List<string> completed;
-        Dictionary<string, KillObservation> atKill;
+        KillObservations atKill;
         lock (_lock)
         {
             _cancelRequested = true;
@@ -1130,7 +1126,9 @@ internal sealed class Job
             unreliable = parts.Any(p => p.Ledger.PathsUnreliable);
             killed = parts.SelectMany(p => p.Ledger.KilledRunFiles).ToList();
             completed = parts.SelectMany(p => p.Ledger.CompletedSources).ToList();
-            atKill = new Dictionary<string, KillObservation>(_atKill, WinPath.Comparer);
+            // Every run has ended (RobocopyRun returns after the kill), so nothing records more.
+            atKill = _atKill;
+            _atKill = new KillObservations();
         }
         DeliverNotices();
 
@@ -1171,14 +1169,14 @@ internal sealed class Job
         List<KilledRunFile> killed,
         List<string> completed,
         HashSet<string> presence,
-        Dictionary<string, KillObservation> atKill)
+        KillObservations atKill)
     {
         var move = Start.Order.Verb == TransferVerb.Move;
         var plan = CancelCleanup.Select(
             killed,
             completed,
             presence,
-            atKill,
+            atKill.Of,
             move,
             destinationExists: Services.FileSystem.Exists,
             sourceStillExists: File.Exists,
@@ -1256,12 +1254,12 @@ internal sealed class Job
     /// allowed in ephemeral mode. It is how a test tells "nothing was proven" from "the
     /// delete failed".
     /// </summary>
-    private static void TraceCleanup(int candidates, Dictionary<string, KillObservation> atKill, CleanupPlan plan, int deleted)
+    private static void TraceCleanup(int candidates, KillObservations atKill, CleanupPlan plan, int deleted)
     {
-        int Count(KillEvidence evidence) => atKill.Values.Count(o => o.Evidence == evidence);
+        int Count(KillEvidence evidence) => atKill.Count(evidence);
         System.Diagnostics.Trace.WriteLine(string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"RoboRightClick cancel cleanup: candidates={candidates} observed={atKill.Count} open={Count(KillEvidence.OpenByRobocopy)} notOpen={Count(KillEvidence.NotOpenByRobocopy)} absent={Count(KillEvidence.Absent)} unknown={Count(KillEvidence.Unknown)} toDelete={plan.Delete.Count} deleted={deleted} leftInPlace={plan.LeftInPlace.Count}"));
+            $"RoboRightClick cancel cleanup: candidates={candidates} observed={atKill.Total} open={Count(KillEvidence.OpenByRobocopy)} notOpen={Count(KillEvidence.NotOpenByRobocopy)} absent={Count(KillEvidence.Absent)} unknown={Count(KillEvidence.Unknown)} toDelete={plan.Delete.Count} deleted={deleted} leftInPlace={plan.LeftInPlace.Count}"));
     }
 
     /// <summary>Explorer leaves an empty folder for each directory link robocopy skipped (docs/parity.md).</summary>
@@ -1352,7 +1350,7 @@ internal sealed class Job
         {
             foreach (var (path, observation) in observed)
             {
-                _atKill[WinPath.NormalizeForMatch(path)] = observation;
+                _atKill.Record(path, observation);
             }
         }
     }
@@ -1664,18 +1662,18 @@ internal sealed class Job
         {
             foreach (var file in step.Files)
             {
-                _claimedFiles.Add(WinPath.NormalizeForMatch(file.DestinationPath));
+                _claims.AddFile(file.DestinationPath);
             }
             switch (step.Step)
             {
                 case RenameStep rename:
-                    _claimedRoots.Add(WinPath.NormalizeForMatch(rename.Destination));
+                    _claims.AddRoot(rename.Destination);
                     break;
                 case KeepBothStep keepBoth:
-                    _claimedFiles.Add(WinPath.NormalizeForMatch(keepBoth.Destination));
+                    _claims.AddFile(keepBoth.Destination);
                     break;
                 case DuplicateFileStep duplicate:
-                    _claimedFiles.Add(WinPath.NormalizeForMatch(duplicate.Destination));
+                    _claims.AddFile(duplicate.Destination);
                     break;
             }
         }
@@ -1684,7 +1682,8 @@ internal sealed class Job
     /// <summary>
     /// Finished jobs stay in memory for the Jobs window; their plan and ledger can hold
     /// hundreds of bytes per file, so they are kept only while "Try again" can use them.
-    /// Claims stay: they are the session-wide record cancel cleanup consults.
+    /// Claims stay, as hashes (<see cref="ClaimSet.Compact"/>): they are the session-wide record
+    /// cancel cleanup consults. The kill observations go.
     /// </summary>
     private void ReleaseLocked()
     {
@@ -1713,6 +1712,8 @@ internal sealed class Job
             }
         }
         _presence = null;
+        _atKill.Clear();
+        _claims.Compact();
     }
 
     private void Touch() => Interlocked.Increment(ref _version);

@@ -33,7 +33,7 @@ public class CancelCleanupTests
             killed,
             completedSources ?? [],
             presentBeforeStep ?? [],
-            atKill,
+            path => atKill.TryGetValue(path, out var seen) ? seen : default,
             move,
             destinationExists ?? (_ => true),
             sourceStillExists ?? (_ => true),
