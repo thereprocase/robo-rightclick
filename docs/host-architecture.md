@@ -183,8 +183,13 @@ medium-integrity tray copy or move files of its choosing, a sandbox escape. Thre
 
 Layer 1 is in effect: the tray starts with it (after a fix: `CoInitializeSecurity` takes only
 an absolute-format descriptor, so the SDDL result is converted with `MakeAbsoluteSD`), and
-medium-integrity callers, Explorer and the CLI, are served (testlog 2026-10-02). That a
-low-integrity caller is refused, by any of the three layers, is still unverified.
+medium-integrity callers, Explorer and the CLI, are served (testlog 2026-10-02). A
+low-integrity caller is refused: its `CoCreateInstance` fails with `E_ACCESSDENIED`, also with
+both AppID values deleted (put back afterwards), while a medium-integrity client is served
+(testlog 2026-10-02, security entry). So the refusal does not rest on the registry values
+alone. Which of the machine's default launch permission and layer 1 refuses with the values
+gone, and whether layer 3 is ever reached by a low-integrity caller, is unverified. A caller
+running as another user is untested.
 
 ### Activation and call sequence
 
@@ -544,12 +549,19 @@ the parent console via `AttachConsole`; install and uninstall results use a mess
 | Time for 50k items vs per-item reads | **unverified** (spike 1) |
 | `-Embedding` start when the tray is not running; cold-start time; Run-key race | verified (testlog 2026-10-02: `Execute` 309-382 ms after COM creates the process; race emulated with a plain start, 14 runs); a right-click right after sign-in **unverified** |
 | `MultiSelectModel=Single` hides Robo-Paste for multi-folder selections; works on the background verb | first half verified; the second was false, the background key now has no `MultiSelectModel` (testlog 2026-10-02) |
-| A low-integrity process cannot activate or call the server (`icacls /setintegritylevel low` test exe) | verified (testlog 2026-10-02, user experience entry: `Security.Tests.ps1`, low-integrity copy exit 1, control exit 0; before 4b8b677 it crashed in `EnableVisualStyles` first) |
+| A low-integrity process cannot activate or call the server (`icacls /setintegritylevel low` test exe) | verified (testlog 2026-10-02: `Security.Tests.ps1`, the low-integrity CLI exits 1, a normal one 0; a low-integrity COM client gets `E_ACCESSDENIED` from `CoCreateInstance`, a medium one the object and `IExecuteCommand`) |
 | HKCU AppID `AccessPermission`/`LaunchPermission` do not break Explorer's activation | verified (testlog 2026-10-02) |
-| HKCU AppID `AccessPermission`/`LaunchPermission` are honored | a low-integrity call is refused (row above); whether the AppID values or the in-process integrity check refused it **unverified** |
+| The refusal of a low-integrity caller depends on the HKCU AppID values | **no**: with both deleted the low-integrity client is still refused and the medium one served (testlog 2026-10-02, security entry); which layer then refuses is **unverified** |
+| A caller running as a different user cannot drive a verb | **unverified** (the CLSIDs are registered in one user's hive; no second account was created) |
 | Explorer allows the tray to take foreground (conflict dialog, progress window) | **unverified** (spike 1) |
-| Remote clients are refused by the output pipe | **unverified** |
-| Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | **unverified** |
+| Remote clients are refused by the output pipe | verified for a network-logon token: a client holding the NETWORK SID (an SSH session of the same user) gets access denied on the live pipe, over `.` and `127.0.0.1`; the DACL read back from the live pipe is `D:(D;;0x1f019f;;;NU)(A;;0x12019f;;;<user SID>)` and nothing else (testlog 2026-10-02, security entry). A loopback SMB open from the interactive session is **not** a network logon on this machine: it connected to a pipe that denies NETWORK, so that route proves nothing; a client on another machine is **unverified** |
+| Robocopy opens the output pipe under the app's DACL (user ReadWrite\|CreateNewInstance, NETWORK denied); a mismatched client PID is disconnected; a tiny run's output is not lost to the PID check | verified (testlog 2026-10-02: robocopy held at its start; a same-user client connected and was dropped, its data never reached `robocopy.log`; the real run's copy was intact; a second server on the live name was refused with maxInstances 1 and unlimited; a later client was refused while robocopy held the pipe). With the PID comparison removed the same test fails |
+| A file name that starts with `-` is read by robocopy as a switch, quoted or not | verified (testlog 2026-10-02, security entry: `-E` as a file filter switched on `/E`); the planner refuses such files, end to end on a same-drive copy and a cross-drive cut |
+| Hostile `extraArgs` values never reach robocopy's command line | verified for 21 values (switches outside the allow-list, quoted or dashed forms, separators, a 1,200-character value, a positional path); an allowed value is appended (testlog 2026-10-02, security entry). With the allow-list check removed the test fails |
+| Hostile clipboard contents are refused without a robocopy run | verified for 25 path forms (device, extended-length, NT, traversal, streams, wildcards, quotes, trailing dot or space, forward slashes), the ANSI form, 7 malformed blocks, a block of 250,001 paths and one over 64 MB, a device-path destination; with a Move effect and a canary that an accepted path would have moved (testlog 2026-10-02). With `?` allowed in paths the test fails |
+| A clipboard of 100,000 paths that are all refused keeps the tray responsive | verified after 1,000-row cap on the summary lists (before it: about 0.75 ms of tray CPU per refused path, 31 s of CPU for 40,000, the tray not answering; after: 2.5 s) |
+| Install writes only the keys, values and folders the design lists; uninstall removes them | verified by diffing HKCU, the profile and machine folders and the machine-wide registry before and after (`Footprint.Tests.ps1`, testlog 2026-10-02). Two Windows-written records are outside the app's control: Windows' own copy of the Uninstall entry under `HKLM\...\UFH\ARP` (gone after uninstall) and a `RunNotification` value named for the app that stays |
+| Ephemeral jobs (copy, cut, cancel, conflict, failure) leave no new file, no occurrence of the job's names or the test folder's path, in the profile folders, Recent, jump lists, the notification database, WER folders, HKCU or the Application and System event logs; the clipboard carries the three opt-out formats | verified (testlog 2026-10-02, security entry). Judged Windows noise (web cache, token cache, class hive logs) may change and is searched, but two of those files could not be read. Clipboard history itself was not queried |
 | Cancel cleanup deletes the partial copies robocopy held open while suspended for the kill (`FileProcessIdsUsingFileInformation`, identity-checked handle delete) and keeps a late arrival robocopy skipped | verified on NTFS, FAT32 and exFAT (testlog 2026-10-02, cancel entry); through the app on an SMB share **unverified** (the PID query answered on an SMB loopback share with plain robocopy); refusing links and folders, and clearing read-only first, **unverified** |
 | A cut never deletes a source whose copy failed: locked source, access-denied destination, full destination, canceled cross-volume cut | verified (testlog 2026-10-02, cancel entry) |
 | With `/NC`, robocopy prints destination-only ("extra") files like copied files; `/XX` removes them | verified (testlog 2026-10-02, cancel entry) |

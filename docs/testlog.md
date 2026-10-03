@@ -372,3 +372,178 @@ conflict list; screen readers. The running tray draws its icon at runtime; the g
 virtual disks detached, the scratch folder, this session's scheduled tasks, the debug listener
 and the tray icon's "show on taskbar" setting removed, scale back at 100%. The pre-existing
 `RrcParityExplorer` task was left alone.
+
+## 2026-10-02 · build 26200 (robocopy 10.0.26100.1) · VM · security and ephemeral audit
+
+Same disposable Windows 11 Enterprise evaluation VM (build 26200), no network egress, test
+account signed in to the desktop. Scripts and the app ran on the desktop through one-shot
+scheduled tasks; a second, non-interactive logon session of the same account (a service-style
+session whose token carries the NETWORK SID) was used for the remote-client probe. Test volumes:
+a 300 MB and a 40 MB NTFS virtual disk. Builds (exe SHA256):
+- **before** the fixes below: the package of commit e24d6ec (zip `30bb4917...`);
+- **final** `8AA20C0EEF7F844767F64FFCB52F82B0F081228670E02FBC91984812F21B0DF7` (zip `8C97D881...`), built
+  from the sources of commit fb39d77 (the exe embeds the commit, so a rebuild from a later commit, which changes scripts and docs only,
+  hashes differently). Every deploy
+  was checked: the installed exe's hash against the package's.
+- Sabotage builds (temporary edits, reverted, not kept) are listed under "Rules broken once".
+
+### Run-All on the final exe
+
+`Run-All.ps1 -SecondVolume <300 MB disk> -SmallVolume <40 MB disk>`, all eight PASS: Install,
+Verbs, CutSafety, Cancel, Ephemeral (39 checks, 119 s), Security (395 checks, 848 s), Uninstall,
+Footprint (32 checks, 771 s). Two lines in the Ephemeral output say `unverified` (below).
+
+### Findings, fixed
+
+- **A file named like a robocopy switch changed the run (eaf0b80).** Measured with robocopy by
+  hand: a file called `-E` passed as a quoted file filter switched on `/E` (subfolder files were
+  listed); `"-E "` and the other spellings tried were refused or ignored. Robocopy reads `-` like
+  `/`. A file called `-MOV` or `-S` in a selection would make a copy a move or recurse. (A
+  `-PURGE` in the list did not delete an unrelated file in the destination: with file filters
+  purge only considers matching names.) The planner now refuses such a loose file with a
+  reason and runs the rest; `RobocopyArgs.Build` throws as the last gate (the conflict split and
+  the retry path rebuild name lists from files inside folders). On the **old** build,
+  `Security.Tests.ps1` section 6 failed ("robocopy was given ok.txt and neither switch-like
+  name"); on the final build it passes: robocopy gets `ok.txt` only, only `ok.txt` arrives, no
+  subfolder, every source stays, also for a cut across drives (the switch-like files and the
+  subfolder stay). `31-switch-like-names-refused.png`: the job's Refused list with the reason.
+  Core tests added for the planner, `Build` and the name predicate; breaking the predicate fails
+  6 of them, breaking the planner check fails 3.
+- **Refused items made the tray crawl (fb39d77).** A clipboard of 40,000 paths that were all
+  refused cost the tray 31 s of CPU (15 s for 20,000) and it stopped answering
+  (`Process.Responding` false for the 24 s sampled): the summary list built one owner-drawn row
+  per item, about 0.75 ms each, so the 250,000-path limit means minutes. After capping the
+  Refused, May-be-incomplete and Skipped lists at 1,000 rows with a count of the rest, 40,000
+  paths cost 2.5 s of CPU and the tray stayed responsive; 100,000 paths took 22 s end to end
+  in the test, the tray's working set 145 MB to 103 MB. (Without the progress window the same
+  list cost 0.5 s, which located the cost in the window.)
+
+### Pipe: squatting, impersonation, remote clients, PID check (Security section 3)
+
+Robocopy is held at its start (suspended by `Start-RobocopyCatcher`), so the pipe exists and
+robocopy has not connected. Command line read from the process:
+`/UNILOG:\\.\pipe\RoboRightClick-<job id, 32 hex>-<step>-<16 hex nonce>`.
+- DACL read back through a READ_CONTROL handle: `D:(D;;0x1f019f;;;NU)(A;;0x12019f;;;<user SID>)`:
+  two entries, NETWORK denied, only the user allowed.
+- A second server on the live name: refused (`Access to the path is denied` with
+  maxInstances 1, `All pipe instances are busy` with unlimited).
+- A same-user client connects (the DACL lets the user in) and is disconnected at once (`Pipe is
+  broken` on its first write): the PID check. What it sent never reaches any `robocopy.log`
+  (normal mode), the real robocopy then connects and the copy of the 48 MB file is intact, and a
+  client that tries while robocopy holds the pipe is refused.
+- Remote clients: from the other logon session (token with the NETWORK SID, same account) the
+  live pipe answers `UnauthorizedAccessException` over `.` and over `127.0.0.1`. A control pipe
+  with the same DACL minus the NETWORK deny let the same client in. From the interactive
+  session an SMB loopback open (`localhost`, `127.0.0.1`, the machine name) **connected** to a
+  pipe that denies NETWORK, so loopback from the desktop is not a network logon here and was not
+  used as evidence. A client on another machine was not tried (no second machine).
+
+### COM (Security section 2)
+
+A bare COM client (compiled by the script): at medium integrity `CoCreateInstance` and
+`QueryInterface(IExecuteCommand)` return 0; at low integrity `CoCreateInstance` returns
+`0x80070005`. With both AppID values (`LaunchPermission`, `AccessPermission`) deleted, low is
+still `0x80070005` and medium still served; the values were restored byte for byte (checked).
+Not shown: which of the machine's default launch permission and the tray's own
+`CoInitializeSecurity` refuses with the values gone; a caller running as another user (no
+second account was created).
+
+### extraArgs, clipboard, names (Security sections 4 to 6)
+
+- 21 hostile `extraArgs.copy` values (switches outside the allow-list, quoted and dashed forms,
+  `&`, `^`, a quote after an allowed value, a tab and a newline as separator, a 14-digit size, a
+  positional path, `/JOB:`, `/LOG:` and `/UNILOG+:` into the test folder, 1,200 characters): the
+  robocopy command line ended with the fixed `/XC /XN /XO` every time, no log file appeared, the
+  unrelated destination file was untouched, the source stayed, only the selected file was
+  copied. Control: `/IORATE:8M /J` is appended.
+- Hostile clipboard, each pasted with a Move effect over a canary file an accepted path would
+  have moved: 25 path forms (`\\?\GLOBALROOT\Device\...`, `\\?\C:\...`, `\\.\C:\...`, `\??\`,
+  `\\?\UNC\localhost\C$\...`, `..` and `.` segments, doubled and forward slashes, drive-relative
+  and relative paths, an alternate stream, `::$DATA`, trailing dot and space, `*` and `?`, a quote
+  injection, `<>|`, `CON`, a control character, a drive root, `\\server`, `\\.\pipe\x`), the
+  narrow (ANSI) form, 7 malformed blocks (shorter than the header, `pFiles` beyond the block, at
+  its end and inside the header, a name with no terminator, header only, cut inside the
+  terminator), 250,001 paths, a 69 MB block, 100,000 missing paths, and two device-path
+  destinations. Each: no robocopy started, nothing reached the destination, the canary unchanged,
+  the same tray process, no crash log entry. Controls: the plain canary path copied; a list of
+  one valid and one device path copied only the valid one.
+- During the first run an odd-length block was accepted: that was a script mistake (a valid
+  path followed by one stray byte after the list terminator, which is ignored by design), not
+  a defect; the case now cuts the block inside the terminator.
+
+### Ephemeral audit (`Ephemeral.Tests.ps1`)
+
+Five ephemeral jobs with progress window and toasts on: a copy, a cut (a rename; a robocopy
+`/MOV` run when `-SecondVolume` is given, as in the Run-All above), a cancel of a throttled
+4 x 48 MB folder, a conflict answered with Skip, a copy of a locked file (error summary
+`32-ephemeral-failure-summary-locked-file.png`: "Ephemeral: nothing about this job is written
+to disk"). Snapshots before and after of `%APPDATA%` (Recent, jump lists), `%LOCALAPPDATA%`
+(WER, CrashDumps, Notifications), `%TEMP%` and `ProgramData\Microsoft\Windows\WER` (names, sizes,
+times, hashes): no new, changed or removed file other than `config.json`, the notification
+database and toast images, and Windows' own background files; no file name or content with the
+job marker or the test folder's path; the marker not in an `reg export HKCU` text and not in the
+Application and System event logs; no crash log. The clipboard after the ephemeral Robo-Copy
+holds the three formats `ExcludeClipboardContentFromMonitorProcessing`, `CanIncludeInClipboardHistory`
+and `CanUploadToCloudClipboard`; after a normal-mode copy none of them. The Windows noise is now
+a list inside the script (web cache database, token broker cache, class hive logs, WebView cache,
+an Office hub settings file): it may change, its content is still searched. Two of those files
+(`WebCache\V01.log`, `WebCache\WebCacheV01.jfm`) could not be opened for reading and are
+reported `unverified`. The Windows clipboard history itself was not queried.
+
+Normal mode (`logRetentionJobs` 3): six jobs; `history.jsonl` held all six (done, no errors);
+exactly three job folders remained, the three newest; a folder in `jobs\` not named like a job
+survived; `job.json` named verb, source and `done`; `robocopy.log` held robocopy's output (its
+first data line starts with a UTF-8 byte order mark that robocopy writes: cosmetic, not changed).
+
+### Footprint (`Footprint.Tests.ps1`, new)
+
+Before, after install, after three jobs, after uninstall: full HKCU export parsed to key and
+value lines, the profile, ProgramData, Program Files, Start Menu and Temp listings, scheduled
+tasks, services, HKLM Run values, and a search of `HKLM\SOFTWARE` and the services key for the
+app's name and GUIDs. Install: 19 to 29 differences, all in keys the design lists (the count
+varies with keys that already exist), no Explorer, shell-extension or context-menu-handler key,
+no new path outside a RoboRightClick folder (apart from toast images and the Windows noise
+above), no task, service or machine-wide Run value. Jobs: no HKCU key outside the design.
+Uninstall: HKCU back to the "before" text apart from Windows noise, no path named
+RoboRightClick, install, config and data folders gone, tasks and services as before. Two
+records are Windows', not the app's: `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\UFH\ARP`
+holds a copy of the per-user Uninstall entry while installed (0 matches after uninstall), and
+`HKCU\...\RunNotification` gets a `StartupTNoti<app name>` DWORD when the Run value is first
+added, which stays after uninstall (the app neither writes nor removes it; recorded, not changed).
+
+### Rules broken once, to see the test fail
+
+Each edit was made, built, deployed (hash checked) and the covering script section run, then
+reverted: the client PID comparison forced true: Security 3 failed at "disconnected by the PID
+check"; the extraArgs check always empty: Security 4 failed at the first hostile value; `?` allowed in
+paths: Security 5 failed at the GLOBALROOT case ("no robocopy was started"); the ephemeral
+clipboard formats not written: Ephemeral failed at job 1; ephemeral mode composing a file sink:
+Ephemeral listed the new job files and the marker in `job.json` and `robocopy.log`; the Run value
+left out of uninstall: Footprint failed ("Registry entries survived uninstall"); the switch-like
+name rule: above. Two of these first failed for the wrong reason and the script was changed:
+the PID test (the DACL probe used up the pipe's only instance, so the intruder could not
+connect; the probe now runs last and the connect is asserted) and one deploy that did not
+replace the exe, caught by the hash check and repeated.
+
+### Script defects fixed
+
+`Security.Tests.ps1` was two checks and is now six sections; `Ephemeral.Tests.ps1` ran five
+copies and now five different jobs plus the normal-mode phase; error summaries have a button
+named `SkipErrors`, not `Skip`; `job.json` nests its fields under `job`; a registry-diff
+classifier counted every key below a shared parent as the app's (only the parent itself and the
+design's own keys count); `foreach` cannot be piped.
+
+### Not verified, or still open
+
+A caller running as another user; which layer refuses a low-integrity caller once the AppID values
+are gone; a pipe client on another machine; Windows clipboard history queried through its API;
+no WER report after an unhandled crash during an ephemeral job (no way was found to raise one);
+a hostile selection arriving from Explorer's own menu (the CLI uses the same COM call);
+`install --quiet` returning 0 without replacing the exe, seen once in the earlier session and
+once here (after a tray restart a few seconds earlier), not reproduced in an attempt to trigger it
+and its cause unknown (the deploy check catches it); 125% and 175% display scales.
+
+**VM housekeeping:** app uninstalled (folders and keys gone, checked by Uninstall.Tests and
+Footprint.Tests), both virtual disks detached and deleted, the scratch folder, all scheduled
+tasks of this session removed. The pre-existing `RrcParityExplorer` task was left alone. The
+Windows-written `RunNotification` value above remains.
