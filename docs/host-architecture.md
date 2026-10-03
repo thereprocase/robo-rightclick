@@ -385,8 +385,11 @@ Step execution:
   that invariant 1 forbids.
 - `DuplicateFileStep`, copy-mode `KeepBothStep` → `CopyFileEx(COPY_FILE_FAIL_IF_EXISTS)`.
 - **Cancel** (any state before Finalizing): `CancelRequested` at once. The running
-  `RobocopyRun` suspends robocopy (`NtSuspendProcess`; a pause change can no longer resume it)
-  and calls `IRobocopyObserver.OnSuspendedForCancel`, then kills it and waits. While it is
+  `RobocopyRun` suspends robocopy (`NtSuspendProcess`; a pause change can no longer resume it),
+  waits up to 2 seconds for every thread to have actually stopped (suspension is asynchronous: a
+  thread inside a create call on a slow share finishes that call first; `GetThreadContext` on
+  each thread waits for that, `ProcessNative.WaitUntilThreadsStopped`, x64 only), and calls
+  `IRobocopyObserver.OnSuspendedForCancel`, then kills it and waits. While it is
   suspended, the job (`Job.ObserveAtKill`) takes the step's files not yet reported complete and
   not present before the step, lists each of their destination folders once, and for every one
   that exists calls `ProcessNative.ObserveAtKill`: a handle with `FILE_READ_ATTRIBUTES` only (no
@@ -396,7 +399,13 @@ Step execution:
   the processes that hold it open (`FileProcessIdsUsingFileInformation`). Each file is
   `OpenByRobocopy`, `NotOpenByRobocopy`, `Absent` or `Unknown`. Then
   `CancelCleanup.Select(ledger.KilledRunFiles, ledger.CompletedSources, presence set,
-  observations, move, destinationExists, sourceStillExists, claimedByOtherJob, deleteAllowed)`.
+  observations, move, destinationPresence, sourcePresence, claimedByOtherJob, deleteAllowed,
+  namesAfterExit)`. The two presence checks are `FileSystemFacts.PresenceOf`
+  (GetFileAttributesEx): only "file not found" or "path not found" is `Absent`; any other
+  failure (an unreachable share, access denied) is `Unknown`, which counts as present on both
+  sides. `namesAfterExit` lists each destination folder once more after robocopy has exited: a
+  path seen `Absent` at the kill whose name is there now (or whose folder cannot be listed) was
+  created after the look, and is reported, never deleted.
   When the ledger found robocopy's paths unreliable, `deleteAllowed` is false: nothing is
   deleted, and every file that would have been is reported in `LeftInPlace` instead. Each
   `Delete` entry goes through
@@ -417,7 +426,8 @@ Step execution:
     Replace, KeepNewer); a file another job that has not ended plans (`ClaimSet`; an ended job
     claims nothing, since its files were in place before this job's presence check) is never
     deleted but is reported as left in place; for a cut, a destination whose source is gone
-    stays;
+    stays, and one whose source cannot be checked is reported, never deleted (the source may be
+    gone, which would make it the only copy);
   - without evidence (robocopy could not be suspended, or the file system cannot answer) nothing
     is deleted; an existing new file is reported as possibly incomplete instead. A delete that
     fails leaves the file reported the same way.

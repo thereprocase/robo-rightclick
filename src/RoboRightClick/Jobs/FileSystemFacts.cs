@@ -20,6 +20,50 @@ internal sealed unsafe class FileSystemFacts : IPlanningFacts, IScanFacts
     public bool Exists(string path) => KindOf(path) != ItemKind.Missing;
 
     /// <summary>
+    /// <see cref="Exists"/> with a third answer: GetFileAttributesEx on the path itself, where
+    /// only ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND mean <see cref="PathPresence.Absent"/>.
+    /// <see cref="KindOf"/> reads every failure (an unreachable share, access denied) as Missing,
+    /// which is right for planning and wrong for cancel cleanup: there "could not check" must
+    /// never pass for "not there".
+    /// </summary>
+    public PathPresence PresenceOf(string path)
+    {
+        try
+        {
+            return ProcessNative.PresenceOf(WinPath.ExtendedLengthPath(path));
+        }
+        catch (ArgumentException)
+        {
+            return PathPresence.Unknown;
+        }
+    }
+
+    /// <summary>
+    /// The names in <paramref name="folder"/>, from one listing: empty for a folder that is not
+    /// there (<see cref="PresenceOf"/> says absent), null when it exists or may exist but could
+    /// not be listed. For the job's checks after a run, which must not read "could not list"
+    /// as "nothing there".
+    /// </summary>
+    public IReadOnlySet<string>? NamesIn(string folder)
+    {
+        try
+        {
+            if (List(folder) is { } entries)
+            {
+                return new HashSet<string>(entries.Select(e => e.Name), WinPath.Comparer);
+            }
+        }
+        catch (Exception)
+        {
+            // Any failure while listing (the lazy enumeration can fail part way) is "could not list".
+            return null;
+        }
+        return PresenceOf(folder) == PathPresence.Absent ? NoNames : null;
+    }
+
+    private static readonly IReadOnlySet<string> NoNames = new HashSet<string>(WinPath.Comparer);
+
+    /// <summary>
     /// Same volume by GetVolumePathName + volume serial number, so mount points and
     /// SUBST drives answer correctly. A wrong "true" is survivable: the rename step uses
     /// MoveFileEx without COPY_ALLOWED and fails with ERROR_NOT_SAME_DEVICE.

@@ -35,8 +35,8 @@ public class CancelCleanupTests
             presentBeforeStep ?? [],
             path => atKill.TryGetValue(path, out var seen) ? seen : default,
             move,
-            destinationExists ?? (_ => true),
-            sourceStillExists ?? (_ => true),
+            path => (destinationExists ?? (_ => true))(path) ? PathPresence.Present : PathPresence.Absent,
+            path => (sourceStillExists ?? (_ => true))(path) ? PathPresence.Present : PathPresence.Absent,
             claimedByOtherJob: _ => false);
 
     [Fact]

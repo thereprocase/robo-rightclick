@@ -33,8 +33,8 @@ public class CancelCleanupCostTests
             presentBeforeStep: [],
             atKill.Of,
             move: true,
-            destinationExists: _ => { destinationAsked++; return true; },
-            sourceStillExists: _ => { sourceAsked++; return true; },
+            destinationPresence: _ => { destinationAsked++; return PathPresence.Present; },
+            sourcePresence: _ => { sourceAsked++; return PathPresence.Present; },
             claimedByOtherJob: _ => { claimedAsked++; return false; });
 
         Assert.Empty(plan.Delete);
@@ -55,8 +55,8 @@ public class CancelCleanupCostTests
 
         var plan = CancelCleanup.Select(
             killed, [], [], atKill.Of, move: true,
-            destinationExists: _ => true,
-            sourceStillExists: _ => { sourceAsked++; return true; },
+            destinationPresence: _ => PathPresence.Present,
+            sourcePresence: _ => { sourceAsked++; return PathPresence.Present; },
             claimedByOtherJob: _ => { claimedAsked++; return false; });
 
         // Only a file about to be deleted needs the other jobs' word: an unproven one is

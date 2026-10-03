@@ -100,9 +100,10 @@ internal sealed record JobStart(
 /// <para>Cancel (ignored once Finalizing): CancelRequested in the snapshot at once; suspend
 /// robocopy, record which unfinished destinations exist and which of them it holds open
 /// (<see cref="ObserveAtKill"/>), kill and wait; then CancelCleanup.Select(ledger.KilledRunFiles,
-/// ledger.CompletedSources, presence set, those observations, move, existence checks,
-/// Claims.ClaimedByOtherJob, deleteAllowed), with deleting off when ledger.PathsUnreliable
-/// (the files are still reported). Each delete goes through
+/// ledger.CompletedSources, presence set, those observations, move, three-state presence checks
+/// (<see cref="FileSystemFacts.PresenceOf"/>: "could not check" is never "absent"),
+/// Claims.ClaimedByOtherJob, deleteAllowed, a second listing of each folder after the exit),
+/// with deleting off when ledger.PathsUnreliable (the files are still reported). Each delete goes through
 /// <see cref="ProcessNative.DeleteFileIfSameFile"/>, which checks identity and attributes and
 /// deletes on one handle opened without following links; a delete that fails leaves the file
 /// reported. LeftInPlace becomes <see cref="JobSnapshot.DamagedOnCancel"/> and
@@ -1294,10 +1295,11 @@ internal sealed class Job
             presence,
             atKill.Of,
             move,
-            destinationExists: Services.FileSystem.Exists,
-            sourceStillExists: File.Exists,
+            destinationPresence: Services.FileSystem.PresenceOf,
+            sourcePresence: Services.FileSystem.PresenceOf,
             claimedByOtherJob: path => Services.Claims.ClaimedByOtherJob(Id, path),
-            deleteAllowed);
+            deleteAllowed,
+            namesAfterExit: Services.FileSystem.NamesIn);
 
         // Invariant 1, belt and braces: whatever the selection says, a path this job reads as
         // a source is never deleted by cleanup.
@@ -1328,7 +1330,7 @@ internal sealed class Job
             {
                 deleted.Add(target.Path);
             }
-            else if (Services.FileSystem.Exists(target.Path))
+            else if (Services.FileSystem.PresenceOf(target.Path) != PathPresence.Absent)
             {
                 left.Add(target.Path);
             }
@@ -1337,7 +1339,8 @@ internal sealed class Job
 
         // The files left in place may be incomplete: "Finish copying them" repeats them.
         // For a cut whose source is already gone the move had finished, so there is nothing
-        // to repeat (and a retry would only fail on the missing source).
+        // to repeat (and a retry would only fail on the missing source). A source that cannot
+        // be checked counts as there: the retry's own scan finds out.
         var leftInPlace = new HashSet<string>(left.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
         var damagedByPart = new List<RetryCandidate>[parts.Length];
         for (var p = 0; p < parts.Length; p++)
@@ -1357,7 +1360,7 @@ internal sealed class Job
                 foreach (var file in steps[i].Files)
                 {
                     var destination = WinPath.NormalizeForMatch(file.DestinationPath);
-                    if (leftInPlace.Contains(destination) && (!move || File.Exists(file.SourcePath)))
+                    if (leftInPlace.Contains(destination) && (!move || Services.FileSystem.PresenceOf(file.SourcePath) != PathPresence.Absent))
                     {
                         // Only a file that was there before under an overwriting answer is
                         // known to be one robocopy was writing over; a new file nobody proved
@@ -1523,27 +1526,22 @@ internal sealed class Job
             {
                 return;
             }
-            try
+            // Empty for a folder that is not there; null when it could not be listed. Unknown is
+            // treated as present: cancel cleanup then never deletes these files. Reporting a new
+            // file as possibly damaged beats deleting a user's file.
+            if (Services.FileSystem.NamesIn(folder) is not { } names)
             {
-                var entries = Services.FileSystem.List(folder);
-                if (entries is null)
-                {
-                    continue;
-                }
-                foreach (var entry in entries)
-                {
-                    var path = WinPath.NormalizeForMatch(WinPath.Combine(folder, entry.Name));
-                    if (wanted.Contains(path))
-                    {
-                        found.Add(path);
-                    }
-                }
+                var normalizedFolder = WinPath.NormalizeForMatch(folder);
+                found.AddRange(wanted.Where(p => WinPath.Comparer.Equals(WinPath.GetParent(p), normalizedFolder)));
+                continue;
             }
-            catch (Exception)
+            foreach (var name in names)
             {
-                // Unknown is treated as present: cancel cleanup then never deletes these
-                // files. Reporting a new file as possibly damaged beats deleting a user's file.
-                found.AddRange(wanted.Where(p => WinPath.Comparer.Equals(WinPath.GetParent(p), WinPath.NormalizeForMatch(folder))));
+                var path = WinPath.NormalizeForMatch(WinPath.Combine(folder, name));
+                if (wanted.Contains(path))
+                {
+                    found.Add(path);
+                }
             }
         }
         lock (_lock)

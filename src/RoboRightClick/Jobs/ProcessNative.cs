@@ -61,6 +61,69 @@ internal static unsafe partial class ProcessNative
     public const int ERROR_ALREADY_EXISTS = 183;
     public const int ERROR_REQUEST_ABORTED = 1235;
 
+    public const uint THREAD_GET_CONTEXT = 0x0008;
+
+    /// <summary>x64 CONTEXT: 1,232 bytes, 16-byte aligned, ContextFlags at offset 0x30.</summary>
+    private const int ContextSize = 1_232;
+    private const int ContextFlagsOffset = 0x30;
+
+    /// <summary>CONTEXT_AMD64 | CONTEXT_CONTROL: the smallest part of the context there is to ask for.</summary>
+    private const uint ContextAmd64Control = 0x0010_0001;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static partial SafeFileHandle OpenThread(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwThreadId);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetThreadContext(SafeFileHandle hThread, void* lpContext);
+
+    /// <summary>
+    /// After NtSuspendProcess: returns once every thread of <paramref name="process"/> has
+    /// actually stopped. Suspending is asynchronous; a thread inside a system call (creating a
+    /// file on a slow share) stops only when that call returns. GetThreadContext on a suspended
+    /// thread waits for that point, which is the documented way to make a suspension
+    /// synchronous. True only when that was done for every thread. Only for an x64 process on
+    /// x64 Windows (the CONTEXT layout differs elsewhere); false otherwise, and on any failure.
+    /// </summary>
+    public static bool WaitUntilThreadsStopped(System.Diagnostics.Process process)
+    {
+        if (RuntimeInformation.ProcessArchitecture != Architecture.X64 || RuntimeInformation.OSArchitecture != Architecture.X64)
+        {
+            return false;
+        }
+        var context = (byte*)NativeMemory.AlignedAlloc(ContextSize, 16);
+        try
+        {
+            process.Refresh();
+            var all = true;
+            foreach (System.Diagnostics.ProcessThread thread in process.Threads)
+            {
+                using (thread)
+                {
+                    using var handle = OpenThread(THREAD_GET_CONTEXT, false, (uint)thread.Id);
+                    if (handle.IsInvalid)
+                    {
+                        all = false;
+                        continue;
+                    }
+                    NativeMemory.Clear(context, ContextSize);
+                    *(uint*)(context + ContextFlagsOffset) = ContextAmd64Control;
+                    all &= GetThreadContext(handle, context);
+                }
+            }
+            return all;
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            // The process exited, or its threads could not be listed.
+            return false;
+        }
+        finally
+        {
+            NativeMemory.AlignedFree(context);
+        }
+    }
+
     /// <summary>Pause (verified on /MT:32 robocopy, testlog 2026-10-02). Returns an NTSTATUS.</summary>
     [LibraryImport("ntdll.dll")]
     public static partial int NtSuspendProcess(SafeProcessHandle processHandle);
@@ -184,6 +247,29 @@ internal static unsafe partial class ProcessNative
     private const int STATUS_INFO_LENGTH_MISMATCH = unchecked((int)0xC0000004);
     private const int ERROR_FILE_NOT_FOUND = 2;
     private const int ERROR_PATH_NOT_FOUND = 3;
+
+    /// <summary>WIN32_FILE_ATTRIBUTE_DATA: the attributes, three FILETIMEs and the size as two DWORDs.</summary>
+    private const int FileAttributeDataSize = 36;
+
+    [LibraryImport("kernel32.dll", EntryPoint = "GetFileAttributesExW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetFileAttributesEx(string lpFileName, int fInfoLevelId, void* lpFileInformation);
+
+    /// <summary>
+    /// Whether anything is at <paramref name="path"/> (the path itself; a link is not followed).
+    /// Absent only for ERROR_FILE_NOT_FOUND and ERROR_PATH_NOT_FOUND; every other failure is
+    /// Unknown. Pass an extended-length path.
+    /// </summary>
+    public static PathPresence PresenceOf(string path)
+    {
+        var data = stackalloc byte[FileAttributeDataSize];
+        if (GetFileAttributesEx(path, 0, data))
+        {
+            return PathPresence.Present;
+        }
+        var error = Marshal.GetLastPInvokeError();
+        return error is ERROR_FILE_NOT_FOUND or ERROR_PATH_NOT_FOUND ? PathPresence.Absent : PathPresence.Unknown;
+    }
 
     /// <summary>Longest PID list asked for; beyond it the answer is "unknown", never a guess.</summary>
     private const int MaxProcessIdsUsingFile = 4_096;

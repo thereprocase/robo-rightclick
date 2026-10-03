@@ -454,6 +454,12 @@ internal sealed class RobocopyRun : IDisposable
 
         if (process is not null && FreezeForKill(process))
         {
+            // The look below must not run while a thread is still finishing a file-system call
+            // (a create on a slow share would land after it). When the wait cannot be done or
+            // times out, the look runs anyway: cleanup lists the folders again after the exit
+            // and reports, never deletes, a file that appeared (CancelCleanup.Select).
+            var stopped = WaitForThreadsToStop(process);
+            Trace.WriteLine(stopped ? "RoboRightClick cancel: threads stopped" : "RoboRightClick cancel: threads not confirmed stopped");
             try
             {
                 Observer.OnSuspendedForCancel(process.Id);
@@ -466,6 +472,26 @@ internal sealed class RobocopyRun : IDisposable
 
         Kill();
     }
+
+    /// <summary>
+    /// <see cref="ProcessNative.WaitUntilThreadsStopped"/>, bounded: a thread stuck in a call to
+    /// a share that no longer answers must not hold the cancel up for the share's timeout.
+    /// </summary>
+    private static bool WaitForThreadsToStop(Process process)
+    {
+        var wait = Task.Run(() => ProcessNative.WaitUntilThreadsStopped(process));
+        try
+        {
+            return wait.Wait(ThreadStopTimeout) && wait.Result;
+        }
+        catch (AggregateException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>How long a cancel waits for robocopy's threads to stop before looking anyway.</summary>
+    private static readonly TimeSpan ThreadStopTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
     /// Suspends robocopy for good (a pause change can no longer resume it). True only when

@@ -31,6 +31,19 @@ public enum KillEvidence
 public readonly record struct KillObservation(KillEvidence Evidence, FileIdentity Identity);
 
 /// <summary>
+/// What a live check found at a path. Only "not found" is <see cref="Absent"/>: a check that
+/// failed for any other reason (a share that does not answer, access denied, a drive that is
+/// not ready) proves nothing, and is <see cref="Unknown"/>. Cancel cleanup treats Unknown as
+/// present on both sides, so a file it cannot see is reported rather than passed over.
+/// </summary>
+public enum PathPresence
+{
+    Absent,
+    Present,
+    Unknown,
+}
+
+/// <summary>
 /// A 64-bit hash of a path, equal for paths <see cref="WinPath.Comparer"/> calls equal (FNV-1a
 /// over the upper-cased UTF-16 units). For sets that only ever answer "maybe" safely: a
 /// collision can only make a lookup say yes for a path that was never added.
@@ -193,8 +206,15 @@ public static class CancelCleanup
     /// A path never looked at is <see cref="KillEvidence.Unknown"/>.
     /// </param>
     /// <param name="move">True for a cut.</param>
-    /// <param name="destinationExists">Live check by the host after robocopy has exited; asked only where the evidence is unknown.</param>
-    /// <param name="sourceStillExists">Live check by the host, made after robocopy has exited.</param>
+    /// <param name="destinationPresence">
+    /// Live check by the host after robocopy has exited; asked only where the evidence is not
+    /// absent or not-open. Anything but <see cref="PathPresence.Absent"/> reports the file.
+    /// </param>
+    /// <param name="sourcePresence">
+    /// Live check by the host, made after robocopy has exited. Only
+    /// <see cref="PathPresence.Absent"/> means a cut finished the file; a source that cannot be
+    /// checked (an unreachable share) may still hold the only complete copy.
+    /// </param>
     /// <param name="claimedByOtherJob">
     /// True when another job of this session that has not ended plans to write this
     /// destination (<see cref="ClaimSet"/>). Its file may be the only copy of a moved source, so
@@ -207,12 +227,22 @@ public static class CancelCleanup
     /// would have been is reported as left in place instead, so the cancel still says which
     /// files may be incomplete.
     /// </param>
+    /// <param name="namesAfterExit">
+    /// The names in a destination folder, listed after robocopy has exited: an empty set for a
+    /// folder that does not exist, null when the folder could not be listed. Suspending a
+    /// process is asynchronous: a thread inside a file-system call (creating a file on a slow
+    /// share) finishes that call before it stops, so the look at the kill can miss a file
+    /// robocopy was creating. A path seen absent at the kill whose name is there after the exit
+    /// (or whose folder cannot be listed) is therefore treated as unknown evidence: reported
+    /// when it exists, never deleted. Null skips the second look.
+    /// </param>
     /// <remarks>
     /// The kill evidence is read before <paramref name="claimedByOtherJob"/> and
-    /// <paramref name="sourceStillExists"/>: absent and not-open evidence never delete or report
-    /// anything whatever those say, and a cancel early in a large paste has hundreds of
-    /// thousands of such files, each of which would otherwise cost a stat on the source volume
-    /// and a pass over every active job.
+    /// <paramref name="sourcePresence"/>: not-open evidence never deletes or reports anything
+    /// whatever those say, and neither does absent evidence that the second look confirms. A
+    /// cancel early in a large paste has hundreds of thousands of such files, each of which
+    /// would otherwise cost a stat on the source volume and a pass over every active job; the
+    /// second look costs one listing per destination folder, not one stat per file.
     /// </remarks>
     public static CleanupPlan Select(
         IEnumerable<KilledRunFile> killedRunFiles,
@@ -220,15 +250,33 @@ public static class CancelCleanup
         IEnumerable<string> presentBeforeStep,
         Func<string, KillObservation> atKill,
         bool move,
-        Func<string, bool> destinationExists,
-        Func<string, bool> sourceStillExists,
+        Func<string, PathPresence> destinationPresence,
+        Func<string, PathPresence> sourcePresence,
         Func<string, bool> claimedByOtherJob,
-        bool deleteAllowed = true)
+        bool deleteAllowed = true,
+        Func<string, IReadOnlySet<string>?>? namesAfterExit = null)
     {
         var completed = new HashSet<string>(completedSources.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
         var present = new HashSet<string>(presentBeforeStep.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
         var delete = new List<CleanupTarget>();
         var left = new List<string>();
+        var listed = new Dictionary<string, IReadOnlySet<string>?>(WinPath.Comparer);
+
+        // True when a path seen absent at the kill may have been created after that look.
+        bool AppearedAfterKill(string destinationPath)
+        {
+            if (namesAfterExit is null)
+            {
+                return false;
+            }
+            var folder = WinPath.GetParent(destinationPath);
+            if (!listed.TryGetValue(folder, out var names))
+            {
+                names = namesAfterExit(folder);
+                listed[folder] = names;
+            }
+            return names is null || names.Contains(WinPath.GetFileName(destinationPath));
+        }
 
         foreach (var (file, policy) in killedRunFiles)
         {
@@ -249,6 +297,11 @@ public static class CancelCleanup
                 continue;
             }
             var seen = atKill(destination);
+            if (seen.Evidence == KillEvidence.Absent && AppearedAfterKill(file.DestinationPath))
+            {
+                // Created after the look (see namesAfterExit): nothing proves whose it is.
+                seen = default;
+            }
             if (seen.Evidence is KillEvidence.Absent or KillEvidence.NotOpenByRobocopy)
             {
                 // Absent: robocopy had not created it yet; a file there now is someone else's.
@@ -258,25 +311,30 @@ public static class CancelCleanup
                 // user's data. Nothing below could change that, so nothing more is asked.
                 continue;
             }
-            if (move && !sourceStillExists(file.SourcePath))
+            var source = move ? sourcePresence(file.SourcePath) : PathPresence.Present;
+            if (source == PathPresence.Absent)
             {
                 // Robocopy /MOV deletes a source only after its copy finished, and the
                 // kill can land between that delete and the file's output line. The
-                // destination is then the only copy left, and it is complete.
+                // destination is then the only copy left, and it is complete. A source that
+                // cannot be checked is not proof of that: the file goes on to be reported.
                 continue;
             }
 
-            var proven = seen.Evidence == KillEvidence.OpenByRobocopy && seen.Identity.IsKnown;
+            // A cut whose source cannot be checked keeps its destination too: if the source was
+            // in fact moved, that file is the only copy.
+            var proven = seen.Evidence == KillEvidence.OpenByRobocopy && seen.Identity.IsKnown && source == PathPresence.Present;
             if (proven && deleteAllowed && !claimedByOtherJob(file.DestinationPath))
             {
                 delete.Add(new CleanupTarget(file.DestinationPath, seen.Identity));
             }
-            else if (destinationExists(file.DestinationPath))
+            else if (destinationPresence(file.DestinationPath) != PathPresence.Absent)
             {
                 // Not proven ours, or ours but not to be deleted (another active paste plans
                 // this name, or the ledger lost track of robocopy's paths). Most likely a
                 // partial copy, so the user is told it may be incomplete; deleting it could
-                // destroy someone else's file.
+                // destroy someone else's file. A destination that cannot be checked is
+                // reported too: silence would hide a file that is there.
                 left.Add(file.DestinationPath);
             }
         }

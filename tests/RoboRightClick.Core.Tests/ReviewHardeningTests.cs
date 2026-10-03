@@ -291,8 +291,8 @@ public class CancelClaimTests
                 [@"D:\dst\g.bin"] = new KillObservation(KillEvidence.OpenByRobocopy, held),
             }.Of,
             move: false,
-            destinationExists: _ => true,
-            sourceStillExists: _ => true,
+            destinationPresence: _ => PathPresence.Present,
+            sourcePresence: _ => PathPresence.Present,
             claimedByOtherJob: p => p.EndsWith("f.bin", StringComparison.Ordinal));
 
         Assert.Equal([new CleanupTarget(@"D:\dst\g.bin", held)], plan.Delete);
@@ -312,8 +312,8 @@ public class CancelClaimTests
             presentBeforeStep: [],
             atKill: _ => new KillObservation(evidence, new FileIdentity(1, 0, 42, 7)),
             move: false,
-            destinationExists: _ => true,
-            sourceStillExists: _ => true,
+            destinationPresence: _ => PathPresence.Present,
+            sourcePresence: _ => PathPresence.Present,
             claimedByOtherJob: _ => true);
 
         Assert.Empty(plan.Delete);
@@ -339,8 +339,8 @@ public class CancelClaimTests
                 [@"D:\dst\never.iso"] = new KillObservation(KillEvidence.Absent, default),
             }.Of,
             move: false,
-            destinationExists: _ => true,
-            sourceStillExists: _ => true,
+            destinationPresence: _ => PathPresence.Present,
+            sourcePresence: _ => PathPresence.Present,
             claimedByOtherJob: _ => false,
             deleteAllowed: false);
 
@@ -361,8 +361,8 @@ public class CancelClaimTests
                 [@"D:\dst\f.bin"] = new KillObservation(KillEvidence.OpenByRobocopy, new FileIdentity(1, 0, 42, 7)),
             }.Of,
             move: false,
-            destinationExists: _ => true,
-            sourceStillExists: _ => true,
+            destinationPresence: _ => PathPresence.Present,
+            sourcePresence: _ => PathPresence.Present,
             claimedByOtherJob: _ => false);
 
         Assert.Empty(plan.Delete);
