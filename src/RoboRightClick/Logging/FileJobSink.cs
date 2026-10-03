@@ -6,7 +6,9 @@ namespace RoboRightClick.Logging;
 /// <summary>
 /// Normal-mode sink for one job: jobs\&lt;folder&gt;\job.json (rewritten from a
 /// <see cref="JobRecord"/> on each state change and at the end, via a temp file and
-/// File.Replace, never on progress) and robocopy.log (UTF-8 copy of the pipe output,
+/// File.Replace, never on progress or per command: the record is bounded
+/// (<see cref="JobRecords.ToJson"/>), but a paste of many loose files runs hundreds of
+/// commands, and a rewrite each would make the bytes written grow with their square) and robocopy.log (UTF-8 copy of the pipe output,
 /// written by the app, one header line per command, through a 64 KB buffered writer
 /// flushed about once a second, on state changes and at the end). robocopy.log stops at
 /// <see cref="MaxRobocopyLogBytes"/> with one "truncated" line. On <see cref="JobFinished"/>
@@ -29,6 +31,7 @@ internal sealed class FileJobSink : IJobSink, IDisposable
     private readonly object _gate = new();
     private readonly List<StateChange> _states = [];
     private readonly List<CommandRecord> _commands = [];
+    private int _commandCount;
     private JobDescription? _job;
     private JobSummary? _summary;
     private bool _folderReady;
@@ -100,7 +103,13 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             {
                 return;
             }
-            _commands.Add(new CommandRecord(arguments, null));
+            _commandCount++;
+            _commands.Add(new CommandRecord(JobRecords.RecordedArguments(arguments), null));
+            if (_commands.Count > JobRecords.MaxRecordedCommands)
+            {
+                // job.json keeps only the most recent; robocopy.log has every command in full.
+                _commands.RemoveAt(0);
+            }
             Guard(() => WriteLogLine("# robocopy " + arguments));
         }
     }
@@ -129,7 +138,7 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             {
                 _commands[^1] = _commands[^1] with { ExitCode = exitCode };
             }
-            Guard(WriteJobJson);
+            // Written with the next state change or at the end, not per command.
         }
     }
 
@@ -204,7 +213,7 @@ internal sealed class FileJobSink : IJobSink, IDisposable
             return;
         }
         EnsureFolder();
-        var json = JobRecords.ToJson(new JobRecord(_job, _states.ToArray(), _commands.ToArray(), _summary));
+        var json = JobRecords.ToJson(new JobRecord(_job, _states.ToArray(), _commands.ToArray(), _summary), _commandCount);
         WriteJobRecord(JobFolder, json);
     }
 

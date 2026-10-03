@@ -12,8 +12,8 @@ namespace RoboRightClick.Logging;
 /// </summary>
 internal sealed class JobLogStore
 {
-    /// <summary>history.jsonl is rotated to history.1.jsonl (replacing it) past this many lines.</summary>
-    public const int HistoryRotateLines = 10_000;
+    /// <summary>history.jsonl is rotated to history.1.jsonl (replacing it) past this many lines, or this size (<see cref="JobRecords.ShouldRotateHistory"/>).</summary>
+    public const int HistoryRotateLines = JobRecords.HistoryRotateLines;
 
     private const string RotatedHistoryFileName = "history.1.jsonl";
     private const string TempSuffix = AppPaths.TempSuffix;
@@ -25,6 +25,7 @@ internal sealed class JobLogStore
 
     // Counted once, on the first append, so a rotation check does not re-read the file.
     private int _historyLines = -1;
+    private long _historyBytes;
 
     // history.jsonl ends without "\n": an append was cut short (disk full, crash). The next
     // line starts with one so the partial record does not swallow a complete one.
@@ -65,17 +66,21 @@ internal sealed class JobLogStore
                 {
                     var exists = File.Exists(Paths.HistoryFile);
                     _historyLines = exists ? File.ReadLines(Paths.HistoryFile).Count() : 0;
+                    _historyBytes = exists ? new FileInfo(Paths.HistoryFile).Length : 0;
                     _historyEndsMidLine = exists && EndsMidLine(Paths.HistoryFile);
                 }
-                if (_historyLines >= HistoryRotateLines)
+                if (JobRecords.ShouldRotateHistory(_historyLines, _historyBytes))
                 {
                     File.Move(Paths.HistoryFile, RotatedHistoryFile(), overwrite: true);
                     _historyLines = 0;
+                    _historyBytes = 0;
                     _historyEndsMidLine = false;
                 }
-                File.AppendAllText(Paths.HistoryFile, (_historyEndsMidLine ? "\n" : "") + line + "\n", Utf8NoBom);
+                var text = (_historyEndsMidLine ? "\n" : "") + line + "\n";
+                File.AppendAllText(Paths.HistoryFile, text, Utf8NoBom);
                 _historyEndsMidLine = false;
                 _historyLines++;
+                _historyBytes += Utf8NoBom.GetByteCount(text);
             }
             catch (Exception ex)
             {

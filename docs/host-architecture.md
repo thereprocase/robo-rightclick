@@ -471,10 +471,13 @@ Step execution:
   In ephemeral mode the factory is never invoked. A derived job (retry, re-run, re-plan) uses
   `JobSinks.ForDerivedJob(parent, current)`: ephemeral wins in both directions.
 - Normal: `jobs\<JobLogNames.FolderName>\job.json` (`JobRecords.ToJson`, rewritten via temp
-  file + `File.Replace` on each state change, bounded: states, commands, summary, at most
-  1,000 errors), `robocopy.log` (UTF-8 copy of the pipe lines, buffered, capped at 50 MB with a
+  file + `File.Replace` on each state change and at the end, never per command, bounded: the
+  first 100 sources (16,384 characters at most) with `sourceCount`, states, the last 100
+  commands cut at 2,048 characters with `commandCount`, summary, at most 1,000 errors),
+  `robocopy.log` (UTF-8 copy of the pipe lines, buffered, capped at 50 MB with a
   truncation line; each run's command line is followed by `ThreadChoice.LogLine`, the /MT
-  count and the media it came from, never a path), `history.jsonl` (rotated past 10,000 lines). After a normal-mode job
+  count and the media it came from, never a path), `history.jsonl` (sources capped the same
+  way; rotated past 10,000 lines or 8 MB). After a normal-mode job
   finishes, the manager prunes off the UI thread to `logRetentionJobs`, never touching folders
   of running jobs. Log write failures never fail a job.
 - Interrupted jobs (normal mode): at start, `JobLogStore.MarkInterrupted` reads each job.json;

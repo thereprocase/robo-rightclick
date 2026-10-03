@@ -48,6 +48,60 @@ public static class JobRecords
     public const int MaxRecordedErrors = 1_000;
 
     /// <summary>
+    /// Sources written into job.json and each history line, at most: a selection can hold
+    /// 250,000 paths, and job.json is rewritten on every state change. The total is written as
+    /// "sourceCount"; the full list is in memory while the job lives, and the robocopy commands
+    /// in robocopy.log name every folder.
+    /// </summary>
+    public const int MaxRecordedSources = 100;
+
+    /// <summary>Characters of source paths written per record, at most (one path always fits, however long).</summary>
+    public const int MaxRecordedSourceChars = 16_384;
+
+    /// <summary>
+    /// Commands kept in job.json, the most recent ones: a paste of 100,000 loose files runs a
+    /// command per 24,000 characters of names. The total is written as "commandCount", and
+    /// robocopy.log has every command line in full.
+    /// </summary>
+    public const int MaxRecordedCommands = 100;
+
+    /// <summary>Characters of one command's arguments kept in job.json; the rest is cut and marked.</summary>
+    public const int MaxRecordedArgumentChars = 2_048;
+
+    /// <summary>history.jsonl is rotated once it holds this many lines.</summary>
+    public const int HistoryRotateLines = 10_000;
+
+    /// <summary>history.jsonl is also rotated once it reaches this size, whatever its line count.</summary>
+    public const long HistoryRotateBytes = 8L * 1024 * 1024;
+
+    /// <summary>Whether history.jsonl must be rotated before the next line is appended.</summary>
+    public static bool ShouldRotateHistory(int lines, long bytes) => lines >= HistoryRotateLines || bytes >= HistoryRotateBytes;
+
+    /// <summary>
+    /// The sources a record lists: the first ones up to <see cref="MaxRecordedSources"/> and
+    /// <see cref="MaxRecordedSourceChars"/>, never fewer than one when there is one.
+    /// </summary>
+    public static IReadOnlyList<string> RecordedSources(IReadOnlyList<string> sources)
+    {
+        var recorded = new List<string>(Math.Min(sources.Count, MaxRecordedSources));
+        var chars = 0;
+        foreach (var source in sources)
+        {
+            if (recorded.Count == MaxRecordedSources || (recorded.Count > 0 && chars + source.Length > MaxRecordedSourceChars))
+            {
+                break;
+            }
+            recorded.Add(source);
+            chars += source.Length;
+        }
+        return recorded;
+    }
+
+    /// <summary>A command's arguments as job.json keeps them: cut at <see cref="MaxRecordedArgumentChars"/>, marked with "…".</summary>
+    public static string RecordedArguments(string arguments) =>
+        arguments.Length <= MaxRecordedArgumentChars ? arguments : arguments[..MaxRecordedArgumentChars] + "…";
+
+    /// <summary>
     /// The format version written as "version" into job.json and every history.jsonl line.
     /// Records without it are version 1. Readers take the fields they know and ignore the
     /// rest, so a record from a newer version still reads; only rewriting one is refused
@@ -59,10 +113,13 @@ public static class JobRecords
 
     /// <summary>
     /// job.json: indented JSON starting with "version", camelCase keys, timestamps as ISO 8601 UTC, states as
-    /// camelCase names. Bounded by construction: states, commands (argument strings),
-    /// summary and at most <see cref="MaxRecordedErrors"/> errors; never per-file data.
+    /// camelCase names. Bounded by construction: the first sources (<see cref="RecordedSources"/>)
+    /// with "sourceCount", states, the most recent <see cref="MaxRecordedCommands"/> commands
+    /// with "commandCount" and their arguments cut (<see cref="RecordedArguments"/>), summary
+    /// and at most <see cref="MaxRecordedErrors"/> errors. Readers ignore the count fields.
     /// </summary>
-    public static string ToJson(JobRecord record)
+    /// <param name="commandCount">Commands the job ran in all; at least the commands passed.</param>
+    public static string ToJson(JobRecord record, int? commandCount = null)
     {
         using var stream = new MemoryStream();
         using (var w = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
@@ -73,7 +130,8 @@ public static class JobRecords
             w.WriteStartObject("job");
             w.WriteString("id", record.Job.Id);
             w.WriteString("verb", CamelCase(record.Job.Verb));
-            WriteStrings(w, "sources", record.Job.Sources);
+            WriteStrings(w, "sources", RecordedSources(record.Job.Sources));
+            w.WriteNumber("sourceCount", record.Job.Sources.Count);
             w.WriteString("destination", record.Job.Destination);
             w.WriteString("createdAt", Iso(record.Job.CreatedAt));
             w.WriteEndObject();
@@ -88,11 +146,12 @@ public static class JobRecords
             }
             w.WriteEndArray();
 
+            w.WriteNumber("commandCount", Math.Max(commandCount ?? 0, record.Commands.Count));
             w.WriteStartArray("commands");
-            foreach (var command in record.Commands)
+            foreach (var command in record.Commands.Skip(Math.Max(0, record.Commands.Count - MaxRecordedCommands)))
             {
                 w.WriteStartObject();
-                w.WriteString("arguments", command.Arguments);
+                w.WriteString("arguments", RecordedArguments(command.Arguments));
                 if (command.ExitCode is { } code)
                 {
                     w.WriteNumber("exitCode", code);
@@ -135,7 +194,11 @@ public static class JobRecords
         return Encoding.UTF8.GetString(stream.GetBuffer(), 0, (int)stream.Length);
     }
 
-    /// <summary>One history.jsonl line (no trailing newline): version, id, verb, sources, destination, created, finished, final state, counts, error count.</summary>
+    /// <summary>
+    /// One history.jsonl line (no trailing newline): version, id, verb, the first sources
+    /// (<see cref="RecordedSources"/>) and "sourceCount", destination, created, finished, final
+    /// state, counts, error count.
+    /// </summary>
     public static string ToHistoryLine(JobDescription job, JobSummary summary, DateTimeOffset finishedAt)
     {
         using var stream = new MemoryStream();
@@ -147,7 +210,8 @@ public static class JobRecords
             w.WriteNumber(VersionKey, CurrentVersion);
             w.WriteString("id", job.Id);
             w.WriteString("verb", CamelCase(job.Verb));
-            WriteStrings(w, "sources", job.Sources);
+            WriteStrings(w, "sources", RecordedSources(job.Sources));
+            w.WriteNumber("sourceCount", job.Sources.Count);
             w.WriteString("destination", job.Destination);
             w.WriteString("createdAt", Iso(job.CreatedAt));
             w.WriteString("finishedAt", Iso(finishedAt));

@@ -191,7 +191,7 @@ else is touched.
 | Program and menu icons | `%LOCALAPPDATA%\Programs\RoboRightClick\` (`RoboRightClick.exe`, `robo-copy.ico`, `robo-cut.ico`, `robo-paste.ico`) | install |
 | Settings | `%APPDATA%\RoboRightClick\config.json`; `config.json.bad` is a copy of a file that could not be read, kept before it is replaced | install, Settings window, tray menu; in both modes |
 | Job logs | `%LOCALAPPDATA%\RoboRightClick\jobs\<date-time-id>\job.json` and `robocopy.log` | each paste in normal mode; the newest `logRetentionJobs` are kept |
-| History | `%LOCALAPPDATA%\RoboRightClick\history.jsonl` (`history.1.jsonl` after 10,000 lines) | each finished paste in normal mode |
+| History | `%LOCALAPPDATA%\RoboRightClick\history.jsonl` (`history.1.jsonl` after 10,000 lines or 8 MB) | each finished paste in normal mode |
 | Crash log | `%LOCALAPPDATA%\RoboRightClick\crash.log` (`crash.1.log`, the previous one, after 256 KB) | an unexpected error in the tray, in normal mode only; never in ephemeral mode, and never after an ephemeral job in the same session |
 
 The tray menu's **Open logs** opens `%LOCALAPPDATA%\RoboRightClick`. Registry values are all
