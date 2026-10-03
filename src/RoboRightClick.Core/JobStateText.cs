@@ -38,6 +38,10 @@ public static class JobStateText
         {
             return "Canceling…";
         }
+        if (job.RetriedBy is not null && JobStates.IsTerminal(job.State))
+        {
+            return "Tried again: see the newer job";
+        }
         switch (job.State)
         {
             case JobState.Queued when pauseLatched:
@@ -99,6 +103,10 @@ public static class JobStateText
         {
             return "CANCELING";
         }
+        if (job.RetriedBy is not null && JobStates.IsTerminal(job.State))
+        {
+            return "RETRIED";
+        }
         return job.State switch
         {
             JobState.Queued when pauseLatched => "PAUSED",
@@ -122,6 +130,11 @@ public static class JobStateText
         {
             return StateTone.Neutral;
         }
+        if (job.RetriedBy is not null && JobStates.IsTerminal(job.State))
+        {
+            // The newer job carries the outcome now; this row no longer needs the user.
+            return StateTone.Neutral;
+        }
         return job.State switch
         {
             JobState.Queued when pauseLatched => StateTone.Attention,
@@ -132,6 +145,57 @@ public static class JobStateText
             JobState.Canceled when job.DamagedOnCancel > 0 => StateTone.Attention,
             _ => StateTone.Neutral,
         };
+    }
+
+    /// <summary>
+    /// The error summary's primary button: "Try again (N)", "Try again" for a Failed job,
+    /// "Finish copying/moving them" after a cancel that left files possibly incomplete, or null
+    /// when there is nothing to try again, including once "Try again" has been used
+    /// (<see cref="JobSnapshot.RetriedBy"/>).
+    /// </summary>
+    public static string? TryAgainLabel(JobSnapshot job)
+    {
+        if (job.RetriedBy is not null)
+        {
+            return null;
+        }
+        return job.State switch
+        {
+            JobState.Failed => "Try again",
+            JobState.Canceled when job.DamagedOnCancel > 0 => FinishLabel(job),
+            JobState.DoneWithErrors when job.ErrorCount > 0 => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.ErrorCount:N0})"),
+            _ => null,
+        };
+    }
+
+    /// <summary>Repeats the files a cancel left possibly incomplete.</summary>
+    public static string FinishLabel(JobSnapshot job) => job.Verb == TransferVerb.Move ? "Finish moving them" : "Finish copying them";
+
+    /// <summary>
+    /// The error summary's heading. A Failed job whose robocopy run started says the paste
+    /// stopped and that files may be incomplete, never "Nothing was copied": robocopy
+    /// allocates full length first, so a file it was writing can look whole. A job tried again
+    /// says so first.
+    /// </summary>
+    public static string SummaryHeading(JobSnapshot job)
+    {
+        var done = job.Verb == TransferVerb.Move ? "moved" : "copied";
+        var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
+        var heading = job.State switch
+        {
+            JobState.Failed when job.MayBeIncomplete > 0 => $"The paste into {into} stopped. Files at the destination may be incomplete.",
+            JobState.Failed => $"Nothing was {done} to {into}.",
+            JobState.Canceled => $"The paste into {into} was canceled.",
+            JobState.Done => job.SkippedAppeared == 1
+                ? $"Everything was {done} to {into} except 1 file whose name appeared there during the paste."
+                : string.Create(CultureInfo.InvariantCulture, $"Everything was {done} to {into} except {job.SkippedAppeared:N0} files whose names appeared there during the paste."),
+            _ => (job.ErrorCount + job.RefusedCount) switch
+            {
+                1 => $"1 item could not be {done} to {into}. Everything else finished.",
+                var n => string.Create(CultureInfo.InvariantCulture, $"{n:N0} items could not be {done} to {into}. Everything else finished."),
+            },
+        };
+        return job.RetriedBy is null ? heading : heading + " Tried again: see the newer job in the Jobs window.";
     }
 
     /// <summary>The menu name of the verb the user started with: a cut pastes as a move.</summary>

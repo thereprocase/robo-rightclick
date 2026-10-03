@@ -64,7 +64,7 @@ public class SwitchLikeNameTests
             [new ExecutionStep(new RobocopyStep(@"C:\src\T", @"D:\dst\T", [], Recursive: true, Move: true), ConflictPolicy.Ask, [dash, plain])],
             [], [], [], []);
 
-        var retry = RetryPlanner.ForFailures(original, [(0, dash), (0, plain)], [])!;
+        var retry = RetryPlanner.ForFailures(original, [new RetryCandidate(0, dash, true), new RetryCandidate(0, plain, true)], [])!;
 
         AssertEveryStepBuilds(retry);
         Assert.Equal(["y.txt"], Assert.Single(retry.Steps.Select(s => s.Step).OfType<RobocopyStep>()).FileNames);

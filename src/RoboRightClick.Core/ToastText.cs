@@ -143,6 +143,12 @@ public static class ToastText
                 $"{verb} finished with errors",
                 $"{DisplayText.Items(job.ErrorCount)} could not be {done} to {into}. Open Jobs to try again.",
                 kind),
+            // Robocopy allocates full length first: a run that started may have left files
+            // that look whole, so "Nothing was copied" would be wrong.
+            _ when job.MayBeIncomplete > 0 => new Toast(
+                $"{verb} failed",
+                $"The paste into {into} stopped. Some files there may be incomplete. Open Jobs to try again.",
+                kind),
             _ => new Toast(
                 $"{verb} failed",
                 job.FailureReason is { Length: > 0 } reason

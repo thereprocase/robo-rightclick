@@ -92,7 +92,10 @@ Queued → Scanning → [AwaitingDecision] → Running ⇄ Paused → Finalizing
 - `Scanning` matches Explorer's "Calculating…": it enumerates sizes and file counts and runs the conflict preflight.
 - `AwaitingDecision` is the conflict dialog, shown before the run.
 - `Finalizing` covers move cleanup, clearing the clipboard, and the summary.
-- From `DoneWithErrors`, "Try again" spawns a child job containing only the failed items.
+- From `DoneWithErrors`, or a `Failed` job whose robocopy run started, "Try again" spawns a
+  child job containing only the failed items, once per job. The child overwrites only files
+  robocopy reported failing whose destination was free before their step (or answered
+  Replace); it scans the rest again and asks about any destination that exists by then.
 
 **Tracking.** Per job: bytes and files done out of total, speed, ETA, current file(s), error count. Completed files come from robocopy's per-file lines, which under `/MT` arrive as each file finishes. Live bytes come from robocopy's process I/O counters (`GetProcessIoCounters`). Polling destination sizes doesn't work, because robocopy allocates each file at full length up front (M0).
 

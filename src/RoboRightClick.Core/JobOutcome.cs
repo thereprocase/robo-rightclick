@@ -160,15 +160,27 @@ public static class FailureText
     private static string AsSentence(string text) => text[^1] is '.' or '!' or '?' ? text : text + ".";
 }
 
+/// <summary>
+/// A retry child's plan after its own scan: the steps that run as they were planned
+/// (<see cref="Fixed"/>) and the rest, scanned again like a new paste (<see cref="Rest"/>),
+/// whose conflicts go through the configured policy or the conflict prompt.
+/// </summary>
+/// <param name="Fixed">Robocopy steps under Replace, with the sources' current sizes, and the in-process steps.</param>
+/// <param name="Rest">The steps under Skip flags as a scan: a destination that exists now is a conflict.</param>
+public sealed record RetryScan(ExecutionPlan Fixed, ScanResult Rest);
+
 public static class RetryPlanner
 {
     /// <summary>
-    /// The child job for "Try again (N)": the files <see cref="StepLedger.Retryable"/>
-    /// returned, as non-recursive robocopy steps grouped by (source folder, destination
-    /// folder), with the original step's Move flag, chunked like <see cref="PastePlanner"/>.
-    /// Policy is Replace: each of these files either failed with an error robocopy reported
-    /// (so robocopy touched it) or was in flight when its run died, and robocopy pre-allocates
-    /// full-length files, so a partial copy must not be mistaken for a finished one.
+    /// The child job for "Try again (N)": the files <see cref="StepLedger.RetryCandidates"/>
+    /// returned, as non-recursive robocopy steps grouped by (source folder, destination folder,
+    /// verb, whether the file may be overwritten), with the original step's Move flag, chunked
+    /// like <see cref="PastePlanner"/>. A file the retry may overwrite
+    /// (<see cref="RetryCandidate.MayOverwrite"/>: robocopy reported an error naming it and
+    /// this paste may have left a full-length partial there) runs under Replace, so a partial
+    /// copy is not mistaken for a finished one. Every other file runs under Ask, whose Skip
+    /// flags never overwrite, and the child's scan (<see cref="Rescan"/>) asks about each one
+    /// whose destination exists by then, as Explorer would.
     /// Failed in-process steps (rename, duplicate, keep-both) are repeated as they were.
     /// <see cref="ExecutionPlan.PresentBeforeRun"/> carries over from the original, and
     /// <see cref="ExecutionPlan.LinkFolders"/> and Kept are empty. Returns null when there is
@@ -186,7 +198,7 @@ public static class RetryPlanner
     /// </exception>
     public static ExecutionPlan? ForFailures(
         ExecutionPlan original,
-        IReadOnlyList<(int StepIndex, PlannedFile File)> retryable,
+        IReadOnlyList<RetryCandidate> retryable,
         IReadOnlyList<int> failedInProcessSteps)
     {
         if (retryable.Count == 0 && failedInProcessSteps.Count == 0)
@@ -194,11 +206,11 @@ public static class RetryPlanner
             return null;
         }
 
-        // Grouped by source folder, destination folder and verb, in first-failure order.
-        var groups = new Dictionary<string, (string Source, string Destination, bool Move, List<PlannedFile> Files)>(WinPath.Comparer);
+        // Grouped by source folder, destination folder, verb and policy, in first-failure order.
+        var groups = new Dictionary<string, (string Source, string Destination, bool Move, ConflictPolicy Policy, List<PlannedFile> Files)>(WinPath.Comparer);
         var order = new List<string>();
         var refused = new List<PlanIssue>();
-        foreach (var (stepIndex, file) in retryable)
+        foreach (var (stepIndex, file, mayOverwrite) in retryable)
         {
             if ((uint)stepIndex >= (uint)original.Steps.Count || original.Steps[stepIndex].Step is not RobocopyStep step)
             {
@@ -215,10 +227,11 @@ public static class RetryPlanner
             }
             var source = WinPath.GetParent(file.SourcePath);
             var destination = WinPath.GetParent(file.DestinationPath);
-            var key = source + "\0" + destination + "\0" + (step.Move ? "move" : "copy");
+            var policy = mayOverwrite ? ConflictPolicy.Replace : ConflictPolicy.Ask;
+            var key = source + "\0" + destination + "\0" + (step.Move ? "move" : "copy") + "\0" + policy;
             if (!groups.TryGetValue(key, out var group))
             {
-                group = (source, destination, step.Move, []);
+                group = (source, destination, step.Move, policy, []);
                 groups[key] = group;
                 order.Add(key);
             }
@@ -228,13 +241,13 @@ public static class RetryPlanner
         var steps = new List<ExecutionStep>();
         foreach (var key in order)
         {
-            var (source, destination, move, files) = groups[key];
+            var (source, destination, move, policy, files) = groups[key];
             foreach (var chunk in ExecutionPlanner.ChunkByNameLength(files, PastePlanner.DefaultFileListBudget))
             {
                 var names = chunk.Select(f => WinPath.GetFileName(f.SourcePath)).ToList();
                 steps.Add(new ExecutionStep(
                     new RobocopyStep(source, destination, names, Recursive: false, Move: move),
-                    ConflictPolicy.Replace,
+                    policy,
                     chunk));
             }
         }
@@ -249,5 +262,74 @@ public static class RetryPlanner
         }
 
         return new ExecutionPlan(steps, original.PresentBeforeRun, [], [], refused);
+    }
+
+    /// <summary>
+    /// A retry child's Scanning. Steps under Replace and in-process steps stay as the parent
+    /// planned them, with the sources' current sizes (a source that cannot be read keeps its
+    /// old facts; robocopy reports it). Every other robocopy step is scanned again exactly like
+    /// a new paste (<see cref="JobScanner.Scan"/>): a source that is gone becomes a refusal,
+    /// and a destination that exists now becomes a conflict, which the child resolves with the
+    /// configured policy or the prompt (<see cref="ExecutionPlanner.Apply"/>), then joins with
+    /// <see cref="Combine"/>. The retry's own issues (switch-like names) stay with
+    /// <see cref="RetryScan.Fixed"/>.
+    /// </summary>
+    public static RetryScan Rescan(
+        ExecutionPlan retry,
+        IScanFacts facts,
+        IPlanningFacts planning,
+        IProgress<ScanProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var fixedSteps = new List<ExecutionStep>();
+        var rescanned = new List<PlanStep>();
+        long files = 0;
+        long bytes = 0;
+        foreach (var step in retry.Steps)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (step.Step is RobocopyStep robocopy && step.Policy != ConflictPolicy.Replace)
+            {
+                rescanned.Add(robocopy);
+                continue;
+            }
+            var refreshed = new List<PlannedFile>(step.Files.Count);
+            foreach (var file in step.Files)
+            {
+                var current = facts.FileAt(file.SourcePath) is { } now ? file with { Source = now } : file;
+                refreshed.Add(current);
+                files++;
+                bytes += current.Source.Size;
+                if (files % JobScanner.ReportInterval == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    progress?.Report(new ScanProgress(files, bytes));
+                }
+            }
+            fixedSteps.Add(step with { Files = refreshed });
+        }
+        progress?.Report(new ScanProgress(files, bytes));
+
+        var rest = JobScanner.Scan(new PastePlan(rescanned, [], []), facts, planning, null, cancellationToken);
+        var fixedPlan = retry with { Steps = fixedSteps, LinkFolders = [], Kept = [] };
+        return new RetryScan(fixedPlan, rest);
+    }
+
+    /// <summary>
+    /// The retry child's executed plan: the Replace robocopy steps, then the rescanned steps as
+    /// decided, then the in-process steps (keep-both steps ran last originally). Destinations
+    /// present before the run, kept files and issues are the union of both parts.
+    /// </summary>
+    public static ExecutionPlan Combine(ExecutionPlan fixedPart, ExecutionPlan decided)
+    {
+        var robocopy = fixedPart.Steps.Where(s => s.Step is RobocopyStep);
+        var inProcess = fixedPart.Steps.Where(s => s.Step is not RobocopyStep);
+        var present = new HashSet<string>(WinPath.Comparer);
+        return new ExecutionPlan(
+            [.. robocopy, .. decided.Steps, .. inProcess],
+            fixedPart.PresentBeforeRun.Concat(decided.PresentBeforeRun).Where(present.Add).ToList(),
+            [.. fixedPart.LinkFolders, .. decided.LinkFolders],
+            [.. fixedPart.Kept, .. decided.Kept],
+            [.. fixedPart.Issues, .. decided.Issues]);
     }
 }

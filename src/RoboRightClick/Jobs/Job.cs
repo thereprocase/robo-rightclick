@@ -29,7 +29,11 @@ internal sealed record JobServices(
 /// so a later change (including the ephemeral toggle) affects only new jobs.
 /// </summary>
 /// <param name="Order">The paste exactly as it arrived; resolved on the worker thread in Scanning.</param>
-/// <param name="RetryPlan">Set for a "Try again" child: Scanning only refreshes totals and presence, and never prompts.</param>
+/// <param name="RetryPlan">
+/// Set for a "Try again" child: Scanning refreshes the sizes of the files it may overwrite and
+/// scans the rest again like a new paste (<see cref="RetryPlanner.Rescan"/>), so a destination
+/// that exists by then is a conflict for the configured policy or the prompt.
+/// </param>
 /// <param name="Logging">For a derived job, <see cref="JobSinks.ForDerivedJob"/>; otherwise the current mode.</param>
 /// <param name="CutClipboardSequence">For a paste of cut data: the clipboard sequence number read at paste time.</param>
 /// <param name="StartPaused">"Pause all" is on: the gate starts closed.</param>
@@ -54,8 +58,9 @@ internal sealed record JobStart(
 /// </summary>
 /// <remarks>
 /// <para>Scanning: PastePlanner.Plan(order, facts) (validation, kinds, links, guards),
-/// then JobScanner.Scan with progress into the snapshot's totals. A retry child scans its
-/// <see cref="JobStart.RetryPlan"/> files only for totals and presence.</para>
+/// then JobScanner.Scan with progress into the snapshot's totals. A retry child runs
+/// <see cref="RetryPlanner.Rescan"/> over its <see cref="JobStart.RetryPlan"/> instead, and its
+/// conflicts go through the same decision.</para>
 /// <para>AwaitingDecision when there are conflicts and the policy is Ask (IJobPrompts);
 /// null = Canceled. Then ExecutionPlanner.Apply. An <see cref="ExecutionPlan.IsNoOp"/> plan
 /// goes Scanning → Finalizing and ends Done with <see cref="JobSnapshot.NoOp"/> (no toast,
@@ -70,6 +75,9 @@ internal sealed record JobStart(
 /// RobocopyArgs.Build(step, DriveMedia.ThreadsFor(...).ApplyTo(settings), policy,
 /// PipeNames.ForStep(id, index, CSPRNG nonce)): the /MT count is chosen per run from both
 /// ends' drives, and the sink gets a "# threads" line after the command line.
+/// After a robocopy step that ended normally, the files it never mentioned are checked on disk
+/// (<see cref="StepLedger.ResolveUnreported"/>): a vanished source is a refusal, a destination
+/// that appeared is a late arrival, anything else failed.
 /// Events go through the ledger; observed bytes = ledger.CompletedBytesOfFinishedSteps +
 /// this run's read counter, from callbacks of the current run only. ShellNotify after each
 /// step. A closed gate before Running moves straight on to Paused; the loop waits on the
@@ -143,6 +151,15 @@ internal sealed class Job
     private readonly List<string> _damagedPaths = [];
     private readonly List<string> _skippedAppearedPaths = [];
     private int _skippedAppeared;
+    private readonly List<string> _mayBeIncompletePaths = [];
+    private int _mayBeIncomplete;
+
+    // "Try again" ran for this job: it is offered once (the child is the job to look at).
+    private bool _retryStarted;
+    private Guid? _retriedBy;
+
+    // Ended Failed by an exception rather than by its outcome: the ledger is not complete.
+    private bool _failedUnexpectedly;
 
     // Execution state. Released on a terminal state unless "Try again" still needs it.
     private ExecutionPlan? _plan;
@@ -238,10 +255,12 @@ internal sealed class Job
     }
 
     /// <summary>
-    /// Files "Try again" would repeat, and failed in-process steps. DoneWithErrors: the
-    /// ledger's retryable files of robocopy steps plus the in-process steps that failed.
-    /// Canceled with damage: the files the cancel left possibly incomplete ("Finish copying
-    /// them"). Null when there is nothing to repeat.
+    /// Files "Try again" would repeat, and failed in-process steps. DoneWithErrors, and Failed
+    /// by its outcome: the ledger's retry candidates of robocopy steps plus the in-process steps
+    /// that failed. Canceled with damage: the files the cancel left possibly incomplete ("Finish
+    /// copying them"). Each robocopy file says whether the retry may overwrite its destination
+    /// (<see cref="RetryCandidate.MayOverwrite"/>); the rest are asked about in the child's scan.
+    /// Null when there is nothing to repeat.
     /// </summary>
     /// <remarks>
     /// Only robocopy steps' files are taken from <see cref="StepLedger.Retryable"/> (the
@@ -256,7 +275,7 @@ internal sealed class Job
         lock (_lock)
         {
             var state = _lifecycle.State;
-            if (state is not (JobState.DoneWithErrors or JobState.Canceled))
+            if (state is not (JobState.DoneWithErrors or JobState.Canceled or JobState.Failed))
             {
                 return null;
             }
@@ -264,7 +283,7 @@ internal sealed class Job
             ExecutionPlan? result = null;
             foreach (var part in _parts)
             {
-                IReadOnlyList<(int StepIndex, PlannedFile File)> files;
+                IReadOnlyList<RetryCandidate> files;
                 IReadOnlyList<int> failedInProcess;
                 if (state == JobState.Canceled)
                 {
@@ -273,7 +292,7 @@ internal sealed class Job
                 }
                 else
                 {
-                    files = RobocopyRetryable(part);
+                    files = part.RetryCandidates ?? [];
                     failedInProcess = part.Ledger.FailedInProcessSteps;
                 }
                 if (files.Count == 0 && failedInProcess.Count == 0)
@@ -307,6 +326,59 @@ internal sealed class Job
             {
                 return _damagedPaths.ToArray();
             }
+        }
+    }
+
+    /// <summary>Destinations a Failed job's robocopy runs may have left partly written (first <see cref="JobRecords.MaxRecordedErrors"/>).</summary>
+    public IReadOnlyList<string> MayBeIncompletePaths
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _mayBeIncompletePaths.ToArray();
+            }
+        }
+    }
+
+    /// <summary>The child job "Try again" started for this one, once it has.</summary>
+    public Guid? RetriedBy
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _retriedBy;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Claims this job's single "Try again". False when it was already used or is being used:
+    /// a second child would repeat the same files under the same answers, over whatever the
+    /// first child or the user has put there since.
+    /// </summary>
+    internal bool TryBeginRetry()
+    {
+        lock (_lock)
+        {
+            if (_retryStarted || !JobStates.IsTerminal(_lifecycle.State))
+            {
+                return false;
+            }
+            _retryStarted = true;
+            return true;
+        }
+    }
+
+    /// <summary>Ends <see cref="TryBeginRetry"/>: the child's id, or null when none was created (it may be tried again).</summary>
+    internal void EndRetry(Guid? child)
+    {
+        lock (_lock)
+        {
+            _retryStarted = child is not null;
+            _retriedBy = child;
+            Touch();
         }
     }
 
@@ -521,6 +593,8 @@ internal sealed class Job
                 NoOp = _noOp,
                 PauseRequested = !terminal && _gate.IsPaused,
                 SkippedAppeared = _skippedAppeared,
+                MayBeIncomplete = _mayBeIncomplete,
+                RetriedBy = _retriedBy,
             };
         }
     }
@@ -566,7 +640,7 @@ internal sealed class Job
             if (!CancelRequestedLocked(token))
             {
                 _plan = plan;
-                main = new LedgerPart(plan);
+                main = new LedgerPart(plan, RobocopyRetries);
                 _parts.Add(main);
                 _issues.Clear();
                 _issues.AddRange(plan.Issues);
@@ -609,7 +683,7 @@ internal sealed class Job
                 LedgerPart second;
                 lock (_lock)
                 {
-                    second = new LedgerPart(appendix);
+                    second = new LedgerPart(appendix, RobocopyRetries);
                     _parts.Add(second);
                     _issues.AddRange(appendix.Issues);
                     _totalBytes += appendix.TotalBytes;
@@ -642,16 +716,21 @@ internal sealed class Job
     private async Task<ExecutionPlan?> ScanAndDecideAsync(CancellationToken token)
     {
         var fileSystem = Services.FileSystem;
+        RetryScan? retryScan = null;
+        ScanResult scan;
         if (Start.RetryPlan is { } retry)
         {
-            return await RunBlockingAsync(() => RefreshRetryPlan(retry, new ScanProgressReporter(this), token)).ConfigureAwait(false);
+            retryScan = await RunBlockingAsync(() => RetryPlanner.Rescan(retry, fileSystem, fileSystem, new ScanProgressReporter(this), token)).ConfigureAwait(false);
+            scan = retryScan.Rest;
         }
-
-        var scan = await RunBlockingAsync(() =>
+        else
         {
-            var pastePlan = PastePlanner.Plan(Start.Order, fileSystem);
-            return JobScanner.Scan(pastePlan, fileSystem, fileSystem, new ScanProgressReporter(this), token);
-        }).ConfigureAwait(false);
+            scan = await RunBlockingAsync(() =>
+            {
+                var pastePlan = PastePlanner.Plan(Start.Order, fileSystem);
+                return JobScanner.Scan(pastePlan, fileSystem, fileSystem, new ScanProgressReporter(this), token);
+            }).ConfigureAwait(false);
+        }
 
         var configured = Start.Settings.ConflictDefault;
         ConflictChoice? choice = null;
@@ -665,8 +744,12 @@ internal sealed class Job
                 {
                     _issues.Clear();
                     _issues.AddRange(scan.Issues);
-                    _totalBytes = scan.TotalBytes;
-                    _totalFiles = scan.TotalFiles;
+                    if (retryScan is { } fixedPart)
+                    {
+                        _issues.AddRange(fixedPart.Fixed.Issues);
+                    }
+                    _totalBytes = scan.TotalBytes + (retryScan?.Fixed.TotalBytes ?? 0);
+                    _totalFiles = scan.TotalFiles + (retryScan?.Fixed.TotalFiles ?? 0);
                     MoveLocked(JobState.AwaitingDecision);
                 }
             }
@@ -692,38 +775,8 @@ internal sealed class Job
             }
         }
 
-        return ExecutionPlanner.Apply(scan, configured, choice, fileSystem.Exists);
-    }
-
-    /// <summary>
-    /// A retry child's Scanning: the planned files' current sizes for the totals, nothing
-    /// else. The plan itself is fixed by the parent and never prompts.
-    /// </summary>
-    private ExecutionPlan RefreshRetryPlan(ExecutionPlan plan, IProgress<ScanProgress> progress, CancellationToken token)
-    {
-        var steps = new List<ExecutionStep>(plan.Steps.Count);
-        long files = 0;
-        long bytes = 0;
-        foreach (var step in plan.Steps)
-        {
-            token.ThrowIfCancellationRequested();
-            var refreshed = new List<PlannedFile>(step.Files.Count);
-            foreach (var file in step.Files)
-            {
-                var current = Services.FileSystem.FileAt(file.SourcePath) is { } facts ? file with { Source = facts } : file;
-                refreshed.Add(current);
-                files++;
-                bytes += current.Source.Size;
-                if (files % 1_000 == 0)
-                {
-                    token.ThrowIfCancellationRequested();
-                    progress.Report(new ScanProgress(files, bytes));
-                }
-            }
-            steps.Add(step with { Files = refreshed });
-        }
-        progress.Report(new ScanProgress(files, bytes));
-        return plan with { Steps = steps };
+        var decided = ExecutionPlanner.Apply(scan, configured, choice, fileSystem.Exists);
+        return retryScan is { } parts ? RetryPlanner.Combine(parts.Fixed, decided) : decided;
     }
 
     /// <summary>Runs one part's steps in order. False when canceled.</summary>
@@ -778,6 +831,7 @@ internal sealed class Job
         }
 
         var refused = false;
+        IReadOnlyList<PlannedFile> unreported = [];
         StepOutcome outcome;
         switch (step.Step)
         {
@@ -817,6 +871,9 @@ internal sealed class Job
             if (step.Step is RobocopyStep)
             {
                 part.Ledger.StepFinished(index, outcome.ExitCode, killedByCancel);
+                // An error robocopy's own retry overcame does not make the step a failure.
+                outcome = outcome with { Errors = part.Ledger.StandingErrors(index, outcome.Errors) };
+                unreported = part.Ledger.Unreported(index);
             }
             else
             {
@@ -846,6 +903,11 @@ internal sealed class Job
                 part.Ledger.StepFinished(index, null, killedByCancel);
             }
             Touch();
+        }
+
+        if (unreported.Count > 0)
+        {
+            await RunBlockingAsync(() => ResolveUnreported(part, index, unreported)).ConfigureAwait(false);
         }
 
         NotifyShellAfterStep(step.Step, outcome);
@@ -999,6 +1061,14 @@ internal sealed class Job
         int issues;
         lock (_lock)
         {
+            // A source that vanished before robocopy reached it: "could not be found", as Explorer says.
+            foreach (var part in _parts)
+            {
+                foreach (var gone in part.Ledger.SourcesGone)
+                {
+                    _issues.Add(new PlanIssue(gone.SourcePath, PastePlanner.MissingReason));
+                }
+            }
             issues = _issues.Count;
         }
         var final = JobOutcome.FinalState(outcomes, canceled: false, issues);
@@ -1028,6 +1098,10 @@ internal sealed class Job
             _failureReason = failureReason;
             _finalErrorCount = final == JobState.DoneWithErrors ? ErrorCountLocked(outcomes) : _totalErrors;
             RecordSkippedAppearedLocked();
+            if (final == JobState.Failed)
+            {
+                RecordMayBeIncompleteLocked();
+            }
             MoveLocked(final, SummaryLocked(final));
             ReleaseLocked();
         }
@@ -1144,7 +1218,7 @@ internal sealed class Job
         // For a cut whose source is already gone the move had finished, so there is nothing
         // to repeat (and a retry would only fail on the missing source).
         var leftInPlace = new HashSet<string>(plan.LeftInPlace.Select(WinPath.NormalizeForMatch), WinPath.Comparer);
-        var damagedByPart = new List<(int StepIndex, PlannedFile File)>[parts.Length];
+        var damagedByPart = new List<RetryCandidate>[parts.Length];
         for (var p = 0; p < parts.Length; p++)
         {
             damagedByPart[p] = [];
@@ -1161,10 +1235,13 @@ internal sealed class Job
                 }
                 foreach (var file in steps[i].Files)
                 {
-                    if (leftInPlace.Contains(WinPath.NormalizeForMatch(file.DestinationPath))
-                        && (!move || File.Exists(file.SourcePath)))
+                    var destination = WinPath.NormalizeForMatch(file.DestinationPath);
+                    if (leftInPlace.Contains(destination) && (!move || File.Exists(file.SourcePath)))
                     {
-                        damagedByPart[p].Add((i, file));
+                        // Only a file that was there before under an overwriting answer is
+                        // known to be one robocopy was writing over; a new file nobody proved
+                        // robocopy wrote is asked about in the retry's scan.
+                        damagedByPart[p].Add(new RetryCandidate(i, file, MayOverwrite: presence.Contains(destination)));
                     }
                 }
             }
@@ -1280,6 +1357,40 @@ internal sealed class Job
         }
     }
 
+    /// <summary>
+    /// The files a normally ended robocopy run never mentioned, sorted by what is on disk now
+    /// (<see cref="StepLedger.ResolveUnreported"/>): a source that is gone, a destination that
+    /// appeared, or neither. One stat each, off the lock; a check that fails leaves the file as
+    /// the ledger already had it.
+    /// </summary>
+    private void ResolveUnreported(LedgerPart part, int index, IReadOnlyList<PlannedFile> unreported)
+    {
+        var sourceGone = new HashSet<PlannedFile>(ReferenceEqualityComparer.Instance);
+        var destinationPresent = new HashSet<PlannedFile>(ReferenceEqualityComparer.Instance);
+        try
+        {
+            foreach (var file in unreported)
+            {
+                if (Services.FileSystem.KindOf(file.SourcePath) == ItemKind.Missing)
+                {
+                    sourceGone.Add(file);
+                }
+                if (Services.FileSystem.Exists(file.DestinationPath))
+                {
+                    destinationPresent.Add(file);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            return;
+        }
+        lock (_lock)
+        {
+            part.Ledger.ResolveUnreported(index, file => !sourceGone.Contains(file), destinationPresent.Contains);
+        }
+    }
+
     /// <summary>Records which of the step's destinations exist right now (one listing per folder).</summary>
     private void RecordPresence(ExecutionStep step, CancellationToken token)
     {
@@ -1337,6 +1448,7 @@ internal sealed class Job
                     return;
                 }
                 _failureReason = UnexpectedFailureReason;
+                _failedUnexpectedly = true;
                 _activeRun = 0;
                 MoveLocked(JobState.Failed, SummaryLocked(JobState.Failed));
                 ReleaseLocked();
@@ -1386,6 +1498,11 @@ internal sealed class Job
                     if (update.Completed is { } completed)
                     {
                         FileCompletedLocked(completed, now);
+                    }
+                    if (update.Recovered is { } recovered)
+                    {
+                        // Robocopy's own retry copied it after all: its error no longer stands.
+                        WithdrawErrorLocked(recovered);
                     }
                     if (update.Uncompleted is { } uncompleted)
                     {
@@ -1452,6 +1569,9 @@ internal sealed class Job
 
     private bool CancelRequestedLocked(CancellationToken token) => _cancelRequested || token.IsCancellationRequested;
 
+    /// <summary>Robocopy retries a failed file itself (/R above 0); the ledger then lets a later success stand.</summary>
+    private bool RobocopyRetries => Start.Settings.Retries > 0;
+
     private long DoneBytesLocked() =>
         Math.Min(_totalBytes, Math.Max(_doneFileBytes, _progress?.ObservedBytes ?? 0));
 
@@ -1462,6 +1582,25 @@ internal sealed class Job
         _doneFiles++;
         _doneFileBytes += file.Source.Size;
         _progress?.FileCompleted(file.Source.Size, at);
+    }
+
+    /// <summary>
+    /// A Failed job's files whose robocopy run started and then failed or died: robocopy
+    /// allocates full length first, so these may look complete. Read once at the end.
+    /// </summary>
+    private void RecordMayBeIncompleteLocked()
+    {
+        foreach (var part in _parts)
+        {
+            foreach (var file in part.Ledger.MayBeIncomplete)
+            {
+                _mayBeIncomplete++;
+                if (_mayBeIncompletePaths.Count < JobRecords.MaxRecordedErrors)
+                {
+                    _mayBeIncompletePaths.Add(file.DestinationPath);
+                }
+            }
+        }
     }
 
     /// <summary>The ledgers' late arrivals, read once at the end (the parts may be released after).</summary>
@@ -1477,6 +1616,21 @@ internal sealed class Job
                     _skippedAppearedPaths.Add(file.DestinationPath);
                 }
             }
+        }
+    }
+
+    /// <summary>Takes back the one error the ledger recorded for <paramref name="file"/> (it records one per file).</summary>
+    private void WithdrawErrorLocked(PlannedFile file)
+    {
+        _totalErrors = Math.Max(0, _totalErrors - 1);
+        var source = WinPath.NormalizeForMatch(file.SourcePath);
+        var destination = WinPath.NormalizeForMatch(file.DestinationPath);
+        var listed = _errors.FindIndex(e =>
+            WinPath.Comparer.Equals(WinPath.NormalizeForMatch(e.Path), source)
+            || WinPath.Comparer.Equals(WinPath.NormalizeForMatch(e.Path), destination));
+        if (listed >= 0)
+        {
+            _errors.RemoveAt(listed);
         }
     }
 
@@ -1535,11 +1689,28 @@ internal sealed class Job
     private void ReleaseLocked()
     {
         var state = _lifecycle.State;
-        var retryable = state == JobState.DoneWithErrors || (state == JobState.Canceled && _damagedOnCancel > 0);
+        // A Failed job keeps its ledger when its outcome (not an exception) failed it: its
+        // files may be partial, so "Try again" repeats them file by file like DoneWithErrors.
+        var retryable = state == JobState.DoneWithErrors
+            || (state == JobState.Canceled && _damagedOnCancel > 0)
+            || (state == JobState.Failed && !_failedUnexpectedly
+                && _parts.Any(p => p.Ledger.Retryable.Count > 0 || p.Ledger.FailedInProcessSteps.Count > 0));
         if (!retryable)
         {
             _parts.Clear();
             _plan = null;
+        }
+        else if (state != JobState.Canceled)
+        {
+            // Whether each file may be overwritten depends on what was there before its step;
+            // fixed now, so the presence set itself can go.
+            var presence = _presence;
+            foreach (var part in _parts)
+            {
+                part.RetryCandidates = part.Ledger.RetryCandidates(path => presence is not null && presence.Contains(path))
+                    .Where(c => c.StepIndex >= 0 && c.StepIndex < part.Plan.Steps.Count && part.Plan.Steps[c.StepIndex].Step is RobocopyStep)
+                    .ToList();
+            }
         }
         _presence = null;
     }
@@ -1769,20 +1940,23 @@ internal sealed class Job
     /// <summary>One sink/event delivery: the job's creation, or a state change with the summary of a terminal one.</summary>
     private sealed record Notice(JobDescription? Created, StateChange? Change, JobSummary? Summary);
 
-    private sealed record Cleanup(IReadOnlyList<string> LeftInPlace, List<(int StepIndex, PlannedFile File)>[] DamagedByPart);
+    private sealed record Cleanup(IReadOnlyList<string> LeftInPlace, List<RetryCandidate>[] DamagedByPart);
 
     /// <summary>One executed plan with its ledger. Guarded by the job's lock, except <see cref="Plan"/>, which is immutable.</summary>
-    private sealed class LedgerPart(ExecutionPlan plan)
+    private sealed class LedgerPart(ExecutionPlan plan, bool robocopyRetries)
     {
         public ExecutionPlan Plan { get; } = plan;
 
-        public StepLedger Ledger { get; } = new(plan);
+        public StepLedger Ledger { get; } = new(plan, robocopyRetries);
+
+        /// <summary>The ledger's retry candidates, fixed when a job that can be tried again ends.</summary>
+        public IReadOnlyList<RetryCandidate>? RetryCandidates { get; set; }
 
         /// <summary>Renames that crossed volumes after all, to run again as robocopy moves (worker thread only).</summary>
         public List<RenameStep> Replans { get; } = [];
 
         /// <summary>Files a cancel left possibly incomplete, for "Finish copying them".</summary>
-        public List<(int StepIndex, PlannedFile File)> Damaged { get; } = [];
+        public List<RetryCandidate> Damaged { get; } = [];
     }
 
     /// <summary>Synchronous on the scan thread, so no report can arrive after Scanning has ended.</summary>

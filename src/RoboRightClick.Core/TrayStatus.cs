@@ -71,6 +71,19 @@ public sealed record JobSnapshot(
     /// </summary>
     public int SkippedAppeared { get; init; }
 
+    /// <summary>
+    /// A Failed job's files whose robocopy run started and then failed or died before finishing
+    /// them. Robocopy allocates each file at full length before writing it, so these can look
+    /// complete while holding only part of the data.
+    /// </summary>
+    public int MayBeIncomplete { get; init; }
+
+    /// <summary>
+    /// The job "Try again" started for this one. "Try again" is offered once: a second child
+    /// would repeat the same files over whatever the first one, or the user, put there since.
+    /// </summary>
+    public Guid? RetriedBy { get; init; }
+
     public bool NeedsAttention =>
         State == JobState.AwaitingDecision
         || (!Acknowledged && State is JobState.DoneWithErrors or JobState.Failed)

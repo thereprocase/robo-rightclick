@@ -7,6 +7,8 @@ public class RetryPlannerTests
     private static PlannedFile File(string source, string destination) =>
         new(source, destination, new FileFacts(10, FakeDisk.BaseTime));
 
+    private static RetryCandidate R(int stepIndex, PlannedFile file, bool mayOverwrite = true) => new(stepIndex, file, mayOverwrite);
+
     private static readonly PlannedFile A = File(@"C:\src\T\a.txt", @"D:\dst\T\a.txt");
     private static readonly PlannedFile B = File(@"C:\src\T\sub\b.txt", @"D:\dst\T\sub\b.txt");
     private static readonly PlannedFile C = File(@"C:\src\T\c.txt", @"D:\dst\T\c.txt");
@@ -32,9 +34,9 @@ public class RetryPlannerTests
     }
 
     [Fact]
-    public void Failed_files_rerun_as_named_files_grouped_by_folder_pair_with_replace()
+    public void Failed_files_rerun_as_named_files_grouped_by_folder_pair_with_replace_where_allowed()
     {
-        var retry = RetryPlanner.ForFailures(Original(), [(0, A), (0, B), (1, Loose), (0, C)], [])!;
+        var retry = RetryPlanner.ForFailures(Original(), [R(0, A), R(0, B), R(1, Loose), R(0, C)], [])!;
 
         Assert.Equal(3, retry.Steps.Count);
         var steps = retry.Steps.Select(s => (RobocopyStep)s.Step).ToList();
@@ -61,7 +63,7 @@ public class RetryPlannerTests
             [new ExecutionStep(new RobocopyStep(@"C:\src", @"D:\dst", ["loose.txt"], false, Move: false), ConflictPolicy.Skip, [Loose])],
             [], [], [], []);
 
-        var retry = RetryPlanner.ForFailures(copy, [(0, Loose)], [])!;
+        var retry = RetryPlanner.ForFailures(copy, [R(0, Loose)], [])!;
 
         Assert.False(((RobocopyStep)Assert.Single(retry.Steps).Step).Move);
     }
@@ -71,7 +73,7 @@ public class RetryPlannerTests
     {
         var original = Original();
 
-        var retry = RetryPlanner.ForFailures(original, [(1, Loose)], [3, 2, 3])!;
+        var retry = RetryPlanner.ForFailures(original, [R(1, Loose)], [3, 2, 3])!;
 
         Assert.Equal(3, retry.Steps.Count);
         Assert.IsType<RobocopyStep>(retry.Steps[0].Step);
@@ -98,7 +100,7 @@ public class RetryPlannerTests
             [new ExecutionStep(new RobocopyStep(@"C:\src", @"D:\dst", files.Select(f => WinPath.GetFileName(f.SourcePath)).ToList(), false, true), ConflictPolicy.Ask, files)],
             [], [], [], []);
 
-        var retry = RetryPlanner.ForFailures(original, files.Select(f => (0, f)).ToList(), [])!;
+        var retry = RetryPlanner.ForFailures(original, files.Select(f => R(0, f)).ToList(), [])!;
 
         Assert.True(retry.Steps.Count > 1);
         Assert.All(retry.Steps, s => Assert.True(
@@ -109,11 +111,11 @@ public class RetryPlannerTests
     [Fact]
     public void Only_robocopy_files_can_be_retried_by_name()
     {
-        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [(3, Kept)], []));
-        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [(9, A)], []));
+        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [R(3, Kept)], []));
+        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [R(9, A)], []));
         Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [], [0]));
         // Robocopy cannot rename, so a file planned under another name cannot be its retry.
-        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [(1, Loose with { DestinationPath = @"D:\dst\other.txt" })], []));
+        Assert.Throws<ArgumentException>(() => RetryPlanner.ForFailures(Original(), [R(1, Loose with { DestinationPath = @"D:\dst\other.txt" })], []));
     }
 
     [Fact]
@@ -129,7 +131,7 @@ public class RetryPlannerTests
         ledger.StepFinished(2, null, killedByCancel: false);
         ledger.StepFinished(3, null, killedByCancel: false);
 
-        var retry = RetryPlanner.ForFailures(original, ledger.Retryable, ledger.FailedInProcessSteps)!;
+        var retry = RetryPlanner.ForFailures(original, ledger.RetryCandidates(_ => false), ledger.FailedInProcessSteps)!;
 
         // B errored and Loose never ran; C was a late arrival and stays put.
         Assert.Equal([B, Loose, Kept], retry.Steps.SelectMany(s => s.Files));

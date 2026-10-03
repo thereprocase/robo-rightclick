@@ -3,7 +3,26 @@ namespace RoboRightClick.Core;
 /// <summary>What one robocopy event meant for the job.</summary>
 /// <param name="Completed">The planned file this event completed, if any (its size feeds JobProgress).</param>
 /// <param name="Uncompleted">A file that had been counted complete and an ERROR for it arrived later; subtract it.</param>
-public sealed record LedgerUpdate(PlannedFile? Completed, PlannedFile? Uncompleted, ErrorReported? Error);
+public sealed record LedgerUpdate(PlannedFile? Completed, PlannedFile? Uncompleted, ErrorReported? Error)
+{
+    /// <summary>
+    /// With robocopy's own retries on, a file whose ERROR came earlier and which robocopy then
+    /// reported copied (<see cref="Completed"/> is the same file). Its earlier errors no longer
+    /// stand: the job takes them off its error list.
+    /// </summary>
+    public PlannedFile? Recovered { get; init; }
+}
+
+/// <summary>A file "Try again" repeats, and whether the retry may overwrite what is at its destination.</summary>
+/// <param name="MayOverwrite">
+/// True only where this paste may itself have left the destination file: robocopy reported an
+/// error naming the file (so it reached it) and the destination did not exist when its step
+/// started, or the user's answer for that step already was to overwrite. Anything else (a
+/// folder-level error, a run that died before reaching the file, a file nobody proved robocopy
+/// wrote) must not overwrite unasked: the file there may be someone else's, saved after the
+/// paste. Those run with Skip flags, and the retry's scan asks about any that exist.
+/// </param>
+public sealed record RetryCandidate(int StepIndex, PlannedFile File, bool MayOverwrite);
 
 /// <summary>
 /// The single reconciliation of "planned" against "reported" for one job, which progress,
@@ -26,8 +45,19 @@ public sealed record LedgerUpdate(PlannedFile? Completed, PlannedFile? Uncomplet
 /// <para>After a step ends (<see cref="StepFinished"/>): files neither completed nor
 /// failed are failed when the run was killed by the app's cancel (they go to cancel
 /// cleanup, not retry), failed when the run died or exited fatal (>= 16) or never ran,
-/// and otherwise "kept": robocopy skipped them under Skip flags because a file with that
-/// name appeared after the scan, which the summary reports and retry leaves alone.</para>
+/// and otherwise unreported: robocopy said nothing about them in a run that ended normally.
+/// Until the host checks them (<see cref="ResolveUnreported"/>) they count as skipped late
+/// arrivals, except under policy Replace, whose flags skip nothing, where they count as
+/// failed. The check sorts them by what is on disk: a source that is gone was not copied
+/// because it vanished (<see cref="SourcesGone"/>); a destination that exists, under a policy
+/// with Skip flags, is a late arrival robocopy left alone; anything else failed.</para>
+/// <para>Robocopy's own retries (/R:n above 0): it prints the ERROR, waits, tries again, and
+/// prints the file's line when an attempt succeeds. The parser drops a file line that its
+/// ERROR follows, so a file line that reaches the ledger after the file's ERROR is the
+/// success of a later attempt (LIKELY ordering; no capture with /R above 0 yet). With
+/// retries on, the last word wins: such a line completes the file again and
+/// <see cref="LedgerUpdate.Recovered"/> tells the job to drop its errors. With /R:0 there is
+/// no later attempt, and a file robocopy said failed is never counted as done.</para>
 /// <para>Only robocopy steps' files are ever <see cref="Retryable"/>: robocopy cannot write
 /// a file under a new name, so a failed rename, duplicate or keep-both is repeated as a
 /// whole step through <see cref="FailedInProcessSteps"/> instead.</para>
@@ -37,11 +67,17 @@ public sealed class StepLedger
     private static readonly LedgerUpdate NoChange = new(null, null, null);
 
     private readonly StepState[] _steps;
+    private readonly bool _robocopyRetries;
     private bool _pathsUnreliable;
 
-    public StepLedger(ExecutionPlan plan)
+    // Kept up to date as steps finish, so reading it at every step start costs nothing.
+    private long _completedBytesOfFinishedSteps;
+
+    /// <param name="robocopyRetries">The runs use /R above 0 (<see cref="Settings.Retries"/>); see the remarks.</param>
+    public StepLedger(ExecutionPlan plan, bool robocopyRetries = false)
     {
         Plan = plan;
+        _robocopyRetries = robocopyRetries;
         _steps = plan.Steps.Select(step => new StepState(step)).ToArray();
     }
 
@@ -57,6 +93,7 @@ public sealed class StepLedger
         var state = StateOf(stepIndex);
         // Output from a run proves the run started, whether or not StepStarted came first.
         state.Started = true;
+        state.Ran = true;
         return robocopyEvent switch
         {
             FileReported reported => ApplyFile(state, reported),
@@ -75,7 +112,7 @@ public sealed class StepLedger
         {
             if (state.Status[i] != FileStatus.Completed)
             {
-                state.Complete(i);
+                Complete(state, i);
             }
         }
     }
@@ -108,27 +145,38 @@ public sealed class StepLedger
     public void StepFinished(int stepIndex, RobocopyExitCode? exitCode, bool killedByCancel)
     {
         var state = StateOf(stepIndex);
-        state.Finished = true;
+        if (!state.Finished)
+        {
+            state.Finished = true;
+            _completedBytesOfFinishedSteps += state.CompletedBytes;
+        }
         state.KilledByCancel = killedByCancel;
+        if (state.IsRobocopy && exitCode is not null)
+        {
+            state.Ran = true;
+        }
 
         FileStatus outcome;
+        var unreported = false;
         if (killedByCancel)
         {
             outcome = FileStatus.CanceledInFlight;
         }
         else if (!state.IsRobocopy)
         {
-            outcome = FileStatus.Failed;
+            outcome = FileStatus.FailedUnreached;
         }
         else if (exitCode is not { } code || code.Value < 0 || code.Value >= 16)
         {
             // Never ran, died, or fatal: robocopy may have stopped anywhere, including inside
             // a pre-allocated full-length file, so nothing unreported can count as done.
-            outcome = FileStatus.Failed;
+            outcome = FileStatus.FailedUnreached;
         }
         else
         {
-            outcome = FileStatus.SkippedLateArrival;
+            // Robocopy's Skip flags explain the silence; Replace's flags skip nothing.
+            outcome = state.Policy == ConflictPolicy.Replace ? FileStatus.FailedUnreached : FileStatus.SkippedLateArrival;
+            unreported = true;
         }
 
         for (var i = 0; i < state.Status.Length; i++)
@@ -136,9 +184,69 @@ public sealed class StepLedger
             if (state.Status[i] == FileStatus.Pending)
             {
                 state.Status[i] = outcome;
+                if (unreported)
+                {
+                    (state.Unreported ??= []).Add(i);
+                }
             }
         }
     }
+
+    /// <summary>
+    /// Files of a robocopy step that ended normally which robocopy never mentioned. The host
+    /// checks each one's source and destination (off the job's lock) and passes the answers to
+    /// <see cref="ResolveUnreported"/>.
+    /// </summary>
+    public IReadOnlyList<PlannedFile> Unreported(int stepIndex)
+    {
+        var state = StateOf(stepIndex);
+        return state.Unreported is { } indices ? indices.Select(i => state.Files[i]).ToList() : [];
+    }
+
+    /// <summary>
+    /// Sorts a step's unreported files (see the remarks) by what the host found on disk after
+    /// the run. Only files still unreported are touched; calling it twice changes nothing more.
+    /// </summary>
+    /// <param name="sourceExists">Whether the file's source is still there.</param>
+    /// <param name="destinationExists">Whether something is at the file's destination.</param>
+    public void ResolveUnreported(int stepIndex, Func<PlannedFile, bool> sourceExists, Func<PlannedFile, bool> destinationExists)
+    {
+        var state = StateOf(stepIndex);
+        if (state.Unreported is not { } indices)
+        {
+            return;
+        }
+        state.Unreported = null;
+        foreach (var i in indices)
+        {
+            if (state.Status[i] is not (FileStatus.SkippedLateArrival or FileStatus.FailedUnreached))
+            {
+                continue;
+            }
+            var file = state.Files[i];
+            state.Status[i] = !sourceExists(file) ? FileStatus.SourceGone
+                : state.Policy != ConflictPolicy.Replace && destinationExists(file) ? FileStatus.SkippedLateArrival
+                : FileStatus.FailedUnreached;
+        }
+    }
+
+    /// <summary>
+    /// Files robocopy did not copy because their source was gone when it got to them (a temp
+    /// file deleted mid-paste, a source a cut had already moved). The job reports each as a
+    /// refusal with <see cref="PastePlanner.MissingReason"/>; nothing is retried.
+    /// </summary>
+    public IReadOnlyList<PlannedFile> SourcesGone =>
+        _steps.SelectMany(s => s.Files.Where((_, i) => s.Status[i] == FileStatus.SourceGone)).ToList();
+
+    /// <summary>
+    /// Destinations that may hold part of a file: the files of robocopy runs that actually ran
+    /// (they produced output or an exit code) and failed or died without finishing those files.
+    /// Robocopy allocates a file at full length before writing it, so these can look complete.
+    /// </summary>
+    public IReadOnlyList<PlannedFile> MayBeIncomplete =>
+        _steps.Where(s => s.IsRobocopy && s.Ran)
+            .SelectMany(s => s.Files.Where((_, i) => s.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached))
+            .ToList();
 
     /// <summary>Normalized source paths reported complete, for cancel cleanup.</summary>
     public IReadOnlyCollection<string> CompletedSources
@@ -207,8 +315,8 @@ public sealed class StepLedger
         return files;
     }
 
-    /// <summary>Bytes of completed files in steps that have finished: the base for observed bytes.</summary>
-    public long CompletedBytesOfFinishedSteps => _steps.Where(s => s.Finished).Sum(s => s.CompletedBytes);
+    /// <summary>Bytes of completed files in steps that have finished: the base for observed bytes. O(1).</summary>
+    public long CompletedBytesOfFinishedSteps => _completedBytesOfFinishedSteps;
 
     /// <summary>
     /// Files of robocopy steps that "Try again" should repeat. Never a file of a rename,
@@ -236,7 +344,7 @@ public sealed class StepLedger
                 }
                 for (var i = 0; i < state.Status.Length; i++)
                 {
-                    if (state.Status[i] == FileStatus.Failed)
+                    if (state.Status[i] is FileStatus.FailedReported or FileStatus.FailedUnreached)
                     {
                         retryable.Add((s, state.Files[i]));
                     }
@@ -244,6 +352,28 @@ public sealed class StepLedger
             }
             return retryable;
         }
+    }
+
+    /// <summary>
+    /// <see cref="Retryable"/>, each with whether the retry may overwrite its destination
+    /// (<see cref="RetryCandidate.MayOverwrite"/>).
+    /// </summary>
+    /// <param name="presentBeforeStep">
+    /// Whether a destination existed when its step started (the scan's conflicts plus the
+    /// job's re-check before each step), by <see cref="WinPath.NormalizeForMatch"/> path.
+    /// </param>
+    public IReadOnlyList<RetryCandidate> RetryCandidates(Func<string, bool> presentBeforeStep)
+    {
+        var candidates = new List<RetryCandidate>();
+        foreach (var (stepIndex, file) in Retryable)
+        {
+            var state = _steps[stepIndex];
+            var reported = state.Status[state.BySource[WinPath.NormalizeForMatch(file.SourcePath)]] == FileStatus.FailedReported;
+            var mayOverwrite = reported
+                && (RobocopyArgs.MayOverwriteExisting(state.Policy) || !presentBeforeStep(WinPath.NormalizeForMatch(file.DestinationPath)));
+            candidates.Add(new RetryCandidate(stepIndex, file, mayOverwrite));
+        }
+        return candidates;
     }
 
     /// <summary>
@@ -293,14 +423,53 @@ public sealed class StepLedger
             case FileStatus.Completed:
                 // Reported twice: counted once.
                 return NoChange;
-            case FileStatus.Failed:
+            case FileStatus.FailedReported or FileStatus.FailedUnreached when _robocopyRetries:
+                // A later attempt of robocopy's own retry succeeded (see the remarks).
+                var hadError = state.Status[index] == FileStatus.FailedReported;
+                Complete(state, index);
+                return new LedgerUpdate(state.Files[index], null, null) { Recovered = hadError ? state.Files[index] : null };
+            case FileStatus.FailedReported or FileStatus.FailedUnreached:
                 // Its ERROR came first. A file robocopy said failed is never counted as done:
                 // it may be a pre-allocated full-length partial.
                 return NoChange;
             default:
-                state.Complete(index);
+                Complete(state, index);
                 return new LedgerUpdate(state.Files[index], null, null);
         }
+    }
+
+    /// <summary>
+    /// <paramref name="errors"/> without those that name a file of the step robocopy then
+    /// copied after all (its own retry), so a recovered file does not make the step count as
+    /// failed. Nothing is dropped with retries off: a failed file is never completed then.
+    /// </summary>
+    public IReadOnlyList<ErrorReported> StandingErrors(int stepIndex, IReadOnlyList<ErrorReported> errors)
+    {
+        var state = StateOf(stepIndex);
+        return errors.Where(error =>
+        {
+            var path = WinPath.NormalizeForMatch(error.Path);
+            var found = state.BySource.TryGetValue(path, out var index) || state.ByDestination.TryGetValue(path, out index);
+            return !found || state.Status[index] != FileStatus.Completed;
+        }).ToList();
+    }
+
+    private void Complete(StepState state, int index)
+    {
+        state.Complete(index);
+        if (state.Finished)
+        {
+            _completedBytesOfFinishedSteps += state.Files[index].Source.Size;
+        }
+    }
+
+    private void Fail(StepState state, int index, FileStatus status)
+    {
+        if (state.Status[index] == FileStatus.Completed && state.Finished)
+        {
+            _completedBytesOfFinishedSteps -= state.Files[index].Source.Size;
+        }
+        state.Fail(index, status);
     }
 
     private LedgerUpdate ApplyError(StepState state, ErrorReported error)
@@ -308,17 +477,24 @@ public sealed class StepLedger
         var path = WinPath.NormalizeForMatch(error.Path);
         if (state.BySource.TryGetValue(path, out var index) || state.ByDestination.TryGetValue(path, out index))
         {
+            if (state.Status[index] == FileStatus.FailedReported)
+            {
+                // Robocopy's own retry failed again: one file, one error, so "Try again (N)"
+                // counts files and a later recovery has exactly one error to take back.
+                return NoChange;
+            }
             var wasCompleted = state.Status[index] == FileStatus.Completed;
-            state.Fail(index);
+            Fail(state, index, FileStatus.FailedReported);
             return new LedgerUpdate(null, wasCompleted ? state.Files[index] : null, error);
         }
 
         // A directory: everything planned below it that has not completed failed with it.
+        // Robocopy never reached those files, so they are not proof it wrote anything.
         foreach (var below in state.FilesUnder(path))
         {
-            if (state.Status[below] != FileStatus.Completed)
+            if (state.Status[below] is not (FileStatus.Completed or FileStatus.FailedReported))
             {
-                state.Fail(below);
+                Fail(state, below, FileStatus.FailedUnreached);
             }
         }
         return new LedgerUpdate(null, null, error);
@@ -329,14 +505,20 @@ public sealed class StepLedger
         Pending,
         Completed,
 
-        /// <summary>Robocopy reported an error, or its run died, failed fatally or never ran: retryable.</summary>
-        Failed,
+        /// <summary>Robocopy reported an error naming this file: retryable, and robocopy reached it.</summary>
+        FailedReported,
+
+        /// <summary>A folder-level error, or the run died, failed fatally or never ran before reporting it: retryable.</summary>
+        FailedUnreached,
 
         /// <summary>Unfinished when the user's cancel killed the run: cancel cleanup's business, never retry's.</summary>
         CanceledInFlight,
 
         /// <summary>The run ended normally without reporting it: skipped by Ask/Skip flags because its name appeared.</summary>
         SkippedLateArrival,
+
+        /// <summary>The run ended normally without reporting it, and its source was gone afterwards.</summary>
+        SourceGone,
     }
 
     private sealed class StepState
@@ -378,6 +560,12 @@ public sealed class StepLedger
 
         public bool Started { get; set; }
 
+        /// <summary>Robocopy itself ran for this step: it produced output or an exit code.</summary>
+        public bool Ran { get; set; }
+
+        /// <summary>Files <see cref="StepFinished"/> found unreported after a normal exit, until resolved.</summary>
+        public List<int>? Unreported { get; set; }
+
         public bool Finished { get; set; }
 
         public bool KilledByCancel { get; set; }
@@ -394,13 +582,13 @@ public sealed class StepLedger
             CompletedBytes += Files[index].Source.Size;
         }
 
-        public void Fail(int index)
+        public void Fail(int index, FileStatus status)
         {
             if (Status[index] == FileStatus.Completed)
             {
                 CompletedBytes -= Files[index].Source.Size;
             }
-            Status[index] = FileStatus.Failed;
+            Status[index] = status;
         }
 
         /// <summary>

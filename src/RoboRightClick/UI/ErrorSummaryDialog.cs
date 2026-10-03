@@ -9,7 +9,7 @@ internal enum ErrorSummaryChoice
     /// <summary>Dialog closed without a choice: the job keeps its attention state.</summary>
     None,
 
-    /// <summary>DoneWithErrors: JobManager.Retry. Failed: JobManager.Rerun. Damaged cancel: Retry of the damaged files ("Finish copying them").</summary>
+    /// <summary>JobManager.Retry: the failed files (DoneWithErrors, Failed), the damaged files after a cancel ("Finish copying them"), or a full re-run where no per-file record exists.</summary>
     TryAgain,
     Skip,
 }
@@ -20,9 +20,10 @@ internal enum ErrorSummaryChoice
 /// (<see cref="JobSnapshot.FailureReason"/>); retryable errors (path, Windows message,
 /// code; the first <see cref="JobRecords.MaxRecordedErrors"/>, then "and N more, see the
 /// log"); refused items with their reason (not retryable); files damaged by a cancel; files
-/// skipped because their name appeared during the copy. Buttons: "Try again (N)" where N
-/// counts only retryable items (absent when N is 0, except for a Failed job, where it
-/// re-runs the whole paste) and "Skip". Shown from the Jobs window, the progress window or
+/// skipped because their name appeared during the copy; a Failed job's files that may be
+/// incomplete. Buttons: "Try again (N)" where N counts only retryable items (absent when N is
+/// 0, except for a Failed job, and absent once "Try again" was used, see
+/// <see cref="JobSnapshot.RetriedBy"/>) and "Skip". Shown from the Jobs window, the progress window or
 /// a toast click, never by the job itself, so a failed job never blocks anything.
 /// </summary>
 /// <remarks>
@@ -103,10 +104,9 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
         Padding = Padding.Empty;
 
         var done = job.Verb == TransferVerb.Move ? "moved" : "copied";
-        var into = WinPath.GetFileName(job.Destination) is { Length: > 0 } name ? name : job.Destination;
 
         AddAuto(Gridline.Caption(JobStateText.Label(job), Gridline.ToneColor(JobStateText.Tone(job))));
-        AddAuto(Gridline.TextLabel(Heading(job, done, into), Gridline.Face.SansSemiBold, Gridline.SizeHeading));
+        AddAuto(Gridline.TextLabel(JobStateText.SummaryHeading(job), Gridline.Face.SansSemiBold, Gridline.SizeHeading));
 
         if (job.FailureReason is { Length: > 0 } reason)
         {
@@ -152,11 +152,29 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             }
         }
 
+        if (job.MayBeIncomplete > 0)
+        {
+            var files = job.MayBeIncomplete == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.MayBeIncomplete:N0} files were");
+            var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.MayBeIncomplete:N0})");
+            var text = $"{files} being written when the paste stopped. They can look complete but hold only part of the data. Try again, or check them before you use them.";
+            var partial = jobs?.MayBeIncompleteOf(job.Id) ?? [];
+            if (partial.Count > 0)
+            {
+                AddFill(ListPane(title, text, partial.Take(DisplayText.MaxListedRows).Select(p => new DetailRow(p, "May hold partial data")), "MayBeIncomplete"));
+                AddUnlistedNote(partial.Count);
+                filled = true;
+            }
+            else
+            {
+                AddAuto(Section(title, text));
+            }
+        }
+
         if (job.DamagedOnCancel > 0)
         {
             var files = job.DamagedOnCancel == 1 ? "1 file was" : string.Create(CultureInfo.InvariantCulture, $"{job.DamagedOnCancel:N0} files were");
             var title = string.Create(CultureInfo.InvariantCulture, $"May be incomplete ({job.DamagedOnCancel:N0})");
-            var text = $"{files} being written when you canceled. They can look complete but hold only part of the data. {FinishText(job)}, or check them before you use them.";
+            var text = $"{files} being written when you canceled. They can look complete but hold only part of the data. {JobStateText.FinishLabel(job)}, or check them before you use them.";
             var damaged = jobs?.DamagedOf(job.Id) ?? [];
             if (damaged.Count > 0)
             {
@@ -196,7 +214,7 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
             Controls.Add(new Panel { BackColor = Gridline.Transparent, Dock = DockStyle.Fill, Margin = Padding.Empty });
         }
 
-        var tryAgain = TryAgainText(job);
+        var tryAgain = JobStateText.TryAgainLabel(job);
         var skip = new Gridline.Button(tryAgain is null ? "OK" : "Skip", "SkipErrors");
         skip.Click += (_, _) => Choose(ErrorSummaryChoice.Skip);
         if (tryAgain is not null)
@@ -218,39 +236,13 @@ internal sealed class ErrorSummaryView : TableLayoutPanel
     /// <summary>The primary action: Try again when there is something to try, else the close button.</summary>
     public IButtonControl DefaultButton { get; }
 
-    /// <summary>"Try again (N)", "Try again" for a failed paste, "Finish copying/moving them" after a damaging cancel, or null when nothing can be retried.</summary>
-    private static string? TryAgainText(JobSnapshot job) => job.State switch
-    {
-        JobState.Failed => "Try again",
-        JobState.Canceled when job.DamagedOnCancel > 0 => FinishText(job),
-        _ when job.ErrorCount > 0 => string.Create(CultureInfo.InvariantCulture, $"Try again ({job.ErrorCount:N0})"),
-        _ => null,
-    };
-
-    /// <summary>Repeats the files a cancel left possibly incomplete, with Replace (RetryPlanner).</summary>
-    private static string FinishText(JobSnapshot job) => job.Verb == TransferVerb.Move ? "Finish moving them" : "Finish copying them";
-
-    private static string Heading(JobSnapshot job, string done, string into) => job.State switch
-    {
-        JobState.Failed => $"Nothing was {done} to {into}.",
-        JobState.Canceled => $"The paste into {into} was canceled.",
-        JobState.Done => job.SkippedAppeared == 1
-            ? $"Everything was {done} to {into} except 1 file whose name appeared there during the paste."
-            : string.Create(CultureInfo.InvariantCulture, $"Everything was {done} to {into} except {job.SkippedAppeared:N0} files whose names appeared there during the paste."),
-        _ => (job.ErrorCount + job.RefusedCount) switch
-        {
-            1 => $"1 item could not be {done} to {into}. Everything else finished.",
-            var n => string.Create(CultureInfo.InvariantCulture, $"{n:N0} items could not be {done} to {into}. Everything else finished."),
-        },
-    };
-
     private void Choose(ErrorSummaryChoice choice)
     {
         if (_jobs is not null)
         {
             if (choice == ErrorSummaryChoice.TryAgain)
             {
-                var started = _job.State == JobState.Failed ? _jobs.Rerun(_job.Id) : _jobs.Retry(_job.Id);
+                var started = _jobs.Retry(_job.Id);
                 if (started is null)
                 {
                     Gridline.Inform(FindForm(), "Nothing to try again",

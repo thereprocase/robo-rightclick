@@ -126,35 +126,65 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
     /// <summary>
     /// "Try again (N)": the parent's <see cref="Job.RetryPlan"/> as a child job with
     /// ParentId set and logging mode <see cref="JobSinks.ForDerivedJob"/>(parent, current).
-    /// Returns null if there is nothing to retry. The parent is acknowledged either way.
-    /// When the parent's robocopy paths could not be matched (<see cref="Job.PathsUnreliable"/>)
-    /// the ledger cannot say which files failed, so this re-runs the whole paste instead
+    /// Returns null if there is nothing to retry, or when "Try again" was already used for
+    /// this parent (<see cref="Job.RetriedBy"/>): a second child would repeat the same files over
+    /// whatever the first child, or the user, has put there since. The parent is acknowledged
+    /// either way. When the parent's robocopy paths could not be matched
+    /// (<see cref="Job.PathsUnreliable"/>), or a Failed parent kept no per-file record (it failed
+    /// before anything ran, or by an exception), this re-runs the whole paste instead
     /// (<see cref="Rerun"/>): it re-scans and asks about every file now present, rather than
     /// overwriting files whose state is unknown.
     /// </summary>
     public Guid? Retry(Guid parentId)
     {
         var parent = Acknowledged(parentId);
-        if (parent is null || !JobStates.IsTerminal(parent.State))
+        if (parent is null || !parent.TryBeginRetry())
         {
             return null;
         }
-        if (parent.PathsUnreliable)
+        Guid? child = null;
+        try
         {
-            return Derive(parent, retryPlan: null);
+            if (parent.PathsUnreliable)
+            {
+                child = Derive(parent, retryPlan: null);
+            }
+            else if (parent.RetryPlan() is { } plan)
+            {
+                child = Derive(parent, plan);
+            }
+            else if (parent.State == JobState.Failed)
+            {
+                child = Derive(parent, retryPlan: null);
+            }
         }
-        return parent.RetryPlan() is { } plan ? Derive(parent, plan) : null;
+        finally
+        {
+            parent.EndRetry(child);
+            PostStateChanged();
+        }
+        return child;
     }
 
-    /// <summary>"Try again" for a Failed job: the parent's original order as a new job (full re-scan), same privacy rule as <see cref="Retry"/>.</summary>
+    /// <summary>The whole paste again as a new job (full re-scan), once per parent, same privacy rule as <see cref="Retry"/>.</summary>
     public Guid? Rerun(Guid parentId)
     {
         var parent = Acknowledged(parentId);
-        if (parent is null || !JobStates.IsTerminal(parent.State))
+        if (parent is null || !parent.TryBeginRetry())
         {
             return null;
         }
-        return Derive(parent, retryPlan: null);
+        Guid? child = null;
+        try
+        {
+            child = Derive(parent, retryPlan: null);
+        }
+        finally
+        {
+            parent.EndRetry(child);
+            PostStateChanged();
+        }
+        return child;
     }
 
     /// <summary>Immutable snapshots, newest first; rebuilt only when something changed since the last call.</summary>
@@ -210,6 +240,9 @@ internal sealed class JobManager : IDestinationClaims, IDisposable
 
     /// <summary>Destination files a cancel left partly replaced (<see cref="JobSnapshot.DamagedOnCancel"/> is the exact count).</summary>
     public IReadOnlyList<string> DamagedOf(Guid jobId) => Find(jobId)?.DamagedPaths ?? [];
+
+    /// <summary>A Failed job's destinations that may hold partial data (<see cref="JobSnapshot.MayBeIncomplete"/> is the exact count).</summary>
+    public IReadOnlyList<string> MayBeIncompleteOf(Guid jobId) => Find(jobId)?.MayBeIncompletePaths ?? [];
 
     /// <summary>Destinations skipped because their name appeared mid-copy (<see cref="JobSnapshot.SkippedAppeared"/> is the exact count).</summary>
     public IReadOnlyList<string> SkippedAppearedOf(Guid jobId) => Find(jobId)?.SkippedAppearedPaths ?? [];
